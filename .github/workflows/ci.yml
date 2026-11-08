@@ -81,3 +81,26 @@ jobs:
           else
             echo "SKIP: no web/ yet (chromium e2e deferred to mock fixtures)"
           fi
+
+  # Eval harness in mock mode. No secrets are set or read here by design.
+  eval-mock:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: make eval (mock mode, no secrets)
+        run: make eval
+
+  # Image build only: never pushed, never run privileged in CI.
+  docker-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build images (no push, no privileged run)
+        run: |
+          if [ -f docker-compose.yml ]; then
+            docker compose build
+          elif [ -f Dockerfile ]; then
+            docker build -t vbpf:ci .
+          else
+            echo "SKIP: no Dockerfile yet (build-only check deferred)"
+          fi
