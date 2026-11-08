@@ -1,5 +1,4 @@
-# pnpm workspace stub. api/ and web/ land here (Day 2+); entries resolve
-# once those dirs exist. Kept so `make setup` skips cleanly until then.
 packages:
   - "api"
   - "web"
+  - "packages/*"
