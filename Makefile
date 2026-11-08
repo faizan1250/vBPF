@@ -29,8 +29,8 @@ lint:
 
 test:
 	@if [ -d agent ]; then cd agent && $(GO) test ./...; else echo "SKIP: no agent/ yet"; fi
-	@if [ -d api ]; then $(PNPM) -C api run test -- --run; else echo "SKIP: no api/ yet"; fi
-	@if [ -d web ]; then $(PNPM) -C web run test -- --run; else echo "SKIP: no web/ yet"; fi
+	@if [ -d api ]; then $(PNPM) -C api run test --run; else echo "SKIP: no api/ yet"; fi
+	@if [ -d web ]; then $(PNPM) -C web run test --run; else echo "SKIP: no web/ yet"; fi
 
 agent-build:
 	@if [ -d agent ]; then cd agent && $(GO) build -o ../bin/agent ./...; else echo "SKIP: no agent/ yet"; fi
