@@ -48,7 +48,7 @@ func ValidateDuration(d time.Duration) error {
 func BPFtraceEnv() map[string]string {
 	return map[string]string{
 		"BPFTRACE_MAP_KEYS_MAX": fmt.Sprint(MapKeysMax),
-		"BPFTRACE_MAX_PROBES":  fmt.Sprint(MaxProbes),
+		"BPFTRACE_MAX_PROBES":   fmt.Sprint(MaxProbes),
 		"BPFTRACE_STRLEN":       fmt.Sprint(StrLen),
 	}
 }
