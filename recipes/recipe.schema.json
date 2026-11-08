@@ -3,7 +3,17 @@
   "title": "vBPF recipe",
   "description": "Schema for recipes/<id>.yaml (see detailedImplementation.md lines 109-121).",
   "type": "object",
-  "required": ["id", "title", "description", "tags", "view", "duration_default", "min_kernel", "requires", "params"],
+  "required": [
+    "id",
+    "title",
+    "description",
+    "tags",
+    "view",
+    "duration_default",
+    "min_kernel",
+    "requires",
+    "params"
+  ],
   "additionalProperties": false,
   "properties": {
     "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
