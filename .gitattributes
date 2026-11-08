@@ -1,0 +1,10 @@
+# Enforce LF everywhere: shell scripts and Makefiles break on CRLF.
+* text=auto eol=lf
+*.sh text eol=lf
+Makefile text eol=lf
+*.go text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+.env.example text eol=lf
