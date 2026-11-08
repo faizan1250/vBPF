@@ -1,0 +1,9 @@
+id: files-opened-by-process
+title: Files opened by process
+description: Streams every openat() call with the opening process, pid, and path.
+tags: [files, open, syscalls, audit]
+view: events
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:syscalls:sys_enter_openat"]
+params: []
