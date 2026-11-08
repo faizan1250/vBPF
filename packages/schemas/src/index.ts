@@ -1,6 +1,9 @@
 import { z } from "zod";
 
-export const ScriptSchema = z.string().min(1).max(8 * 1024);
+export const ScriptSchema = z
+  .string()
+  .min(1)
+  .max(8 * 1024);
 
 export const DurationSchema = z.number().int().min(1).max(60);
 
@@ -57,7 +60,9 @@ export const HealthResponseSchema = z
   .object({
     ok: z.literal(true),
     agent: z.union([
-      z.object({ reachable: z.literal(true), health: AgentHealthSchema }).strict(),
+      z
+        .object({ reachable: z.literal(true), health: AgentHealthSchema })
+        .strict(),
       z
         .object({
           reachable: z.literal(false),

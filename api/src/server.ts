@@ -95,7 +95,11 @@ function agentPost(
     .finally(() => clearTimeout(timer));
 }
 
-function agentDelete(base: string, tokenFile: string, path: string): Promise<Response> {
+function agentDelete(
+  base: string,
+  tokenFile: string,
+  path: string,
+): Promise<Response> {
   let token: string;
   try {
     token = readAgentToken(tokenFile);
@@ -151,7 +155,9 @@ export async function buildApp(
   app.addHook("onRequest", async (req, reply) => {
     const origin = req.headers.origin;
     if (typeof origin === "string" && origin !== opts.webOrigin) {
-      return reply.code(403).send({ error: "forbidden origin", code: "FORBIDDEN" });
+      return reply
+        .code(403)
+        .send({ error: "forbidden origin", code: "FORBIDDEN" });
     }
   });
 
@@ -159,14 +165,21 @@ export async function buildApp(
     try {
       const health = await fetchAgentHealth(opts.agentUrl, opts.tokenFile);
       return reply.send(
-        HealthResponseSchema.parse({ ok: true, agent: { reachable: true, health } }),
+        HealthResponseSchema.parse({
+          ok: true,
+          agent: { reachable: true, health },
+        }),
       );
     } catch (err) {
       if (err instanceof AgentOfflineError || err instanceof AgentProxyError) {
         return reply.send(
           HealthResponseSchema.parse({
             ok: true,
-            agent: { reachable: false, code: "AGENT_OFFLINE", error: "agent offline" },
+            agent: {
+              reachable: false,
+              code: "AGENT_OFFLINE",
+              error: "agent offline",
+            },
           }),
         );
       }
@@ -181,22 +194,25 @@ export async function buildApp(
     return reply.send(RecipeListResponseSchema.parse({ recipes }));
   });
 
-  app.post("/api/validate", async (req: FastifyRequest, reply: FastifyReply) => {
-    const parsed = ValidateRequestSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return reply
-        .code(400)
-        .send({ error: "invalid request", code: "VALIDATION_FAILED" });
-    }
-    if (parsed.data.script.includes("--unsafe")) {
-      return reply
-        .code(400)
-        .send({ ok: false, errors: ["--unsafe is forbidden"], probes: [] });
-    }
-    return proxyVerbatim(reply, () =>
-      agentPost(opts.agentUrl, opts.tokenFile, "/v1/validate", parsed.data),
-    );
-  });
+  app.post(
+    "/api/validate",
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      const parsed = ValidateRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: "invalid request", code: "VALIDATION_FAILED" });
+      }
+      if (parsed.data.script.includes("--unsafe")) {
+        return reply
+          .code(400)
+          .send({ ok: false, errors: ["--unsafe is forbidden"], probes: [] });
+      }
+      return proxyVerbatim(reply, () =>
+        agentPost(opts.agentUrl, opts.tokenFile, "/v1/validate", parsed.data),
+      );
+    },
+  );
 
   app.post("/api/runs", async (req: FastifyRequest, reply: FastifyReply) => {
     const parsed = CreateRunRequestSchema.safeParse(req.body);
@@ -254,40 +270,49 @@ export async function buildApp(
     return reply.code(201).send(created);
   });
 
-  app.post("/api/runs/:id/stop", async (req: FastifyRequest, reply: FastifyReply) => {
-    const { id } = req.params as { id: string };
-    if (typeof id !== "string" || id === "" || id.length > 256) {
-      return reply.code(404).send({ error: "unknown run", code: "NOT_FOUND" });
-    }
-    let stopped: { run_id: string; state: string };
-    try {
-      const res = await agentDelete(opts.agentUrl, opts.tokenFile, `/v1/runs/${id}`);
-      const text = await res.text();
-      let json: unknown = {};
-      try {
-        json = text === "" ? {} : JSON.parse(text);
-      } catch {
-        return reply.code(res.status).send(text);
-      }
-      if (!res.ok) return reply.code(res.status).send(json);
-      stopped = StopRunResponseSchema.parse(json);
-    } catch (err) {
-      if (err instanceof AgentOfflineError) {
+  app.post(
+    "/api/runs/:id/stop",
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      const { id } = req.params as { id: string };
+      if (typeof id !== "string" || id === "" || id.length > 256) {
         return reply
-          .code(503)
-          .send({ error: "agent offline", code: "AGENT_OFFLINE" });
+          .code(404)
+          .send({ error: "unknown run", code: "NOT_FOUND" });
       }
-      throw err;
-    }
-    try {
-      database
-        .prepare("UPDATE runs SET state = ? WHERE id = ?")
-        .run(stopped.state, stopped.run_id);
-    } catch (err) {
-      app.log.error({ err }, "run stop update failed");
-    }
-    return reply.send(stopped);
-  });
+      let stopped: { run_id: string; state: string };
+      try {
+        const res = await agentDelete(
+          opts.agentUrl,
+          opts.tokenFile,
+          `/v1/runs/${id}`,
+        );
+        const text = await res.text();
+        let json: unknown = {};
+        try {
+          json = text === "" ? {} : JSON.parse(text);
+        } catch {
+          return reply.code(res.status).send(text);
+        }
+        if (!res.ok) return reply.code(res.status).send(json);
+        stopped = StopRunResponseSchema.parse(json);
+      } catch (err) {
+        if (err instanceof AgentOfflineError) {
+          return reply
+            .code(503)
+            .send({ error: "agent offline", code: "AGENT_OFFLINE" });
+        }
+        throw err;
+      }
+      try {
+        database
+          .prepare("UPDATE runs SET state = ? WHERE id = ?")
+          .run(stopped.state, stopped.run_id);
+      } catch (err) {
+        app.log.error({ err }, "run stop update failed");
+      }
+      return reply.send(stopped);
+    },
+  );
 
   app.get(
     "/ws/runs/:id",
@@ -298,13 +323,18 @@ export async function buildApp(
       try {
         token = readAgentToken(opts.tokenFile);
       } catch {
-        socket.send(JSON.stringify({ error: "agent offline", code: "AGENT_OFFLINE" }));
+        socket.send(
+          JSON.stringify({ error: "agent offline", code: "AGENT_OFFLINE" }),
+        );
         socket.close();
         return;
       }
-      const upstream = new WebSocket(agentWsUrl(opts.agentUrl, `/v1/runs/${id}/stream`), {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const upstream = new WebSocket(
+        agentWsUrl(opts.agentUrl, `/v1/runs/${id}/stream`),
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
       const closeUpstream = (): void => {
         try {
           upstream.close();
@@ -324,7 +354,9 @@ export async function buildApp(
       });
       upstream.on("error", () => {
         if (socket.readyState === WebSocket.OPEN) {
-          socket.send(JSON.stringify({ error: "agent offline", code: "AGENT_OFFLINE" }));
+          socket.send(
+            JSON.stringify({ error: "agent offline", code: "AGENT_OFFLINE" }),
+          );
         }
         socket.close();
       });

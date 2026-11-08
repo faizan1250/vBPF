@@ -13,9 +13,7 @@ const app = await buildApp({
   webOrigin: config.WEB_ORIGIN,
 });
 
-app
-  .listen({ host: config.HOST, port: config.PORT })
-  .catch((err: unknown) => {
-    app.log.error({ err }, "api listen failed");
-    process.exit(1);
-  });
+app.listen({ host: config.HOST, port: config.PORT }).catch((err: unknown) => {
+  app.log.error({ err }, "api listen failed");
+  process.exit(1);
+});

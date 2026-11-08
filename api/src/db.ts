@@ -79,14 +79,18 @@ export function searchRecipes(
   const q = query.trim();
   if (q === "") {
     const rows = db
-      .prepare("SELECT id, title, description, tags, view FROM recipes_index ORDER BY id LIMIT ?")
+      .prepare(
+        "SELECT id, title, description, tags, view FROM recipes_index ORDER BY id LIMIT ?",
+      )
       .all(limit) as Array<Omit<Recipe, "tags"> & { tags: string }>;
     return rows.map(toRecipe);
   }
   const safe = escapeFts(q);
   if (safe === "") {
     const rows = db
-      .prepare("SELECT id, title, description, tags, view FROM recipes_index ORDER BY id LIMIT ?")
+      .prepare(
+        "SELECT id, title, description, tags, view FROM recipes_index ORDER BY id LIMIT ?",
+      )
       .all(limit) as Array<Omit<Recipe, "tags"> & { tags: string }>;
     return rows.map(toRecipe);
   }

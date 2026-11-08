@@ -53,7 +53,11 @@ function startFakeAgent(): Promise<FakeAgent> {
       req.on("end", () => {
         const body = JSON.parse(raw as string) as { script?: string };
         if ((body.script ?? "").includes("bad-probe")) {
-          send(200, { ok: false, errors: ["probe not found: bad-probe"], probes: [] });
+          send(200, {
+            ok: false,
+            errors: ["probe not found: bad-probe"],
+            probes: [],
+          });
         } else {
           send(200, { ok: true, errors: [], probes: ["BEGIN"] });
         }
@@ -104,11 +108,29 @@ function startFakeAgent(): Promise<FakeAgent> {
     wss.handleUpgrade(req, socket, head, (ws) => {
       const seq = (n: number): number => n;
       const send = (kind: string, data: unknown, n: number): void => {
-        ws.send(JSON.stringify({ run_id: runId, seq: seq(n), ts: 1_700_000_000_000 + n, kind, data }));
+        ws.send(
+          JSON.stringify({
+            run_id: runId,
+            seq: seq(n),
+            ts: 1_700_000_000_000 + n,
+            kind,
+            data,
+          }),
+        );
       };
       send("status", { state: "running" }, 0);
       send("printf", "hello", 1);
-      send("summary", { events: 1, bytes: 5, dropped: 0, duration_ms: 10, exit_reason: "completed" }, 2);
+      send(
+        "summary",
+        {
+          events: 1,
+          bytes: 5,
+          dropped: 0,
+          duration_ms: 10,
+          exit_reason: "completed",
+        },
+        2,
+      );
       ws.on("message", () => {
         ws.close();
       });
@@ -138,7 +160,12 @@ let fake: FakeAgent;
 let app: FastifyInstance;
 let base = "";
 
-const recipesDir = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "recipes");
+const recipesDir = join(
+  dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "recipes",
+);
 
 beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "vbpf-api-"));
@@ -170,7 +197,11 @@ describe("validate proxy", () => {
       body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
     });
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true, errors: [], probes: ["BEGIN"] });
+    expect(await res.json()).toEqual({
+      ok: true,
+      errors: [],
+      probes: ["BEGIN"],
+    });
   });
 
   it("forwards agent rejection verbatim", async () => {
@@ -215,7 +246,10 @@ describe("runs proxy", () => {
     const first = await fetch(`${base}/api/runs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ script: "BEGIN { @x = count(); }", duration_s: 10 }),
+      body: JSON.stringify({
+        script: "BEGIN { @x = count(); }",
+        duration_s: 10,
+      }),
     });
     expect(first.status).toBe(201);
     const created = (await first.json()) as { run_id: string };
@@ -224,7 +258,10 @@ describe("runs proxy", () => {
     const clash = await fetch(`${base}/api/runs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ script: "BEGIN { @x = count(); }", duration_s: 10 }),
+      body: JSON.stringify({
+        script: "BEGIN { @x = count(); }",
+        duration_s: 10,
+      }),
     });
     expect(clash.status).toBe(409);
     expect(await clash.json()).toMatchObject({ code: "LIMIT_EXCEEDED" });
