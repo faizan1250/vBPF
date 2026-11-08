@@ -61,3 +61,23 @@ jobs:
         run: |
           if [ -d contract ]; then pnpm -C contract run check; \
           else echo "SKIP: no contract/ fixtures yet (fake-agent check deferred)"; fi
+
+  # Mocked end-to-end: Playwright, chromium only, mock fixtures only.
+  e2e-mocked:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "9.x"
+      - name: Playwright e2e with mock fixtures (chromium only)
+        run: |
+          if [ -d web ]; then
+            pnpm -C web exec playwright install --with-deps chromium
+            pnpm -C web run test:e2e
+          else
+            echo "SKIP: no web/ yet (chromium e2e deferred to mock fixtures)"
+          fi
