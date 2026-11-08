@@ -33,7 +33,7 @@ test:
 	@if [ -d web ]; then $(PNPM) -C web run test --run; else echo "SKIP: no web/ yet"; fi
 
 agent-build:
-	@if [ -d agent ]; then cd agent && $(GO) build -o ../bin/agent ./...; else echo "SKIP: no agent/ yet"; fi
+	@if [ -d agent ]; then cd agent && $(GO) build -o ../bin/agent ./cmd/agent; else echo "SKIP: no agent/ yet"; fi
 
 api-dev:
 	@if [ -d api ]; then $(PNPM) -C api run dev --port 8080; else echo "SKIP: no api/ yet (port 8080 reserved)"; fi

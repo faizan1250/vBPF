@@ -86,7 +86,7 @@ func TestNoUnsafeFlag(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() || !(strings.HasSuffix(path, ".go") || strings.HasSuffix(path, ".sh")) {
+		if info.IsDir() || (!strings.HasSuffix(path, ".go") && !strings.HasSuffix(path, ".sh")) {
 			return nil
 		}
 		raw, err := os.ReadFile(path)

@@ -173,11 +173,12 @@ func Run(ctx context.Context, opts Options, emit func(parser.Event) error) error
 		}
 	case <-timer.C:
 		reason = ReasonTimeout
-		stopGroup(cmd.Process.Pid, opts.GracePeriod, waitDone)
+		// We killed the group, so the wait error only says how it died.
+		_ = stopGroup(cmd.Process.Pid, opts.GracePeriod, waitDone)
 		out = <-parseCh
 	case <-ctx.Done():
 		reason = ReasonCancelled
-		stopGroup(cmd.Process.Pid, opts.GracePeriod, waitDone)
+		_ = stopGroup(cmd.Process.Pid, opts.GracePeriod, waitDone)
 		out = <-parseCh
 	}
 	if out.err != nil && runErr == nil {

@@ -25,7 +25,7 @@ func main() {
 
 func realMain(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] != "run" {
-		fmt.Fprintln(stderr, "usage: agent run <script.bt> [--duration 10]")
+		efprintf(stderr, "usage: agent run <script.bt> [--duration 10]")
 		return 2
 	}
 	// Hand-rolled flag parsing so --duration works before or after the file.
@@ -39,14 +39,14 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 			i++
 			n, err := strconv.Atoi(rest[i])
 			if err != nil {
-				fmt.Fprintln(stderr, "agent: bad --duration:", rest[i])
+				efprintf(stderr, "agent: bad --duration:", rest[i])
 				return 2
 			}
 			durationS = n
 		case strings.HasPrefix(a, "--duration="):
 			n, err := strconv.Atoi(strings.TrimPrefix(a, "--duration="))
 			if err != nil {
-				fmt.Fprintln(stderr, "agent: bad --duration:", a)
+				efprintf(stderr, "agent: bad --duration:", a)
 				return 2
 			}
 			durationS = n
@@ -54,28 +54,28 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 			positional = append(positional, rest[i+1:]...)
 			i = len(rest)
 		case strings.HasPrefix(a, "--"):
-			fmt.Fprintln(stderr, "agent: unknown flag:", a)
+			efprintf(stderr, "agent: unknown flag:", a)
 			return 2
 		default:
 			positional = append(positional, a)
 		}
 	}
 	if len(positional) != 1 {
-		fmt.Fprintln(stderr, "usage: agent run <script.bt> [--duration 10]")
+		efprintf(stderr, "usage: agent run <script.bt> [--duration 10]")
 		return 2
 	}
 	duration := time.Duration(durationS) * time.Second
 	if err := limits.ValidateDuration(duration); err != nil {
-		fmt.Fprintln(stderr, "agent:", err)
+		efprintf(stderr, "agent:", err)
 		return 2
 	}
 	script, err := os.ReadFile(positional[0])
 	if err != nil {
-		fmt.Fprintln(stderr, "agent:", err)
+		efprintf(stderr, "agent:", err)
 		return 1
 	}
 	if len(script) == 0 {
-		fmt.Fprintln(stderr, "agent: empty script")
+		efprintf(stderr, "agent: empty script")
 		return 1
 	}
 
@@ -93,8 +93,13 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 
 	enc := json.NewEncoder(stdout)
 	if err := runner.Run(ctx, opts, func(ev parser.Event) error { return enc.Encode(ev) }); err != nil {
-		fmt.Fprintln(stderr, "agent:", err)
+		efprintf(stderr, "agent:", err)
 		return 1
 	}
 	return 0
+}
+
+// efprintf reports CLI failures; a broken stderr is unrecoverable by definition.
+func efprintf(w io.Writer, args ...any) {
+	_, _ = fmt.Fprintln(w, args...)
 }
