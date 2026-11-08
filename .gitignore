@@ -2,3 +2,15 @@
 detailedImplementation.md
 generalinstructionsforagent.md
 systemarchitecture.md
+
+# Runtime and generated dirs
+logs/
+run/
+bin/
+data/
+
+# Dependencies
+node_modules/
+
+# Local env (example is committed, real keys never are)
+.env
