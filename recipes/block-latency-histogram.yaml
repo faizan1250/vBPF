@@ -1,0 +1,9 @@
+id: block-latency-histogram
+title: Block latency histogram
+description: Histogram of block I/O request latencies in microseconds, from issue to completion.
+tags: [disk, io, latency, block, histogram]
+view: histogram
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:block:block_rq_issue", "tracepoint:block:block_rq_complete"]
+params: []

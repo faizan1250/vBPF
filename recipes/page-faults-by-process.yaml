@@ -1,0 +1,9 @@
+id: page-faults-by-process
+title: Page faults by process
+description: Counts page faults by process name using the page-faults software event.
+tags: [memory, page-faults, process, sampling]
+view: bar
+duration_default: 10
+min_kernel: "5.8"
+requires: ["software:page-faults"]
+params: []

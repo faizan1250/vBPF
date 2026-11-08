@@ -1,0 +1,10 @@
+software:page-faults
+{
+  @faults[comm] = count();
+}
+
+END
+{
+  print(@faults);
+  clear(@faults);
+}

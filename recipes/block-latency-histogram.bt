@@ -1,0 +1,18 @@
+tracepoint:block:block_rq_issue
+{
+  @start[args->dev, args->sector] = nsecs;
+}
+
+tracepoint:block:block_rq_complete
+/@start[args->dev, args->sector]/
+{
+  @lat_us = hist((nsecs - @start[args->dev, args->sector]) / 1000);
+  delete(@start[args->dev, args->sector]);
+}
+
+END
+{
+  print(@lat_us);
+  clear(@lat_us);
+  clear(@start);
+}

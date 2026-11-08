@@ -1,0 +1,10 @@
+tracepoint:raw_syscalls:sys_enter
+{
+  @syscalls[comm] = count();
+}
+
+END
+{
+  print(@syscalls);
+  clear(@syscalls);
+}

@@ -1,0 +1,9 @@
+id: dns-lookups
+title: DNS lookups
+description: Streams getaddrinfo calls with the calling process, pid, node, and service.
+tags: [network, dns, resolution, audit]
+view: events
+duration_default: 10
+min_kernel: "5.8"
+requires: ["uprobe:libc:getaddrinfo"]
+params: []

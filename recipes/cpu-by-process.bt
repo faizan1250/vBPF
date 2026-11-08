@@ -1,0 +1,10 @@
+profile:hz:99
+{
+  @cpu[comm] = count();
+}
+
+END
+{
+  print(@cpu);
+  clear(@cpu);
+}
