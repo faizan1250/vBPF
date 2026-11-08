@@ -1,0 +1,9 @@
+id: cpu-by-process
+title: CPU by process
+description: Samples on-CPU stacks at 99 Hz and counts samples by process name.
+tags: [cpu, process, profile, sampling]
+view: bar
+duration_default: 10
+min_kernel: "5.8"
+requires: ["profile:hz:99"]
+params: []

@@ -1,0 +1,9 @@
+id: syscall-counts-by-process
+title: Syscall counts by process
+description: Counts system calls by process name using the raw_syscalls tracepoint.
+tags: [syscalls, process, counts, audit]
+view: bar
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:raw_syscalls:sys_enter"]
+params: []

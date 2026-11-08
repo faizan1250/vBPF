@@ -1,0 +1,4 @@
+uprobe:libc:getaddrinfo
+{
+  printf("%s pid=%d node=%s service=%s\n", comm, pid, str(arg0), str(arg1));
+}
