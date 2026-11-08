@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "vBPF recipe",
+  "description": "Schema for recipes/<id>.yaml (see detailedImplementation.md lines 109-121).",
+  "type": "object",
+  "required": ["id", "title", "description", "tags", "view", "duration_default", "min_kernel", "requires", "params"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+    "title": { "type": "string", "minLength": 1 },
+    "description": { "type": "string", "minLength": 1 },
+    "tags": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "view": {
+      "type": "string",
+      "enum": ["table", "bar", "histogram", "timeseries", "events"]
+    },
+    "duration_default": { "type": "integer", "minimum": 1, "maximum": 60 },
+    "min_kernel": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+    "requires": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "params": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z0-9_]+$" }
+        }
+      }
+    }
+  }
+}

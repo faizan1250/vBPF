@@ -5,7 +5,7 @@
 
 SHELL := /bin/sh
 .SHELLFLAGS := -eu -c
-.PHONY: setup lint test agent-build api-dev web-dev eval test-integration
+.PHONY: setup lint test agent-build api-dev web-dev eval test-integration recipes-check
 
 GO ?= go
 PNPM ?= pnpm
@@ -17,7 +17,7 @@ setup:
 	@if [ -d agent ]; then cd agent && $(GO) mod download; else echo "SKIP: no agent/ yet"; fi
 	@if [ -f pnpm-workspace.yaml ]; then $(PNPM) install; else echo "SKIP: no pnpm workspace yet"; fi
 
-lint:
+lint: recipes-check
 	@if [ ! -d agent ]; then echo "SKIP: no agent/ yet"; \
 	else cd agent && $(GO) vet ./... && test -z "$$(gofmt -l .)" && \
 	{ if command -v golangci-lint >/dev/null; then golangci-lint run ./...; else echo "SKIP: golangci-lint not installed"; fi; }; fi
@@ -54,3 +54,6 @@ test-integration:
 	@command -v bpftrace >/dev/null || (echo "SKIP: bpftrace not installed"; exit 0)
 	@if [ -d agent ]; then cd agent && $(GO) test -tags integration ./...; \
 		else echo "SKIP: no agent/ yet"; fi
+
+recipes-check:
+	@scripts/validate-recipes.sh
