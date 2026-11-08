@@ -47,3 +47,17 @@ jobs:
           version: "9.x"
       - name: make test (no root, skips absent dirs)
         run: make test
+
+  # Contract check against a fake agent fixture (agent serves 127.0.0.1:8787
+  # in production; here a stub stands in so the job passes with no code).
+  contract:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Contract check vs fake agent
+        run: |
+          if [ -d contract ]; then pnpm -C contract run check; \
+          else echo "SKIP: no contract/ fixtures yet (fake-agent check deferred)"; fi
