@@ -14,9 +14,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/faizan1250/vBPF/agent/internal/limits"
 	"github.com/faizan1250/vBPF/agent/internal/parser"
 	"github.com/faizan1250/vBPF/agent/internal/runner"
+	"github.com/faizan1250/vBPF/agent/internal/server"
 )
 
 func main() {
@@ -24,8 +27,15 @@ func main() {
 }
 
 func realMain(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "run" {
-		efprintf(stderr, "usage: agent run <script.bt> [--duration 10]")
+	if len(args) == 0 {
+		efprintf(stderr, "usage: agent <run|serve> ...")
+		return 2
+	}
+	if args[0] == "serve" {
+		return realServe(args[1:], stdout, stderr)
+	}
+	if args[0] != "run" {
+		efprintf(stderr, "usage: agent <run|serve> ...")
 		return 2
 	}
 	// Hand-rolled flag parsing so --duration works before or after the file.
@@ -93,6 +103,55 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 
 	enc := json.NewEncoder(stdout)
 	if err := runner.Run(ctx, opts, func(ev parser.Event) error { return enc.Encode(ev) }); err != nil {
+		efprintf(stderr, "agent:", err)
+		return 1
+	}
+	return 0
+}
+
+// realServe starts the HTTP and WebSocket front end on loopback only.
+func realServe(args []string, _, stderr io.Writer) int {
+	addr := "127.0.0.1:8787"
+	tokenFile := ""
+	bin := os.Getenv("BPFTRACE_PATH")
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--addr" && i+1 < len(args):
+			i++
+			addr = args[i]
+		case strings.HasPrefix(a, "--addr="):
+			addr = strings.TrimPrefix(a, "--addr=")
+		case a == "--token-file" && i+1 < len(args):
+			i++
+			tokenFile = args[i]
+		case strings.HasPrefix(a, "--token-file="):
+			tokenFile = strings.TrimPrefix(a, "--token-file=")
+		case a == "--bpftrace" && i+1 < len(args):
+			i++
+			bin = args[i]
+		case strings.HasPrefix(a, "--bpftrace="):
+			bin = strings.TrimPrefix(a, "--bpftrace=")
+		default:
+			efprintf(stderr, "usage: agent serve [--addr 127.0.0.1:8787] [--token-file run/agent.token]")
+			return 2
+		}
+	}
+	log := zerolog.New(os.Stderr).With().Timestamp().Logger()
+	srv, err := server.New(server.Config{
+		Addr:         addr,
+		TokenFile:    tokenFile,
+		BPFtracePath: bin,
+		Logger:       log,
+		StartTime:    time.Now(),
+	})
+	if err != nil {
+		efprintf(stderr, "agent:", err)
+		return 1
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := srv.ListenAndServe(ctx); err != nil {
 		efprintf(stderr, "agent:", err)
 		return 1
 	}
