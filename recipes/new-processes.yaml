@@ -1,0 +1,9 @@
+id: new-processes
+title: New processes
+description: Streams process executions with pid, process name, and executable path.
+tags: [process, exec, audit]
+view: events
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:sched:sched_process_exec"]
+params: []

@@ -1,0 +1,10 @@
+tracepoint:tcp:tcp_retransmit_skb
+{
+  @retrans[comm] = count();
+}
+
+interval:s:1
+{
+  print(@retrans);
+  clear(@retrans);
+}

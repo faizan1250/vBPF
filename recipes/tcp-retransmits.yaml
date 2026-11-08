@@ -1,0 +1,9 @@
+id: tcp-retransmits
+title: TCP retransmits
+description: Per-second counts of TCP retransmitted segments by process.
+tags: [network, tcp, retransmit, loss, timeseries]
+view: timeseries
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:tcp:tcp_retransmit_skb"]
+params: []

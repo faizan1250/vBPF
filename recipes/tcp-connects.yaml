@@ -1,0 +1,9 @@
+id: tcp-connects
+title: TCP connects
+description: Streams newly established IPv4 TCP connections with process and endpoints.
+tags: [network, tcp, connections, audit]
+view: events
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:sock:inet_sock_set_state"]
+params: []
