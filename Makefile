@@ -20,7 +20,7 @@ setup:
 lint:
 	@if [ ! -d agent ]; then echo "SKIP: no agent/ yet"; \
 	else cd agent && $(GO) vet ./... && test -z "$$(gofmt -l .)" && \
-	{ command -v golangci-lint >/dev/null && golangci-lint run ./... || echo "SKIP: golangci-lint not installed"; }; fi
+	{ if command -v golangci-lint >/dev/null; then golangci-lint run ./...; else echo "SKIP: golangci-lint not installed"; fi; }; fi
 	@if [ -d api ]; then $(PNPM) -C api exec tsc --noEmit; else echo "SKIP: no api/ yet"; fi
 	@if [ -d web ]; then $(PNPM) -C web exec tsc --noEmit; else echo "SKIP: no web/ yet"; fi
 	@if ls scripts/*.sh >/dev/null 2>&1; then shellcheck scripts/*.sh; else echo "SKIP: no scripts/ yet"; fi
