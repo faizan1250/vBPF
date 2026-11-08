@@ -2,6 +2,8 @@ import Database from "better-sqlite3";
 
 import type { Recipe } from "@vbpf/schemas";
 
+import { buildFtsQuery, extractKeywords } from "./retrieval.js";
+
 export function openDb(path: string): Database.Database {
   const db = new Database(path);
   db.pragma("journal_mode = WAL");
@@ -94,10 +96,15 @@ export function searchRecipes(
       .all(limit) as Array<Omit<Recipe, "tags"> & { tags: string }>;
     return rows.map(toRecipe);
   }
-  const match = safe
-    .split(" ")
-    .map((t) => `"${t}"`)
-    .join(" OR ");
+  const match = buildFtsQuery(extractKeywords(safe));
+  if (match === "") {
+    const rows = db
+      .prepare(
+        "SELECT id, title, description, tags, view FROM recipes_index ORDER BY id LIMIT ?",
+      )
+      .all(limit) as Array<Omit<Recipe, "tags"> & { tags: string }>;
+    return rows.map(toRecipe);
+  }
   const rows = db
     .prepare(
       "SELECT id, title, description, tags, view FROM recipes_index WHERE recipes_index MATCH ? ORDER BY rank LIMIT ?",
