@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/rs/zerolog"
-	"nhooyr.io/websocket"
 
 	"github.com/faizan1250/vBPF/agent/internal/parser"
 	"github.com/stretchr/testify/require"
@@ -63,7 +63,7 @@ func startRun(t *testing.T, s *Server, ts *httptest.Server, script string, dur i
 	req.Header.Set("Authorization", "Bearer "+s.Token())
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 	var out map[string]string
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
@@ -80,7 +80,7 @@ func streamUntilSummary(t *testing.T, s *Server, ts *httptest.Server, id string)
 		HTTPHeader: http.Header{"Authorization": []string{"Bearer " + s.Token()}},
 	})
 	require.NoError(t, err)
-	defer conn.Close(websocket.StatusNormalClosure, "")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
 	var events int
 	for {
 		_, raw, err := conn.Read(ctx)

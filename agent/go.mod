@@ -3,9 +3,9 @@ module github.com/faizan1250/vBPF/agent
 go 1.23
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/rs/zerolog v1.35.1
 	github.com/stretchr/testify v1.12.1
-	nhooyr.io/websocket v1.8.17
 )
 
 require (

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/rs/zerolog"
-	"nhooyr.io/websocket"
 
 	"github.com/faizan1250/vBPF/agent/internal/limits"
 	"github.com/faizan1250/vBPF/agent/internal/parser"
@@ -251,7 +251,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "done")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "done") }()
 	ctx := r.Context()
 	sub, hist := run.subscribe()
 	defer run.unsubscribe(sub)

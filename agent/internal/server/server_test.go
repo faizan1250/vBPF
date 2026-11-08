@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/rs/zerolog"
-	"nhooyr.io/websocket"
 
 	"github.com/faizan1250/vBPF/agent/internal/parser"
 	"github.com/faizan1250/vBPF/agent/internal/runner"
@@ -25,9 +25,6 @@ func testLogger() zerolog.Logger { return zerolog.Nop() }
 
 func testServer(t *testing.T, cfg Config) *Server {
 	t.Helper()
-	if cfg.Logger.GetLevel() == zerolog.Disabled && cfg.StartTime.IsZero() {
-		// keep Nop as-is
-	}
 	cfg.Logger = testLogger()
 	cfg.StartTime = time.Now()
 	if cfg.TokenFile == "" {
@@ -249,7 +246,7 @@ func TestStreamEnvelopeAndStop(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer "+s.Token())
 		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		require.Equal(t, http.StatusCreated, resp.StatusCode)
 		var out map[string]string
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&out))
@@ -260,7 +257,7 @@ func TestStreamEnvelopeAndStop(t *testing.T) {
 	wsURL := "ws://" + strings.TrimPrefix(ts.URL, "http://") + "/v1/runs/" + id + "/stream"
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer " + s.Token()}}})
 	require.NoError(t, err)
-	defer conn.Close(websocket.StatusNormalClosure, "")
+	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
 	var seenStatus, seenData bool
 	for i := 0; i < 10; i++ {
 		_, raw, err := conn.Read(ctx)
