@@ -19,12 +19,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
       - uses: pnpm/action-setup@v4
         with:
           version: "9.x"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - name: Install JS deps (frozen lockfile)
+        run: pnpm install --frozen-lockfile
       - name: Install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
       - name: Install golangci-lint (pinned)
@@ -39,12 +42,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22.x"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
       - uses: pnpm/action-setup@v4
         with:
           version: "9.x"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - name: Install JS deps (frozen lockfile)
+        run: pnpm install --frozen-lockfile
       - name: make test (no root, skips absent dirs)
         run: make test
 
@@ -54,9 +60,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "9.x"
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: "pnpm"
+      - name: Install JS deps (frozen lockfile)
+        run: pnpm install --frozen-lockfile
       - name: Contract check vs fake agent
         run: |
           if [ -d contract ]; then pnpm -C contract run check; \
@@ -67,12 +79,15 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
       - uses: pnpm/action-setup@v4
         with:
           version: "9.x"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - name: Install JS deps (frozen lockfile)
+        run: pnpm install --frozen-lockfile
       - name: Playwright e2e with mock fixtures (chromium only)
         run: |
           if [ -d web ]; then
