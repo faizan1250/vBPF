@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Every committed fixture must decode with the expected kind.
@@ -23,62 +25,44 @@ func TestFixtures(t *testing.T) {
 	for _, f := range fixtures {
 		t.Run(f.file, func(t *testing.T) {
 			raw, err := os.ReadFile(filepath.Join("..", "..", "..", "fixtures", f.file))
-			if err != nil {
-				t.Fatal(err)
-			}
-			var events []Event
-			lines := strings.Split(string(raw), "\n")
-			for i, ln := range lines {
+			require.NoError(t, err)
+			var count int
+			for i, ln := range strings.Split(string(raw), "\n") {
 				if strings.TrimSpace(ln) == "" {
 					continue
 				}
-				ev, err := ParseLine("run_test", uint64(len(events)), []byte(ln))
-				if err != nil {
-					t.Fatalf("line %d: %v", i, err)
-				}
-				if ev.Kind != f.kind {
-					t.Fatalf("line %d: kind=%q want %q", i, ev.Kind, f.kind)
-				}
-				if ev.RunID != "run_test" || ev.Ts <= 0 {
-					t.Fatalf("line %d: bad envelope %+v", i, ev)
-				}
-				events = append(events, ev)
+				ev, err := ParseLine("run_test", uint64(count), []byte(ln))
+				require.NoError(t, err, "line %d", i)
+				require.Equal(t, f.kind, ev.Kind, "line %d", i)
+				require.Equal(t, "run_test", ev.RunID)
+				require.Positive(t, ev.Ts)
+				count++
 			}
-			if len(events) == 0 {
-				t.Fatal("no events decoded")
-			}
+			require.Positive(t, count, "no events decoded")
 		})
 	}
 }
 
 func TestParseLineRejects(t *testing.T) {
-	cases := []struct {
-		name string
-		line string
-	}{
-		{"empty", ""},
-		{"not json", "not json"},
-		{"missing type", `{"data": {}}`},
-		{"unknown type", `{"type": "attached_probes", "data": {}}`},
-		{"missing data", `{"type": "map"}`},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if _, err := ParseLine("run_test", 0, []byte(c.line)); err == nil {
-				t.Fatal("expected error")
-			}
+	for _, line := range []string{
+		"",
+		"not json",
+		`{"data": {}}`,
+		`{"type": "attached_probes", "data": {}}`,
+		`{"type": "map"}`,
+	} {
+		t.Run(line, func(t *testing.T) {
+			_, err := ParseLine("run_test", 0, []byte(line))
+			require.Error(t, err)
 		})
 	}
 }
 
 func TestParseLHist(t *testing.T) {
 	ev, err := ParseLine("run_test", 7, []byte(`{"type": "lhist", "data": {"@x": [{"min": 0, "max": 1, "count": 3}]}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if ev.Kind != KindLHist || ev.Seq != 7 {
-		t.Fatalf("unexpected event %+v", ev)
-	}
+	require.NoError(t, err)
+	require.Equal(t, KindLHist, ev.Kind)
+	require.Equal(t, uint64(7), ev.Seq)
 }
 
 func TestStreamCountsLost(t *testing.T) {
@@ -88,20 +72,15 @@ func TestStreamCountsLost(t *testing.T) {
 		got = append(got, ev)
 		return nil
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if events != 2 || dropped != 1 {
-		t.Fatalf("events=%d dropped=%d", events, dropped)
-	}
-	kinds := []string{got[0].Kind, got[1].Kind, got[2].Kind}
-	if kinds[0] != KindPrintf || kinds[1] != KindLost || kinds[2] != KindMap {
-		t.Fatalf("kinds=%v", kinds)
-	}
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), events)
+	require.Equal(t, uint64(1), dropped)
+	require.Len(t, got, 3)
+	require.Equal(t, KindPrintf, got[0].Kind)
+	require.Equal(t, KindLost, got[1].Kind)
+	require.Equal(t, KindMap, got[2].Kind)
 	for i, ev := range got {
-		if ev.Seq != uint64(i) {
-			t.Fatalf("seq gap at %d: %+v", i, ev)
-		}
+		require.Equal(t, uint64(i), ev.Seq, "seq gap")
 	}
 }
 
@@ -110,22 +89,12 @@ func TestStreamPropagatesEmitError(t *testing.T) {
 	_, _, err := Stream(strings.NewReader("{\"type\": \"printf\", \"data\": \"x\"}\n"), "run_test", func(Event) error {
 		return boom
 	})
-	if !errors.Is(err, boom) {
-		t.Fatalf("err=%v", err)
-	}
+	require.ErrorIs(t, err, boom)
 }
 
 func TestConstructors(t *testing.T) {
-	if Status("r", 0, "running").Kind != KindStatus {
-		t.Fatal("bad status kind")
-	}
-	if Stderr("r", 0, "x").Kind != KindStderr {
-		t.Fatal("bad stderr kind")
-	}
-	if Lost("r", 0, 3).Kind != KindLost {
-		t.Fatal("bad lost kind")
-	}
-	if Summarize("r", 0, Summary{ExitReason: "completed"}).Kind != KindSummary {
-		t.Fatal("bad summary kind")
-	}
+	require.Equal(t, KindStatus, Status("r", 0, "running").Kind)
+	require.Equal(t, KindStderr, Stderr("r", 0, "x").Kind)
+	require.Equal(t, KindLost, Lost("r", 0, 3).Kind)
+	require.Equal(t, KindSummary, Summarize("r", 0, Summary{ExitReason: "completed"}).Kind)
 }

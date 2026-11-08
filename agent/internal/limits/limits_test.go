@@ -3,6 +3,8 @@ package limits
 import (
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestValidateDuration(t *testing.T) {
@@ -19,8 +21,11 @@ func TestValidateDuration(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if err := ValidateDuration(c.d); (err != nil) != c.wantErr {
-				t.Fatalf("ValidateDuration(%s) err=%v wantErr=%v", c.d, err, c.wantErr)
+			err := ValidateDuration(c.d)
+			if c.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
 			}
 		})
 	}
@@ -29,8 +34,6 @@ func TestValidateDuration(t *testing.T) {
 func TestBPFtraceEnv(t *testing.T) {
 	env := BPFtraceEnv()
 	for _, k := range []string{"BPFTRACE_MAP_KEYS_MAX", "BPFTRACE_MAX_PROBES", "BPFTRACE_STRLEN"} {
-		if env[k] == "" {
-			t.Fatalf("missing %s", k)
-		}
+		require.NotEmpty(t, env[k], "missing %s", k)
 	}
 }
