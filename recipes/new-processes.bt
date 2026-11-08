@@ -1,0 +1,4 @@
+tracepoint:sched:sched_process_exec
+{
+  printf("pid=%d comm=%s file=%s\n", args->pid, comm, str(args->filename));
+}
