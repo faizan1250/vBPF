@@ -1,0 +1,22 @@
+# Real bpftrace/root tests. Manual only: needs a self-hosted runner with
+# root, bpftrace, and kernel BTF. EXPECTED TO FAIL on stock GitHub runners.
+name: integration-manual
+
+on:
+  workflow_dispatch:
+
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - name: Preconditions (informational, stock runners fail here)
+        run: |
+          id -u
+          command -v bpftrace || echo "EXPECTED-FAIL: bpftrace missing on stock runners"
+          ls /sys/kernel/btf/vmlinux || echo "EXPECTED-FAIL: kernel BTF missing on stock runners"
+      - name: make test-integration (requires root + bpftrace)
+        run: make test-integration
