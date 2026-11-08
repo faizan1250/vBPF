@@ -95,7 +95,8 @@ func Run(ctx context.Context, opts Options, emit func(parser.Event) error) error
 		return fmt.Errorf("runner: close temp file: %w", err)
 	}
 
-	// Fixed argv: --unsafe can never reach the command line.
+	// Fixed argv (no shell, no extra flags): the bpftrace unsafe escape
+	// hatch can never reach the command line from here.
 	cmd := exec.Command(opts.BPFtracePath, "-q", "-f", "json", tmpName)
 	cmd.Env = append(os.Environ(), bpfEnv()...)
 	cmd.SysProcAttr = sysProcAttr()
@@ -159,11 +160,14 @@ func Run(ctx context.Context, opts Options, emit func(parser.Event) error) error
 
 	select {
 	case out = <-parseCh:
+		var werr error
 		if counter.hit {
 			reason = ReasonLimit
-			stopGroup(cmd.Process.Pid, opts.GracePeriod, waitDone)
+			werr = stopGroup(cmd.Process.Pid, opts.GracePeriod, waitDone)
+		} else {
+			werr = <-waitDone
 		}
-		if werr := <-waitDone; werr != nil && reason == ReasonCompleted {
+		if werr != nil && reason == ReasonCompleted {
 			reason = ReasonFailed
 			runErr = fmt.Errorf("runner: bpftrace: %w", werr)
 		}
@@ -203,14 +207,16 @@ func Run(ctx context.Context, opts Options, emit func(parser.Event) error) error
 }
 
 // stopGroup sends SIGINT for a graceful bpftrace shutdown, then SIGKILLs
-// the group after grace unless the process already exited.
-func stopGroup(pid int, grace time.Duration, waitDone <-chan error) {
+// the group after grace unless the process already exited. It reports how
+// the process died; callers must not receive from waitDone again.
+func stopGroup(pid int, grace time.Duration, waitDone <-chan error) error {
 	_ = signalGroup(pid, interruptSignal())
 	select {
-	case <-waitDone:
+	case err := <-waitDone:
+		return err
 	case <-time.After(grace):
 		_ = killGroup(pid, killSignal())
-		<-waitDone
+		return <-waitDone
 	}
 }
 

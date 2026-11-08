@@ -73,12 +73,14 @@ func fakeScript(t *testing.T) string {
 	return p
 }
 
-// The agent must never build a bpftrace command line with --unsafe.
+// The agent must never build a bpftrace command line with the unsafe flag
+// (needle assembled at runtime so this guard cannot match itself).
 func TestNoUnsafeFlag(t *testing.T) {
 	root, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
+	needle := "--" + "unsafe"
 	var hits []string
 	err = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -91,7 +93,7 @@ func TestNoUnsafeFlag(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if strings.Contains(string(raw), "--unsafe") {
+		if strings.Contains(string(raw), needle) {
 			hits = append(hits, path)
 		}
 		return nil
@@ -100,6 +102,6 @@ func TestNoUnsafeFlag(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(hits) != 0 {
-		t.Fatalf("--unsafe found in: %v", hits)
+		t.Fatalf("%s found in: %v", needle, hits)
 	}
 }

@@ -5,11 +5,12 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -27,22 +28,48 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: agent run <script.bt> [--duration 10]")
 		return 2
 	}
-	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.SetOutput(stderr)
-	durationS := fs.Int("duration", 10, "run duration in seconds (1-60)")
-	if err := fs.Parse(args[1:]); err != nil {
-		return 2
+	// Hand-rolled flag parsing so --duration works before or after the file.
+	durationS := 10
+	var positional []string
+	rest := args[1:]
+	for i := 0; i < len(rest); i++ {
+		a := rest[i]
+		switch {
+		case a == "--duration" && i+1 < len(rest):
+			i++
+			n, err := strconv.Atoi(rest[i])
+			if err != nil {
+				fmt.Fprintln(stderr, "agent: bad --duration:", rest[i])
+				return 2
+			}
+			durationS = n
+		case strings.HasPrefix(a, "--duration="):
+			n, err := strconv.Atoi(strings.TrimPrefix(a, "--duration="))
+			if err != nil {
+				fmt.Fprintln(stderr, "agent: bad --duration:", a)
+				return 2
+			}
+			durationS = n
+		case a == "--" && i+1 < len(rest):
+			positional = append(positional, rest[i+1:]...)
+			i = len(rest)
+		case strings.HasPrefix(a, "--"):
+			fmt.Fprintln(stderr, "agent: unknown flag:", a)
+			return 2
+		default:
+			positional = append(positional, a)
+		}
 	}
-	if fs.NArg() != 1 {
+	if len(positional) != 1 {
 		fmt.Fprintln(stderr, "usage: agent run <script.bt> [--duration 10]")
 		return 2
 	}
-	duration := time.Duration(*durationS) * time.Second
+	duration := time.Duration(durationS) * time.Second
 	if err := limits.ValidateDuration(duration); err != nil {
 		fmt.Fprintln(stderr, "agent:", err)
 		return 2
 	}
-	script, err := os.ReadFile(fs.Arg(0))
+	script, err := os.ReadFile(positional[0])
 	if err != nil {
 		fmt.Fprintln(stderr, "agent:", err)
 		return 1
