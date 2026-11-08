@@ -49,6 +49,17 @@ export function migrate(db: Database.Database): void {
       id, title, description, tags, view
     );
   `);
+  for (const ddl of [
+    "ALTER TABLE generations ADD COLUMN warnings TEXT NOT NULL DEFAULT '[]'",
+    "ALTER TABLE generations ADD COLUMN refusal TEXT",
+    "ALTER TABLE generations ADD COLUMN latency_ms INTEGER NOT NULL DEFAULT 0",
+  ]) {
+    try {
+      db.exec(ddl);
+    } catch {
+      // Column already exists from a previous migration.
+    }
+  }
 }
 
 export function indexRecipes(db: Database.Database, recipes: Recipe[]): void {
@@ -111,4 +122,56 @@ export function searchRecipes(
     )
     .all(match, limit) as Array<Omit<Recipe, "tags"> & { tags: string }>;
   return rows.map(toRecipe);
+}
+
+export interface GenerationRow {
+  id: string;
+  session_id: string;
+  prompt: string;
+  script: string;
+  chart_type: string | null;
+  explanation: string | null;
+  duration_s: number | null;
+  validation_status: string;
+  attempts: number;
+  model: string | null;
+  based_on_recipe: string | null;
+  warnings: string;
+  refusal: string | null;
+  latency_ms: number;
+}
+
+export function ensureSession(db: Database.Database, sessionId: string): void {
+  db.prepare(
+    "INSERT OR IGNORE INTO sessions (id, title, created_at) VALUES (?, '', ?)",
+  ).run(sessionId, Date.now());
+}
+
+export function insertGeneration(
+  db: Database.Database,
+  row: GenerationRow,
+): void {
+  db.prepare(
+    `INSERT INTO generations
+      (id, session_id, prompt, script, chart_type, explanation, duration_s,
+       validation_status, attempts, model, based_on_recipe, warnings, refusal,
+       latency_ms, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    row.id,
+    row.session_id,
+    row.prompt,
+    row.script,
+    row.chart_type,
+    row.explanation,
+    row.duration_s,
+    row.validation_status,
+    row.attempts,
+    row.model,
+    row.based_on_recipe,
+    row.warnings,
+    row.refusal,
+    row.latency_ms,
+    Date.now(),
+  );
 }

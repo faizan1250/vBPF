@@ -9,6 +9,8 @@ const EnvSchema = z
     WEB_ORIGIN: z.string().min(1).default("http://localhost:5173"),
     DATABASE_PATH: z.string().min(1).default("./run/api.sqlite3"),
     RECIPES_DIR: z.string().min(1).default("./recipes"),
+    LLM_MODEL: z.string().min(1).default("claude-sonnet-5-5"),
+    LLM_MODE: z.enum(["mock", "live"]).default("mock"),
   })
   .strict();
 
@@ -23,5 +25,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     WEB_ORIGIN: env["WEB_ORIGIN"],
     DATABASE_PATH: env["DATABASE_PATH"],
     RECIPES_DIR: env["RECIPES_DIR"],
+    LLM_MODEL: env["LLM_MODEL"],
+    LLM_MODE: env["LLM_MODE"],
   });
 }
