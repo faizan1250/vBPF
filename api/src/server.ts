@@ -284,7 +284,7 @@ export async function buildApp(
         const res = await agentDelete(
           opts.agentUrl,
           opts.tokenFile,
-          `/v1/runs/${id}`,
+          `/v1/runs/${encodeURIComponent(id)}`,
         );
         const text = await res.text();
         let json: unknown = {};
@@ -330,7 +330,7 @@ export async function buildApp(
         return;
       }
       const upstream = new WebSocket(
-        agentWsUrl(opts.agentUrl, `/v1/runs/${id}/stream`),
+        agentWsUrl(opts.agentUrl, `/v1/runs/${encodeURIComponent(id)}/stream`),
         {
           headers: { Authorization: `Bearer ${token}` },
         },
@@ -397,7 +397,9 @@ export async function buildApp(
         .code(400)
         .send({ error: "invalid request", code: "VALIDATION_FAILED" });
     }
-    throw err;
+    app.log.error({ err }, "unhandled error");
+    if (reply.sent) return;
+    return reply.code(500).send({ error: "internal error", code: "INTERNAL" });
   });
 
   return app;

@@ -91,12 +91,10 @@ export const EventEnvelopeSchema = z
     ]),
     data: z.unknown(),
   })
-  .strict()
   .passthrough();
 
 export const ErrorBodySchema = z
   .object({ error: z.string().min(1), code: z.string().min(1) })
-  .strict()
   .passthrough();
 
 export type ValidateRequest = z.infer<typeof ValidateRequestSchema>;

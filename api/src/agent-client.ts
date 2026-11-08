@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 
 export const AGENT_TIMEOUT_MS = 10_000;
 
@@ -9,17 +9,6 @@ export interface AgentHealth {
   root: boolean;
   tracefs: boolean;
   uptime_s: number;
-}
-
-export interface AgentValidateOk {
-  ok: boolean;
-  errors: string[];
-  probes: string[];
-}
-
-export interface AgentRunCreated {
-  run_id: string;
-  state: string;
 }
 
 export class AgentOfflineError extends Error {
@@ -39,9 +28,32 @@ export class AgentProxyError extends Error {
   }
 }
 
+const tokenCache = new Map<string, { mtimeMs: number; token: string }>();
+
 export function readAgentToken(tokenFile: string): string {
-  const raw = readFileSync(tokenFile, "utf8").trim();
-  if (raw === "") throw new AgentOfflineError("agent token empty");
+  let mtimeMs = -1;
+  try {
+    mtimeMs = statSync(tokenFile).mtimeMs;
+    const cached = tokenCache.get(tokenFile);
+    if (cached !== undefined && cached.mtimeMs === mtimeMs) {
+      return cached.token;
+    }
+  } catch {
+    tokenCache.delete(tokenFile);
+    throw new AgentOfflineError("agent token unreadable");
+  }
+  let raw: string;
+  try {
+    raw = readFileSync(tokenFile, "utf8").trim();
+  } catch {
+    tokenCache.delete(tokenFile);
+    throw new AgentOfflineError("agent token unreadable");
+  }
+  if (raw === "") {
+    tokenCache.delete(tokenFile);
+    throw new AgentOfflineError("agent token empty");
+  }
+  tokenCache.set(tokenFile, { mtimeMs, token: raw });
   return raw;
 }
 
@@ -82,34 +94,4 @@ export async function fetchAgentHealth(
   const res = await agentFetch(base, tokenFile, "/health", {}, timeoutMs);
   if (!res.ok) throw new AgentProxyError(res.status, await res.text());
   return (await res.json()) as AgentHealth;
-}
-
-export function startHealthPoll(
-  base: string,
-  tokenFile: string,
-  onChange: (healthy: boolean) => void,
-  intervalMs = 5000,
-): () => void {
-  let stopped = false;
-  let failures = 0;
-  let timer: NodeJS.Timeout;
-  const tick = async (): Promise<void> => {
-    if (stopped) return;
-    try {
-      await fetchAgentHealth(base, tokenFile);
-      if (failures > 0) onChange(true);
-      failures = 0;
-    } catch {
-      failures += 1;
-      onChange(false);
-    }
-    const backoff = Math.min(intervalMs * 2 ** Math.min(failures, 4), 30000);
-    timer = setTimeout(() => void tick(), backoff);
-    timer.unref?.();
-  };
-  void tick();
-  return () => {
-    stopped = true;
-    clearTimeout(timer);
-  };
 }
