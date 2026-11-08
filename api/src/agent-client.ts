@@ -95,3 +95,25 @@ export async function fetchAgentHealth(
   if (!res.ok) throw new AgentProxyError(res.status, await res.text());
   return (await res.json()) as AgentHealth;
 }
+
+export async function searchProbes(
+  base: string,
+  tokenFile: string,
+  q: string,
+  timeoutMs = 5000,
+): Promise<string[]> {
+  const query = q.slice(0, 256);
+  const res = await agentFetch(
+    base,
+    tokenFile,
+    `/v1/probes?q=${encodeURIComponent(query)}`,
+    {},
+    timeoutMs,
+  );
+  if (!res.ok) throw new AgentProxyError(res.status, await res.text());
+  const body = (await res.json()) as { probes?: unknown };
+  if (!Array.isArray(body.probes)) return [];
+  return body.probes
+    .filter((p): p is string => typeof p === "string")
+    .slice(0, 40);
+}
