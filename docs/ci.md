@@ -3,14 +3,14 @@
 `ci.yml` runs on push/PR to `main` (ubuntu-24.04 only) and stays green with
 no service code: every `make` target prints SKIP when its dir is absent.
 
-| Job | What it does |
-|---|---|
-| lint | go vet + golangci-lint, tsc, ESLint/Prettier, shellcheck |
-| test-unit | `go test ./...`, api/web vitest — no root |
-| contract | API contract vs fake agent fixture |
-| e2e-mocked | Playwright, chromium only, mock fixtures |
-| eval-mock | `make eval` with `LLM_MODE=mock`, no secrets |
-| docker-build | Image build only — no push, no privileged run |
+| Job          | What it does                                             |
+| ------------ | -------------------------------------------------------- |
+| lint         | go vet + golangci-lint, tsc, ESLint/Prettier, shellcheck |
+| test-unit    | `go test ./...`, api/web vitest — no root                |
+| contract     | API contract vs fake agent fixture                       |
+| e2e-mocked   | Playwright, chromium only, mock fixtures                 |
+| eval-mock    | `make eval` with `LLM_MODE=mock`, no secrets             |
+| docker-build | Image build only — no push, no privileged run            |
 
 Pinned: Go 1.22.x, Node 22 LTS, pnpm 9.x.
 

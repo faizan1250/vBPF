@@ -5,11 +5,11 @@ shells, mock-only eval. See `docs/ci.md` for the CI picture.
 
 ## Ports (loopback)
 
-| Service | Port | Dev command               |
-| ------- | ---- | ------------------------- |
-| web     | 5173 | `pnpm -C web run dev`     |
-| api     | 8080 | `pnpm -C api run dev`     |
-| agent   | 8787 | `scripts/dev-agent.sh`    |
+| Service | Port | Dev command            |
+| ------- | ---- | ---------------------- |
+| web     | 5173 | `pnpm -C web run dev`  |
+| api     | 8080 | `pnpm -C api run dev`  |
+| agent   | 8787 | `scripts/dev-agent.sh` |
 
 ## Quickstart
 
