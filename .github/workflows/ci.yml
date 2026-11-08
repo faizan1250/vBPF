@@ -1,5 +1,5 @@
 # vBPF CI skeleton. Mock-only: no secrets, no root, no privileged runs.
-# Tool versions are pinned (Go 1.22.x, Node 22 LTS, pnpm 9.x).
+# Tool versions are pinned (Go 1.23.x, Node 22 LTS, pnpm 9.x).
 name: ci
 
 on:
@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22.x"
+          go-version: "1.23.x"
       - uses: pnpm/action-setup@v4
         with:
           version: "9.x"
@@ -31,7 +31,7 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
       - name: Install golangci-lint (pinned)
-        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.59.1
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
       - name: make lint (skips absent dirs, no root needed)
         run: make lint
 
@@ -41,7 +41,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22.x"
+          go-version: "1.23.x"
       - uses: pnpm/action-setup@v4
         with:
           version: "9.x"
