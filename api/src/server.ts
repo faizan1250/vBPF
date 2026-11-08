@@ -13,6 +13,7 @@ import {
   CreateRunRequestSchema,
   CreateRunResponseSchema,
   EventEnvelopeSchema,
+  GenerateRequestSchema,
   HealthResponseSchema,
   RecipeListResponseSchema,
   StopRunResponseSchema,
@@ -27,6 +28,12 @@ import {
   readAgentToken,
 } from "./agent-client.js";
 import { indexRecipes, migrate, openDb, searchRecipes } from "./db.js";
+import {
+  RefusalError,
+  ValidationFailedError,
+  makeMockLlm,
+  runGenerate,
+} from "./generate.js";
 import { loadRecipes } from "./recipes.js";
 
 export interface AppOptions {
@@ -35,6 +42,8 @@ export interface AppOptions {
   dbPath: string;
   recipesDir: string;
   webOrigin: string;
+  llmModel?: string;
+  llmMode?: "mock" | "live";
 }
 
 const BODY_LIMIT = 64 * 1024;
@@ -193,6 +202,66 @@ export async function buildApp(
     const recipes = searchRecipes(database, query);
     return reply.send(RecipeListResponseSchema.parse({ recipes }));
   });
+
+  app.post(
+    "/api/generate",
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      const parsed = GenerateRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: "invalid request", code: "VALIDATION_FAILED" });
+      }
+      const mode = opts.llmMode ?? "mock";
+      if (mode !== "mock") {
+        return reply.code(503).send({
+          error: "LLM unavailable in this environment",
+          code: "LLM_UNAVAILABLE",
+        });
+      }
+      const llm = makeMockLlm(
+        database,
+        opts.recipesDir,
+        opts.llmModel ?? "mock",
+      );
+      try {
+        const result = await runGenerate(parsed.data.prompt, {
+          sessionId: parsed.data.session_id,
+          deps: {
+            db: database,
+            recipesDir: opts.recipesDir,
+            agentUrl: opts.agentUrl,
+            tokenFile: opts.tokenFile,
+            llm,
+          },
+        });
+        return reply.send(result);
+      } catch (err) {
+        if (err instanceof RefusalError) {
+          return reply.code(422).send({
+            error: err.refusal,
+            code: "REFUSAL",
+            generation_id: err.generationId,
+          });
+        }
+        if (err instanceof ValidationFailedError) {
+          return reply.code(422).send({
+            error: "validation failed",
+            code: "VALIDATION_FAILED",
+            generation_id: err.generationId,
+            attempts: err.attempts,
+            errors: err.errors,
+          });
+        }
+        if (err instanceof AgentOfflineError) {
+          return reply
+            .code(503)
+            .send({ error: "agent offline", code: "AGENT_OFFLINE" });
+        }
+        throw err;
+      }
+    },
+  );
 
   app.post(
     "/api/validate",

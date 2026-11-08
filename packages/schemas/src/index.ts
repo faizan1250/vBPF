@@ -97,6 +97,42 @@ export const ErrorBodySchema = z
   .object({ error: z.string().min(1), code: z.string().min(1) })
   .passthrough();
 
+export const ChartTypeSchema = z.enum([
+  "table",
+  "bar",
+  "histogram",
+  "timeseries",
+  "events",
+]);
+
+export const GenerateRequestSchema = z
+  .object({
+    prompt: z.string().min(1).max(2000),
+    session_id: z.string().min(1).max(128).optional(),
+  })
+  .strict();
+
+export const GenerateValidationSchema = z
+  .object({
+    status: z.enum(["ok", "failed"]),
+    attempts: z.number().int().min(1).max(3),
+    errors: z.array(z.string()),
+  })
+  .strict();
+
+export const GenerateResponseSchema = z
+  .object({
+    generation_id: z.string().min(1),
+    script: ScriptSchema,
+    chart_type: ChartTypeSchema,
+    explanation: z.string().min(1).max(2048),
+    duration_s: DurationSchema,
+    warnings: z.array(z.string()),
+    validation: GenerateValidationSchema,
+    based_on_recipe: z.string().min(1).nullable(),
+  })
+  .strict();
+
 export type ValidateRequest = z.infer<typeof ValidateRequestSchema>;
 export type ValidateResponse = z.infer<typeof ValidateResponseSchema>;
 export type CreateRunRequest = z.infer<typeof CreateRunRequestSchema>;
@@ -104,3 +140,7 @@ export type CreateRunResponse = z.infer<typeof CreateRunResponseSchema>;
 export type Recipe = z.infer<typeof RecipeSchema>;
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 export type EventEnvelope = z.infer<typeof EventEnvelopeSchema>;
+export type ChartType = z.infer<typeof ChartTypeSchema>;
+export type GenerateRequest = z.infer<typeof GenerateRequestSchema>;
+export type GenerateResponse = z.infer<typeof GenerateResponseSchema>;
+export type GenerateValidation = z.infer<typeof GenerateValidationSchema>;

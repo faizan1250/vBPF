@@ -11,6 +11,8 @@ const app = await buildApp({
   dbPath: config.DATABASE_PATH,
   recipesDir: config.RECIPES_DIR,
   webOrigin: config.WEB_ORIGIN,
+  llmModel: config.LLM_MODEL,
+  llmMode: config.LLM_MODE,
 });
 
 app.listen({ host: config.HOST, port: config.PORT }).catch((err: unknown) => {

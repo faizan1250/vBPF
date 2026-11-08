@@ -117,3 +117,43 @@ export async function searchProbes(
     .filter((p): p is string => typeof p === "string")
     .slice(0, 40);
 }
+
+export interface AgentValidation {
+  ok: boolean;
+  errors: string[];
+  probes: string[];
+}
+
+export async function validateScript(
+  base: string,
+  tokenFile: string,
+  script: string,
+  timeoutMs = AGENT_TIMEOUT_MS,
+): Promise<AgentValidation> {
+  const res = await agentFetch(
+    base,
+    tokenFile,
+    "/v1/validate",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ script }),
+    },
+    timeoutMs,
+  );
+  if (!res.ok) throw new AgentProxyError(res.status, await res.text());
+  const body = (await res.json()) as {
+    ok?: unknown;
+    errors?: unknown;
+    probes?: unknown;
+  };
+  return {
+    ok: body.ok === true,
+    errors: Array.isArray(body.errors)
+      ? body.errors.filter((e): e is string => typeof e === "string")
+      : [],
+    probes: Array.isArray(body.probes)
+      ? body.probes.filter((p): p is string => typeof p === "string")
+      : [],
+  };
+}
