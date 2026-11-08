@@ -36,7 +36,7 @@ agent-build:
 	@if [ -d agent ]; then cd agent && $(GO) build -o ../bin/agent ./cmd/agent; else echo "SKIP: no agent/ yet"; fi
 
 api-dev:
-	@if [ -d api ]; then $(PNPM) -C api run dev --port 8080; else echo "SKIP: no api/ yet (port 8080 reserved)"; fi
+	@if [ -d api ]; then $(PNPM) -C api run dev; else echo "SKIP: no api/ yet (port 8080 reserved)"; fi
 
 web-dev:
 	@if [ -d web ]; then $(PNPM) -C web run dev --port 5173; else echo "SKIP: no web/ yet (port 5173 reserved)"; fi
