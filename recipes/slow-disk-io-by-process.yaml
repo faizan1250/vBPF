@@ -1,0 +1,11 @@
+id: slow-disk-io-by-process
+title: Slow disk I/O by process
+description: Counts block I/O requests slower than threshold_ms, attributed to the issuing process.
+tags: [disk, io, latency, block, slow]
+view: table
+duration_default: 10
+min_kernel: "5.8"
+requires:
+  ["tracepoint:block:block_rq_issue", "tracepoint:block:block_rq_complete"]
+params:
+  - { name: threshold_ms, default: 10 }

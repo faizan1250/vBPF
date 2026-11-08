@@ -1,0 +1,24 @@
+tracepoint:block:block_rq_issue
+{
+  @start[args->dev, args->sector] = nsecs;
+  @who[args->dev, args->sector] = comm;
+}
+
+tracepoint:block:block_rq_complete
+/@start[args->dev, args->sector]/
+{
+  $lat_ms = (nsecs - @start[args->dev, args->sector]) / 1000000;
+  if ($lat_ms >= 10) {
+    @slow[@who[args->dev, args->sector]] = count();
+  }
+  delete(@start[args->dev, args->sector]);
+  delete(@who[args->dev, args->sector]);
+}
+
+END
+{
+  clear(@start);
+  clear(@who);
+  print(@slow);
+  clear(@slow);
+}
