@@ -31,3 +31,19 @@ jobs:
         run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.59.1
       - name: make lint (skips absent dirs, no root needed)
         run: make lint
+
+  test-unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: pnpm/action-setup@v4
+        with:
+          version: "9.x"
+      - name: make test (no root, skips absent dirs)
+        run: make test
