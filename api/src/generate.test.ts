@@ -489,3 +489,102 @@ describe("POST /api/generate", () => {
     }
   });
 });
+
+describe("generate rate limit", () => {
+  it("rejects over-budget callers with 429 RATE_LIMITED", async () => {
+    const limited = await buildApp({
+      agentUrl: fake.url,
+      tokenFile,
+      dbPath: ":memory:",
+      recipesDir: RECIPES_DIR,
+      webOrigin: "http://localhost:5173",
+      llmModel: "mock",
+      llmMode: "mock",
+      generateRateLimit: { max: 2, windowMs: 60_000 },
+    });
+    const addr = await limited.listen({ host: "127.0.0.1", port: 0 });
+    const url = addr.replace("[::1]", "127.0.0.1");
+    try {
+      const post = (): Promise<Response> =>
+        fetch(`${url}/api/generate`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ prompt: "Which processes use CPU?" }),
+        });
+      expect((await post()).status).toBe(200);
+      expect((await post()).status).toBe(200);
+      const third = await post();
+      expect(third.status).toBe(429);
+      expect(await third.json()).toMatchObject({ code: "RATE_LIMITED" });
+      expect(third.headers.get("retry-after")).toBe("60");
+    } finally {
+      await limited.close();
+    }
+  });
+
+  it("budgets are per IP, not global", async () => {
+    const limited = await buildApp({
+      agentUrl: fake.url,
+      tokenFile,
+      dbPath: ":memory:",
+      recipesDir: RECIPES_DIR,
+      webOrigin: "http://localhost:5173",
+      llmModel: "mock",
+      llmMode: "mock",
+      generateRateLimit: { max: 1, windowMs: 60_000 },
+    });
+    try {
+      const post = (ip: string) =>
+        limited.inject({
+          method: "POST",
+          url: "/api/generate",
+          payload: { prompt: "cpu?" },
+          remoteAddress: ip,
+          headers: { host: "localhost", "content-type": "application/json" },
+        });
+      expect((await post("10.0.0.1")).statusCode).toBe(200);
+      expect((await post("10.0.0.1")).statusCode).toBe(429);
+      expect((await post("10.0.0.2")).statusCode).toBe(200);
+    } finally {
+      await limited.close();
+    }
+  });
+});
+
+describe("validator limits", () => {
+  it("rejects wildcards expanding past the probe cap", () => {
+    const known = Array.from(
+      { length: 60 },
+      (_, i) => `tracepoint:block:item${i}`,
+    );
+    const { errors } = staticValidate(
+      "tracepoint:block:item* { @cnt = count(); }",
+      known,
+    );
+    expect(errors.join(" ")).toContain("too many");
+  });
+
+  it("warns on per-event printf from raw_syscalls", () => {
+    const { errors, warnings } = staticValidate(
+      'tracepoint:raw_syscalls:sys_enter { printf("%d\\n", pid); }',
+    );
+    expect(errors).toEqual([]);
+    expect(warnings.join(" ")).toContain("High-frequency");
+  });
+
+  it("rejects huge scripts before they reach the agent", () => {
+    const { errors } = staticValidate(
+      `BEGIN { printf("${"x".repeat(9 * 1024)}"); }`,
+    );
+    expect(errors.join(" ")).toContain("8 KB");
+  });
+
+  it("rejects broad provider wildcards without a catalog", () => {
+    for (const script of [
+      "tracepoint:syscalls:* { @x = count(); }",
+      "kprobe:* { @x = count(); }",
+    ]) {
+      expect(staticValidate(script).errors.length).toBeGreaterThan(0);
+    }
+  });
+});

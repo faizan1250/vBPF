@@ -98,3 +98,17 @@ func TestConstructors(t *testing.T) {
 	require.Equal(t, KindLost, Lost("r", 0, 3).Kind)
 	require.Equal(t, KindSummary, Summarize("r", 0, Summary{ExitReason: "completed"}).Kind)
 }
+
+func TestStreamOversizeLineDropped(t *testing.T) {
+	big := `{"type": "printf", "data": "` + strings.Repeat("x", MaxLineBytes) + `"}`
+	var got []Event
+	events, dropped, err := Stream(strings.NewReader(big+"\n"), "run_test", func(ev Event) error {
+		got = append(got, ev)
+		return nil
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(0), events)
+	require.Equal(t, uint64(1), dropped)
+	require.Len(t, got, 1)
+	require.Equal(t, KindLost, got[0].Kind)
+}

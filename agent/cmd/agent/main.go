@@ -138,6 +138,14 @@ func realServe(args []string, _, stderr io.Writer) int {
 		}
 	}
 	log := zerolog.New(os.Stderr).With().Timestamp().Logger()
+	sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	swept, err := runner.SweepStale(sweepCtx)
+	sweepCancel()
+	if err != nil {
+		log.Warn().Err(err).Msg("stale sweep failed")
+	} else if swept > 0 {
+		log.Info().Int("pids", swept).Msg("swept stale bpftrace children")
+	}
 	srv, err := server.New(server.Config{
 		Addr:         addr,
 		TokenFile:    tokenFile,

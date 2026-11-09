@@ -14,6 +14,7 @@ const FIX_HINTS: Record<string, string> = {
   PROBE_NOT_FOUND: "Probe missing on this kernel; pick a recipe alternative.",
   VALIDATION_FAILED: "Fix the highlighted script errors and retry.",
   LIMIT_EXCEEDED: "Shorten duration or narrow the probe; see run summary.",
+  RATE_LIMITED: "Generation is rate-limited: wait a minute, then retry.",
   LLM_UNAVAILABLE: "Set ANTHROPIC_API_KEY locally, or browse recipes below.",
 };
 
@@ -28,6 +29,8 @@ export function TopBar() {
 
   const agent = health.data?.agent;
   const online = agent?.reachable === true;
+  const warnings = agent && agent.reachable ? (agent.warnings ?? []) : [];
+  const degraded = online && warnings.length > 0 ? warnings[0]! : null;
   const offlineCode =
     agent && !agent.reachable
       ? agent.code
@@ -55,8 +58,23 @@ export function TopBar() {
               <TriangleAlert aria-hidden /> {offlineCode ?? "AGENT_OFFLINE"}
             </Badge>
           )}
+          {degraded && (
+            <Badge tone="warn" role="status">
+              <TriangleAlert aria-hidden /> {degraded}
+            </Badge>
+          )}
         </div>
       </div>
+      {degraded && !offlineCode && (
+        <p
+          role="status"
+          className={cn(
+            "border-t border-border px-4 py-1.5 text-xs text-amber-400",
+          )}
+        >
+          {FIX_HINTS[degraded] ?? "Agent degraded; see docs/environment.md."}
+        </p>
+      )}
       {offlineCode && (
         <p
           role="alert"

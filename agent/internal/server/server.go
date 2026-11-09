@@ -205,11 +205,11 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		duration = time.Duration(*req.DurationS) * time.Second
 	}
 	if _, errs := StaticValidate(req.Script, s.catalog); len(errs) > 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": strings.Join(errs, "; "), "code": "VALIDATION_FAILED", "errors": errs})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": strings.Join(errs, "; "), "code": classifyValidationError(errs), "errors": errs})
 		return
 	}
 	if dryErrs := s.dryRun(r.Context(), req.Script); len(dryErrs) > 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": strings.Join(dryErrs, "; "), "code": "VALIDATION_FAILED", "errors": dryErrs})
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": strings.Join(dryErrs, "; "), "code": classifyValidationError(dryErrs), "errors": dryErrs})
 		return
 	}
 	run, err := s.runs.Start(r.Context(), req.Script, duration)
