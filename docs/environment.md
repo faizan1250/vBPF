@@ -177,3 +177,33 @@ web) via the compose `depends_on: service_healthy` chain.
 127.0.0.1:8080` lines in the server log are expected: the dev server has
   no API backend and both specs mock every `/api/*` route (plus the WS
   stream), so nothing real is ever proxied.
+
+## Chaos and cleanup (R-11) — 2026-11-10
+
+Run as root via `wsl -u root` (same root path as R-04/R-05). Kernel
+`6.6.87.2-microsoft-standard-WSL2`, bpftrace v0.20.2. `bpftool` is not
+installed in this WSL distro, so the `bpftool prog list` half of the R-11
+criterion self-skips (logged, not failed); `pgrep -a bpftrace` plus the
+`/tmp/vbpf-*.bt` glob are enforced on every test.
+
+Pre-existing coverage: `TestIntegrationKillMidRun` (orderly DELETE stop →
+`cancelled`, pgrep clean). Added four tests in
+`agent/internal/server/integration_test.go`, each ending in `assertNoLeak`
+(pgrep empty, no temp scripts, bpftool if present):
+
+| Chaos case                                                  | Test                                | Result                                                                                                                                                                          |
+| ----------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Kill bpftrace itself (`kill -KILL` the child)               | `TestIntegrationKillBpftraceMidRun` | PASS (2.9 s): summary `failed`, registry drains, no leak                                                                                                                        |
+| Close tab mid-run (WS dropped, no close frame, no DELETE)   | `TestIntegrationCloseTabMidRun`     | PASS (2.6 s): run survives the lost viewer (`Active()==1`), later DELETE → `cancelled`, no leak                                                                                 |
+| Kill API mid-run (WS drops, DELETE never arrives)           | `TestIntegrationAPIKillMidRun`      | PASS (7.5 s): orphaned run hits its 4 s deadline alone → `timeout` on reconnect, no leak                                                                                        |
+| Kill agent mid-run (SIGKILLed agent leaves an orphan child) | `TestIntegrationAgentRestartSweep`  | PASS: a real orphan `bpftrace -f json /tmp/vbpf-orphan-*.bt` in its own process group is reaped by `SweepStale` (the same call `realServe` makes before listening), pgrep clean |
+
+Guarantees (mechanism, all pre-existing — R-11 added tests, not code): the
+child runs in its own process group (`Setpgid`), every exit path group-kills
+(SIGINT, grace, SIGKILL), the temp script is `0600` and removed on return,
+and `SweepStale` at agent startup kills leftover own-run groups matched by
+`pgrep -f 'vbpf-.*\.bt'` (never foreign bpftrace work).
+
+Regression: `go vet ./...`, `gofmt -l` clean; `go test -count=1 ./...` all 5
+packages ok; `TestIntegrationKillMidRun` and `TestIntegrationThreeRecipes`
+still pass with the extended `assertNoLeak`.
