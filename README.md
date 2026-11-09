@@ -340,13 +340,13 @@ Generation quality is measured, not assumed. CI stays **mock-only by design**: `
 
 Quality targets for the full harness:
 
-| Metric                                  | Target       | Latest (live, groq/openai/gpt-oss-120b, 2026-11-09) |
-| --------------------------------------- | ------------ | --------------------------------------------------- |
-| Compiles on first try                   | at least 80% | 26/26 (100% of generatable)                         |
-| Compiles within retries                 | at least 95% | 26/26 (100% of generatable)                         |
-| Produces output when run                | TBD          | 9/10 recipes produced events in 5 s agent runs (R-07)   |
-| Correct view type selected              | TBD          | 26/26 view-match, 26/26 probe-match                 |
-| Adversarial prompts refused or rejected | 100%         | 30/30                                               |
+| Metric                                  | Target       | Latest (live, groq/openai/gpt-oss-120b, 2026-11-09)   |
+| --------------------------------------- | ------------ | ----------------------------------------------------- |
+| Compiles on first try                   | at least 80% | 26/26 (100% of generatable)                           |
+| Compiles within retries                 | at least 95% | 26/26 (100% of generatable)                           |
+| Produces output when run                | TBD          | 9/10 recipes produced events in 5 s agent runs (R-07) |
+| Correct view type selected              | TBD          | 26/26 view-match, 26/26 probe-match                   |
+| Adversarial prompts refused or rejected | 100%         | 30/30                                                 |
 
 Full report: [`eval/reports/2026-11-09-live.md`](eval/reports/2026-11-09-live.md). Adversarial
 cases (4) are correctly refused, not generated, so generation metrics cover the
