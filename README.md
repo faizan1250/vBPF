@@ -285,13 +285,11 @@ Probe availability depends on your kernel. A recipe that needs a missing tracepo
 
 ## Supported platforms
 
-<!-- TODO: fill after cross-environment testing -->
-
-| Environment       | Kernel | Status |
-| ----------------- | ------ | ------ |
-| Ubuntu 24.04 (VM) | TBD    | TBD    |
-| Ubuntu 22.04 (VM) | TBD    | TBD    |
-| WSL2 Ubuntu       | TBD    | TBD    |
+| Environment       | Kernel                             | Status                                             |
+| ----------------- | ---------------------------------- | -------------------------------------------------- |
+| Ubuntu 24.04 (VM) | TBD                                | Pending                                            |
+| Ubuntu 22.04 (VM) | TBD                                | Pending                                            |
+| WSL2 Ubuntu       | `6.6.87.2-microsoft-standard-WSL2` | Probed 2026-11-09: BTF present, bpftrace `v0.20.2` |
 
 Per-environment recipe notes and fallbacks: [`docs/environment.md`](docs/environment.md).
 
@@ -395,6 +393,8 @@ More detail: [`docs/environment.md`](docs/environment.md).
 - Process-group termination and a startup sweep for stale children.
 
 **Reporting a vulnerability:** please do not open a public issue. Use a GitHub private vulnerability report or contact the maintainer directly. We aim to acknowledge reports within 3 business days.
+
+Details: [`docs/security.md`](docs/security.md). Overhead method and (pending) numbers: [`docs/overhead.md`](docs/overhead.md).
 
 ---
 
