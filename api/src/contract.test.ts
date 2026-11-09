@@ -49,6 +49,18 @@ function startFakeAgent(): Promise<FakeAgent> {
       send(200, HEALTH);
       return;
     }
+    if (req.method === "GET" && url.pathname === "/v1/probe-args") {
+      const probe = url.searchParams.get("probe") ?? "";
+      if (probe === "tracepoint:block:block_rq_issue") {
+        send(200, {
+          probe,
+          output: `${probe}\n  unsigned long sector;\n`,
+        });
+      } else {
+        send(404, { error: "unknown probe", code: "NOT_FOUND" });
+      }
+      return;
+    }
     if (req.method === "POST" && url.pathname === "/v1/validate") {
       validateHits += 1;
       let raw = "";
@@ -205,6 +217,25 @@ afterAll(async () => {
   await app?.close();
   await fake?.close();
   if (dir !== "") rmSync(dir, { recursive: true, force: true });
+});
+
+describe("probe-args contract", () => {
+  it("fetches -vl output for a known probe", async () => {
+    const { fetchProbeArgs } = await import("./agent-client.js");
+    const output = await fetchProbeArgs(
+      fake.url,
+      tokenFile,
+      "tracepoint:block:block_rq_issue",
+    );
+    expect(output).toContain("sector");
+  });
+
+  it("rejects unknown probe names", async () => {
+    const { fetchProbeArgs } = await import("./agent-client.js");
+    await expect(
+      fetchProbeArgs(fake.url, tokenFile, "tracepoint:foo:bar; rm -rf /"),
+    ).rejects.toThrow();
+  });
 });
 
 describe("validate proxy", () => {

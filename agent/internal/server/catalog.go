@@ -62,6 +62,18 @@ func (c *Catalog) Snapshot() []string {
 	return out
 }
 
+// Contains reports whether probe exactly matches a catalog entry.
+func (c *Catalog) Contains(probe string) bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for _, p := range c.probes {
+		if p == probe {
+			return true
+		}
+	}
+	return false
+}
+
 // Search filters by substring q and provider prefix typ (e.g. tracepoint).
 func (c *Catalog) Search(q, typ string) []string {
 	c.mu.RLock()

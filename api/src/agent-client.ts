@@ -123,7 +123,6 @@ export interface AgentValidation {
   errors: string[];
   probes: string[];
 }
-
 export async function validateScript(
   base: string,
   tokenFile: string,
@@ -156,4 +155,25 @@ export async function validateScript(
       ? body.probes.filter((p): p is string => typeof p === "string")
       : [],
   };
+}
+
+export const PROBE_ARGS_TIMEOUT_MS = 3000;
+
+export async function fetchProbeArgs(
+  base: string,
+  tokenFile: string,
+  probe: string,
+  timeoutMs = PROBE_ARGS_TIMEOUT_MS,
+): Promise<string> {
+  const res = await agentFetch(
+    base,
+    tokenFile,
+    `/v1/probe-args?probe=${encodeURIComponent(probe)}`,
+    {},
+    timeoutMs,
+  );
+  if (!res.ok) throw new AgentProxyError(res.status, await res.text());
+  const body = (await res.json()) as { output?: unknown };
+  if (typeof body.output !== "string") return "";
+  return body.output.slice(0, 8 * 1024);
 }
