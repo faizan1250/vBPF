@@ -19,6 +19,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/faizan1250/vBPF/agent/internal/parser"
+	"github.com/faizan1250/vBPF/agent/internal/runner"
 	"github.com/stretchr/testify/require"
 )
 
@@ -146,7 +147,7 @@ func TestIntegrationKillMidRun(t *testing.T) {
 	resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	sum := streamUntilSummary(t, s, ts, runID)
-	require.Contains(t, []string{"completed", "timeout"}, sum.ExitReason)
+	require.Equal(t, runner.ReasonCancelled, sum.ExitReason)
 	deadline := time.Now().Add(10 * time.Second)
 	for s.runs.Active() != 0 && time.Now().Before(deadline) {
 		time.Sleep(100 * time.Millisecond)

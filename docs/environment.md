@@ -67,9 +67,42 @@ PATH=$PATH:/home/faizan/.local/bin && bash scripts/check-env.sh'`.
    Docker Desktop itself is Running (see `wsl --list --verbose`). Relevant to
    R-10, not blocking R-04.
 
+## Test runs (R-05) — 2026-11-10
+
+Run as root via `wsl -u root` (see R-04 for why root uses `wsl -u root`, not `sudo`).
+Kernel `6.6.87.2-microsoft-standard-WSL2`, bpftrace v0.20.2, Go 1.26.2
+(`/home/faizan/.local/bin/go`; root's PATH lacks it, so `make` needs
+`GO=/home/faizan/.local/bin/go` — environment gap, not a Makefile bug).
+
+- `go vet ./...` in `agent/`: PASS.
+- `gofmt -l .` in `agent/`: clean.
+- `go test -race -count=1 ./...` in `agent/`: all 5 packages ok, no data
+  races (`cmd/agent`, `limits`, `parser`, `runner`, `server`).
+- `make test-integration` (`-tags integration`, root + bpftrace + BTF):
+  first run failed `TestIntegrationKillMidRun`: the summary after an
+  explicit DELETE carried `exit_reason "cancelled"` (runner contract,
+  `runner.go` ctx-cancel path) but the test asserted `{"completed",
+"timeout"}`. Fixed the stale assertion to expect
+  `runner.ReasonCancelled`; no production code changed (see D-R05-1).
+  Re-ran per test: `TestIntegrationKillMidRun` PASS (3.8 s),
+  `TestIntegrationThreeRecipes` PASS (11.7 s), all other packages ok.
+- Manual workflow commands (`integration-manual.yml`) locally: `id -u` = 0,
+  `bpftrace` present, `/sys/kernel/btf/vmlinux` present; `make
+test-integration` as above.
+- Full `make test-integration` in one shell exceeds the 60 s command cap
+  on this machine (compile + sleeps), so it was run per-test/per-package;
+  coverage is identical (same `-tags integration` suite).
+
 ### Decisions
 
 - D-R04-1: No `check-env.sh` change. The script correctly reported root's
   environment; the gap is PATH configuration, documented above.
 - D-R04-2: Root access for kernel surveys on this machine is `wsl -u root`,
   not `sudo`, because `sudo -n` requires a password for this user.
+- D-R05-1: Fix the test, not the runner. `cancelled` on explicit stop is
+  the documented runner contract (unit-tested in `runner_test.go`, mapped
+  to `"stopping"` by `finalState`); the integration assertion was written
+  before the suite ever ran on a real kernel and encoded the wrong
+  expectation.
+- D-R05-2: No `Makefile` change for root's missing `go`. Same class of
+  environment gap as D-R04-1; passing `GO=...` on invocation is the fix.
