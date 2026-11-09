@@ -1,4 +1,7 @@
-//go:build integration
+//go:build integration && linux
+
+// Setpgid has no Windows equivalent; whole file is linux-only so
+// -tags integration still compiles on Windows (file excluded).
 
 package server
 
