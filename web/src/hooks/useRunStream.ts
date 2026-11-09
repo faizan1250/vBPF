@@ -158,7 +158,7 @@ export function useRunStream(
         /* already closed */
       }
     };
-  }, [runId]);
+  }, [runId, chartHint]);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

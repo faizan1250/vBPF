@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { OctagonX, Play } from "lucide-react";
 
 import { useAppStore } from "../store/useAppStore.js";
-import { stopCurrentRun } from "./ConfirmModal.js";
+import { stopCurrentRun } from "../lib/runs.js";
 import { Button } from "./ui/button.js";
 import { Card, CardBody } from "./ui/card.js";
 

@@ -110,9 +110,17 @@ export function HistoryPanel() {
   );
 }
 
-export function recordRunToHistory(): void {
+// Keyed per runId: StrictMode double-invokes the done-effect, and without
+// the guard each completion would persist two history entries.
+const recordedRunIds = new Set<string>();
+
+export function recordRunToHistory(runId: string | null): void {
   const s = useAppStore.getState();
   if (!s.generation && s.script.trim() === "") return;
+  if (runId) {
+    if (recordedRunIds.has(runId)) return;
+    recordedRunIds.add(runId);
+  }
   saveHistory({
     id: `${Date.now()}`,
     title:

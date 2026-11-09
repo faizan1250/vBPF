@@ -5,6 +5,7 @@ import { Card, CardBody, CardHeader, CardTitle } from "../ui/card.js";
 import { BarView } from "./BarView.js";
 import { EventsView } from "./EventsView.js";
 import { HistogramView } from "./HistogramView.js";
+import { TableView } from "./TableView.js";
 import { TimeseriesView } from "./TimeseriesView.js";
 
 const VIEWS: Array<{ id: ViewKind; label: string }> = [
@@ -70,7 +71,7 @@ export function ViewSwitcher({
         {active === "bar" && <BarView events={events} />}
         {active === "histogram" && <HistogramView events={events} />}
         {active === "timeseries" && <TimeseriesView events={events} />}
-        {active === "table" && <BarView events={events} />}
+        {active === "table" && <TableView events={events} />}
       </CardBody>
     </Card>
   );

@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { Play, TriangleAlert } from "lucide-react";
 
-import { ApiError, createRun, fixtureMode, stopRun } from "../lib/api.js";
+import { ApiError, createRun, fixtureMode } from "../lib/api.js";
 import { useAppStore } from "../store/useAppStore.js";
 import { Badge } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
@@ -107,19 +107,4 @@ export function ConfirmModal() {
       </div>
     </Dialog>
   );
-}
-
-export function stopCurrentRun(runId: string | null): Promise<void> {
-  if (!runId) return Promise.resolve();
-  const store = useAppStore.getState();
-  if (runId.startsWith("run_fixture_")) {
-    store.setRunPhase("stopping");
-    return Promise.resolve();
-  }
-  store.setRunPhase("stopping");
-  return stopRun(runId)
-    .catch(() => {
-      // Best-effort: the agent may already have reaped the run on timeout.
-    })
-    .then(() => undefined);
 }

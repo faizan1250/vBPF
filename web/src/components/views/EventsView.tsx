@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { EventEnvelope } from "../../lib/api.js";
 import { printfText } from "../../lib/events.js";
@@ -13,16 +13,29 @@ export function EventsView({ events }: { events: EventEnvelope[] }) {
   const [filter, setFilter] = useState("");
   const parentRef = useRef<HTMLDivElement>(null);
 
+  // Pause freezes the displayed list at the pause-time snapshot; the store
+  // keeps accumulating underneath and display resumes live on unpause.
+  const frozenRef = useRef<EventEnvelope[] | null>(null);
+  useEffect(() => {
+    if (!eventsPaused) frozenRef.current = null;
+  }, [eventsPaused]);
+  const togglePaused = (): void => {
+    if (!eventsPaused) frozenRef.current = events;
+    else frozenRef.current = null;
+    setEventsPaused(!eventsPaused);
+  };
+  const visible = eventsPaused ? (frozenRef.current ?? events) : events;
+
   const rows = useMemo(() => {
     const needle = filter.trim().toLowerCase();
-    const mapped = events.map((e) => ({
+    const mapped = visible.map((e) => ({
       seq: e.seq,
       ts: e.ts,
       text: printfText(e.data),
     }));
     if (needle === "") return mapped;
     return mapped.filter((r) => r.text.toLowerCase().includes(needle));
-  }, [events, filter]);
+  }, [visible, filter]);
 
   const virtual = useVirtualizer({
     count: rows.length,
@@ -44,7 +57,7 @@ export function EventsView({ events }: { events: EventEnvelope[] }) {
         <Button
           size="sm"
           intent={eventsPaused ? "primary" : "secondary"}
-          onClick={() => setEventsPaused(!eventsPaused)}
+          onClick={togglePaused}
           aria-pressed={eventsPaused}
         >
           {eventsPaused ? "Resume" : "Pause"}

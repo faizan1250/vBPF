@@ -44,8 +44,8 @@ export function App() {
   const { validating } = useDebouncedValidate();
 
   useEffect(() => {
-    if (runPhase === "done") recordRunToHistory();
-  }, [runPhase]);
+    if (runPhase === "done") recordRunToHistory(runId);
+  }, [runPhase, runId]);
 
   const view = autoView(events, generation?.chart_type ?? null);
 

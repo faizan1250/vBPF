@@ -6,8 +6,10 @@ import {
   MAX_PROMPT_CHARS,
   MAX_SCRIPT_BYTES,
   MIN_DURATION_S,
+  createRun,
   explainScript,
   generatePrompt,
+  validateScript,
 } from "./api.js";
 
 describe("caps", () => {
@@ -31,6 +33,29 @@ describe("generatePrompt", () => {
   it("rejects empty prompts without fetching", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     await expect(generatePrompt("   ")).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+});
+
+describe("script size cap", () => {
+  it("rejects oversize scripts in validateScript without fetching", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const big = "x".repeat(MAX_SCRIPT_BYTES + 1);
+    await expect(validateScript(big)).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      message: expect.stringMatching(/exceeds 8 KB/) as unknown as string,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it("rejects oversize scripts in createRun without fetching", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const big = "x".repeat(MAX_SCRIPT_BYTES + 1);
+    await expect(createRun(big, 10)).rejects.toMatchObject({
       code: "VALIDATION_FAILED",
     });
     expect(fetchSpy).not.toHaveBeenCalled();

@@ -12,7 +12,9 @@ export function useDebouncedValidate(): { validating: boolean } {
   const script = useAppStore((s) => s.script);
   const [validating, setValidating] = useState(false);
   const timer = useRef<number | null>(null);
-  const validate = useMutation({
+  // Destructure the stable mutate fn: the mutation result object identity
+  // changes every render, which would reset the debounce timer constantly.
+  const { mutate: validate } = useMutation({
     mutationFn: validateScript,
   });
 
@@ -30,7 +32,7 @@ export function useDebouncedValidate(): { validating: boolean } {
     setValidating(true);
     if (timer.current !== null) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => {
-      validate.mutate(script, {
+      validate(script, {
         onSuccess: (result) => {
           useAppStore
             .getState()
@@ -50,7 +52,7 @@ export function useDebouncedValidate(): { validating: boolean } {
     return () => {
       if (timer.current !== null) window.clearTimeout(timer.current);
     };
-  }, [script]);
+  }, [script, validate]);
 
   return { validating };
 }

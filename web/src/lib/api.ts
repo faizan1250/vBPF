@@ -83,6 +83,22 @@ async function getJson<T>(path: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+function scriptByteLength(script: string): number {
+  return new TextEncoder().encode(script).length;
+}
+
+function rejectOversizeScript(script: string): ApiError | null {
+  const bytes = scriptByteLength(script);
+  if (bytes <= MAX_SCRIPT_BYTES) return null;
+  // Mirrors api/src/validator.ts ("script exceeds 8 KB"); the server
+  // re-validates authoritatively.
+  return new ApiError(
+    400,
+    "VALIDATION_FAILED",
+    `script exceeds 8 KB (${bytes} bytes)`,
+  );
+}
+
 export function generatePrompt(
   prompt: string,
   sessionId?: string,
@@ -101,6 +117,8 @@ export function generatePrompt(
 }
 
 export function validateScript(script: string): Promise<ValidateResult> {
+  const oversize = rejectOversizeScript(script);
+  if (oversize) return Promise.reject(oversize);
   return postJson<ValidateResult>("/api/validate", { script });
 }
 
@@ -108,6 +126,8 @@ export function createRun(
   script: string,
   durationS: number,
 ): Promise<CreateRunResult> {
+  const oversize = rejectOversizeScript(script);
+  if (oversize) return Promise.reject(oversize);
   const duration = Math.min(
     MAX_DURATION_S,
     Math.max(MIN_DURATION_S, Math.round(durationS)),
