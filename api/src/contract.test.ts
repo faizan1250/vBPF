@@ -338,6 +338,87 @@ describe("runs proxy", () => {
   });
 });
 
+describe("run summaries", () => {
+  it("persists the summary on stream end and serves it via GET", async () => {
+    const created = (await (
+      await fetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          script: "BEGIN { @x = count(); }",
+          duration_s: 10,
+        }),
+      })
+    ).json()) as { run_id: string };
+    try {
+      const wsUrl = `${base.replace(/^http/, "ws")}/ws/runs/${created.run_id}`;
+      await new Promise<void>((resolve, reject) => {
+        const ws = new WebSocket(wsUrl);
+        ws.on("message", (data) => {
+          const ev = JSON.parse(data.toString()) as { kind: string };
+          if (ev.kind === "summary") {
+            ws.close();
+            resolve();
+          }
+        });
+        ws.on("error", reject);
+        setTimeout(() => reject(new Error("ws timeout")), 10000);
+      });
+      const res = await fetch(`${base}/api/runs/${created.run_id}`);
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body).toEqual({
+        run_id: created.run_id,
+        state: "completed",
+        duration_s: 10,
+        started_at: expect.any(Number),
+        ended_at: expect.any(Number),
+        summary: {
+          events_count: 1,
+          bytes: 5,
+          dropped: 0,
+          exit_reason: "completed",
+        },
+      });
+      expect(body).not.toHaveProperty("script_text");
+    } finally {
+      await fetch(`${base}/api/runs/${created.run_id}/stop`, {
+        method: "POST",
+      });
+    }
+  });
+
+  it("marks stopping with ended_at on stop", async () => {
+    const created = (await (
+      await fetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+      })
+    ).json()) as { run_id: string };
+    const stop = await fetch(`${base}/api/runs/${created.run_id}/stop`, {
+      method: "POST",
+    });
+    expect(stop.status).toBe(200);
+    const res = await fetch(`${base}/api/runs/${created.run_id}`);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toMatchObject({
+      run_id: created.run_id,
+      state: "stopping",
+      summary: null,
+    });
+    expect(body.ended_at).toEqual(expect.any(Number));
+    expect(body).not.toHaveProperty("script_text");
+  });
+
+  it("404s unknown run id", async () => {
+    const res = await fetch(`${base}/api/runs/nope`);
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
 describe("websocket relay", () => {
   it("preserves agent envelope", async () => {
     const created = (await (
