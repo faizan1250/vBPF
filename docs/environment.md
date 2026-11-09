@@ -82,13 +82,13 @@ Kernel `6.6.87.2-microsoft-standard-WSL2`, bpftrace v0.20.2, Go 1.26.2
   first run failed `TestIntegrationKillMidRun`: the summary after an
   explicit DELETE carried `exit_reason "cancelled"` (runner contract,
   `runner.go` ctx-cancel path) but the test asserted `{"completed",
-  "timeout"}`. Fixed the stale assertion to expect
+"timeout"}`. Fixed the stale assertion to expect
   `runner.ReasonCancelled`; no production code changed (see D-R05-1).
   Re-ran per test: `TestIntegrationKillMidRun` PASS (3.8 s),
   `TestIntegrationThreeRecipes` PASS (11.7 s), all other packages ok.
 - Manual workflow commands (`integration-manual.yml`) locally: `id -u` = 0,
   `bpftrace` present, `/sys/kernel/btf/vmlinux` present; `make
-  test-integration` as above.
+test-integration` as above.
 - Full `make test-integration` in one shell exceeds the 60 s command cap
   on this machine (compile + sleeps), so it was run per-test/per-package;
   coverage is identical (same `-tags integration` suite).
