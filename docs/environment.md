@@ -191,12 +191,12 @@ Pre-existing coverage: `TestIntegrationKillMidRun` (orderly DELETE stop →
 `agent/internal/server/integration_test.go`, each ending in `assertNoLeak`
 (pgrep empty, no temp scripts, bpftool if present):
 
-| Chaos case | Test | Result |
-|---|---|---|
-| Kill bpftrace itself (`kill -KILL` the child) | `TestIntegrationKillBpftraceMidRun` | PASS (2.9 s): summary `failed`, registry drains, no leak |
-| Close tab mid-run (WS dropped, no close frame, no DELETE) | `TestIntegrationCloseTabMidRun` | PASS (2.6 s): run survives the lost viewer (`Active()==1`), later DELETE → `cancelled`, no leak |
-| Kill API mid-run (WS drops, DELETE never arrives) | `TestIntegrationAPIKillMidRun` | PASS (7.5 s): orphaned run hits its 4 s deadline alone → `timeout` on reconnect, no leak |
-| Kill agent mid-run (SIGKILLed agent leaves an orphan child) | `TestIntegrationAgentRestartSweep` | PASS: a real orphan `bpftrace -f json /tmp/vbpf-orphan-*.bt` in its own process group is reaped by `SweepStale` (the same call `realServe` makes before listening), pgrep clean |
+| Chaos case                                                  | Test                                | Result                                                                                                                                                                          |
+| ----------------------------------------------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Kill bpftrace itself (`kill -KILL` the child)               | `TestIntegrationKillBpftraceMidRun` | PASS (2.9 s): summary `failed`, registry drains, no leak                                                                                                                        |
+| Close tab mid-run (WS dropped, no close frame, no DELETE)   | `TestIntegrationCloseTabMidRun`     | PASS (2.6 s): run survives the lost viewer (`Active()==1`), later DELETE → `cancelled`, no leak                                                                                 |
+| Kill API mid-run (WS drops, DELETE never arrives)           | `TestIntegrationAPIKillMidRun`      | PASS (7.5 s): orphaned run hits its 4 s deadline alone → `timeout` on reconnect, no leak                                                                                        |
+| Kill agent mid-run (SIGKILLed agent leaves an orphan child) | `TestIntegrationAgentRestartSweep`  | PASS: a real orphan `bpftrace -f json /tmp/vbpf-orphan-*.bt` in its own process group is reaped by `SweepStale` (the same call `realServe` makes before listening), pgrep clean |
 
 Guarantees (mechanism, all pre-existing — R-11 added tests, not code): the
 child runs in its own process group (`Setpgid`), every exit path group-kills
