@@ -117,7 +117,8 @@ read-only into the API container).
   (loopback-only) and `Origin` (exactly `WEB_ORIGIN`, never `*`) gates. nginx
   proxies `/api` and `/ws` same-origin, so the browser's `Origin` is the web
   URL: keep `WEB_ORIGIN` exactly that, including `WEB_PORT` when changed.
-- Natively the agent refuses non-loopback binds; in compose each container has
-  its own loopback, so the agent starts with `--addr 0.0.0.0:8787`. The code
-  allows the wildcard but still refuses a specific non-loopback address, and
+- Natively the agent binds loopback only and refuses `0.0.0.0` unless
+  `AGENT_ALLOW_WILDCARD_BIND=1`; in compose each container has its own
+  loopback, so the agent starts with `--addr 0.0.0.0:8787` and compose sets
+  the flag. The code still refuses a specific non-loopback address, and
   the port is unpublished, so `0.0.0.0` is scoped to the compose network.
