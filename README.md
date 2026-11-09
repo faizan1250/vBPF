@@ -83,7 +83,7 @@ It is built **on top of** bpftrace; it does not replace it.
 - **Hard limits**: duration, output rate, output size, map keys, probe count, and concurrency.
 - **Clean teardown**: probes and child processes are always killed, including on crashes.
 - **Local-first**: the agent and API bind to loopback; run output never leaves your machine by default.
-- **History and export**: re-run past probes and export sessions as JSON.
+- **History and export**: re-run past probes and export history entries as JSON. History lives in browser localStorage; there are no server-side sessions yet.
 - **Recipe-only mode**: works without an API key (browse and run recipes).
 
 ---
@@ -101,7 +101,7 @@ flowchart LR
 
 | Component                | Role                                                                                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Web UI** (`/web`)      | Prompt box, script editor, confirmation modal, live views, history                                                                                |
+| **Web UI** (`/web`)      | Prompt box, script editor, confirmation modal, live views, browser-local history (localStorage + JSON export)                                    |
 | **API** (`/api`)         | Retrieval, LLM generation, static validation, run orchestration, WebSocket relay, SQLite storage                                                  |
 | **Agent** (`/agent`)     | The only privileged component. Re-validates scripts, dry-run compiles, runs bpftrace in its own process group, enforces limits, normalizes output |
 | **Recipes** (`/recipes`) | Hand-written, tested `.bt` scripts with metadata; used as examples for the LLM and as a template picker                                           |
@@ -193,7 +193,7 @@ Five demo flows (~5 minutes):
 2. **Try another view.** Run **TCP connects** and watch the event stream; note the dropped-event badge if the rate cap trips.
 3. **Generate from English.** Type _"Show me which processes are opening the most files"_ and review the generated script. The validation badge must be green before anything can run.
 4. **Edit and re-validate.** Tweak the script, click **Validate**, and confirm a compile error surfaces before anything runs.
-5. **Check health and history.** `curl http://localhost:5173/api/health` shows `root`/`btf` warnings for your kernel; re-run a past probe from history and export it as JSON.
+5. **Check health and history.** `curl http://localhost:5173/api/health` shows `root`/`btf` warnings for your kernel; re-run a past probe from browser history and export it as JSON.
 
 Stop everything with `docker compose down -v`.
 
@@ -462,7 +462,7 @@ Being explicit about what the project does not (yet) do:
 - **The LLM can be wrong.** Generated probes may compile but measure the wrong thing. Read the explanation and the script before trusting a result.
 - **Overhead is real.** Tracing hot paths (for example every syscall) costs CPU. Limits reduce but do not eliminate this.
 - **Root agent.** Treat the host accordingly.
-- **Short history.** SQLite storage with capped event retention per run; not a metrics system.
+- **Short history.** SQLite storage with capped event retention per run; not a metrics system. Probe history itself lives in browser localStorage; server-side sessions are deferred to v0.3.
 
 ---
 
@@ -476,6 +476,7 @@ Being explicit about what the project does not (yet) do:
 - [ ] Kubernetes and container targeting (pod name to cgroup)
 - [ ] Opt-in "Explain these results"
 - [ ] Saved dashboards and shareable run reports
+- [ ] Server-side sessions and export (v0.3): persistent, shareable history beyond browser localStorage
 
 Have a request? [Open an issue](https://github.com/faizan1250/vBPF/issues/new/choose).
 
