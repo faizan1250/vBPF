@@ -13,13 +13,18 @@ services:
     pid: host
     # Separate loopbacks per container, so the agent binds the wildcard here;
     # the code still refuses a specific non-loopback address (see security.md).
-    command: ["serve", "--addr", "0.0.0.0:8787", "--token-file", "/token/agent.token"]
+    command:
+      ["serve", "--addr", "0.0.0.0:8787", "--token-file", "/token/agent.token"]
     volumes:
       - agent-token:/token
       - /sys/kernel/debug:/sys/kernel/debug:rw
       - /sys/kernel/tracing:/sys/kernel/tracing:rw
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf -H \"Authorization: Bearer $$(cat /token/agent.token)\" http://127.0.0.1:8787/health || exit 1"]
+      test:
+        [
+          "CMD-SHELL",
+          'curl -sf -H "Authorization: Bearer $$(cat /token/agent.token)" http://127.0.0.1:8787/health || exit 1',
+        ]
       interval: 10s
       timeout: 5s
       start_period: 60s
@@ -47,7 +52,13 @@ services:
       agent:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
       interval: 10s
       timeout: 5s
       start_period: 20s

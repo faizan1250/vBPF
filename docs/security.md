@@ -104,3 +104,20 @@ Known gaps (documented, not silently unhandled):
 
 Do not open a public issue. Use a GitHub private vulnerability report or
 contact the maintainer directly. Aim: acknowledge within 3 business days.
+
+## Compose quickstart network
+
+`docker-compose.yml` publishes only the web front door
+(`"${WEB_PORT:-5173}"` to container port 80). The API and agent are reachable
+solely inside the compose network, and every agent endpoint still requires its
+bearer token, shared via the `agent-token` volume (file mode `0600`, mounted
+read-only into the API container).
+
+- The API binds `0.0.0.0` in its container but keeps the per-request `Host`
+  (loopback-only) and `Origin` (exactly `WEB_ORIGIN`, never `*`) gates. nginx
+  proxies `/api` and `/ws` same-origin, so the browser's `Origin` is the web
+  URL: keep `WEB_ORIGIN` exactly that, including `WEB_PORT` when changed.
+- Natively the agent refuses non-loopback binds; in compose each container has
+  its own loopback, so the agent starts with `--addr 0.0.0.0:8787`. The code
+  allows the wildcard but still refuses a specific non-loopback address, and
+  the port is unpublished, so `0.0.0.0` is scoped to the compose network.
