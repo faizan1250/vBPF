@@ -36,6 +36,7 @@ export function migrate(db: Database.Database): void {
       generation_id TEXT,
       script_sha256 TEXT NOT NULL DEFAULT '',
       script_text TEXT NOT NULL DEFAULT '',
+      edited INTEGER NOT NULL DEFAULT 0,
       duration_s INTEGER NOT NULL DEFAULT 10,
       state TEXT NOT NULL DEFAULT 'running',
       started_at INTEGER NOT NULL,
@@ -59,6 +60,9 @@ export function migrate(db: Database.Database): void {
     "ALTER TABLE generations ADD COLUMN warnings TEXT NOT NULL DEFAULT '[]'",
     "ALTER TABLE generations ADD COLUMN refusal TEXT",
     "ALTER TABLE generations ADD COLUMN latency_ms INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE runs ADD COLUMN generation_id TEXT",
+    "ALTER TABLE runs ADD COLUMN script_sha256 TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE runs ADD COLUMN edited INTEGER NOT NULL DEFAULT 0",
   ]) {
     try {
       db.exec(ddl);

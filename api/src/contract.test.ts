@@ -373,6 +373,8 @@ describe("run summaries", () => {
         duration_s: 10,
         started_at: expect.any(Number),
         ended_at: expect.any(Number),
+        generation_id: null,
+        edited: false,
         summary: {
           events_count: 1,
           bytes: 5,
@@ -416,6 +418,112 @@ describe("run summaries", () => {
     const res = await fetch(`${base}/api/runs/nope`);
     expect(res.status).toBe(404);
     expect(await res.json()).toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("run generation links", () => {
+  async function freshGeneration(): Promise<{
+    generation_id: string;
+    script: string;
+  }> {
+    const res = await fetch(`${base}/api/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "Which processes are using the most CPU?",
+      }),
+    });
+    expect(res.status).toBe(200);
+    return (await res.json()) as { generation_id: string; script: string };
+  }
+
+  it("links an unedited script to its generation", async () => {
+    const gen = await freshGeneration();
+    const res = await fetch(`${base}/api/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        script: gen.script,
+        generation_id: gen.generation_id,
+      }),
+    });
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as { run_id: string };
+    try {
+      const got = await fetch(`${base}/api/runs/${created.run_id}`);
+      expect(await got.json()).toMatchObject({
+        run_id: created.run_id,
+        generation_id: gen.generation_id,
+        edited: false,
+      });
+    } finally {
+      await fetch(`${base}/api/runs/${created.run_id}/stop`, {
+        method: "POST",
+      });
+    }
+  });
+
+  it("marks an edited script", async () => {
+    const gen = await freshGeneration();
+    const res = await fetch(`${base}/api/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        script: `${gen.script}\n`,
+        generation_id: gen.generation_id,
+      }),
+    });
+    expect(res.status).toBe(201);
+    const created = (await res.json()) as { run_id: string };
+    try {
+      const got = await fetch(`${base}/api/runs/${created.run_id}`);
+      expect(await got.json()).toMatchObject({
+        run_id: created.run_id,
+        generation_id: gen.generation_id,
+        edited: true,
+      });
+    } finally {
+      await fetch(`${base}/api/runs/${created.run_id}/stop`, {
+        method: "POST",
+      });
+    }
+  });
+
+  it("rejects an unknown generation id without consuming the run slot", async () => {
+    const res = await fetch(`${base}/api/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        script: "BEGIN { @x = count(); }",
+        generation_id: "gen_nope",
+      }),
+    });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ code: "NOT_FOUND" });
+    const retry = await fetch(`${base}/api/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+    });
+    expect(retry.status).toBe(201);
+    const created = (await retry.json()) as { run_id: string };
+    await fetch(`${base}/api/runs/${created.run_id}/stop`, {
+      method: "POST",
+    });
+  });
+
+  it("keeps agent re-validation for bound scripts", async () => {
+    const gen = await freshGeneration();
+    const res = await fetch(`${base}/api/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        script: "bad-probe { @x = count(); }",
+        generation_id: gen.generation_id,
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ code: "VALIDATION_FAILED" });
   });
 });
 
