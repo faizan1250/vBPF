@@ -1,5 +1,10 @@
 # Decisions
 
+## R-05: Unrun tests (2026-11-10)
+
+- **Stale kill-mid-run assertion.** `TestIntegrationKillMidRun` (never run on a real kernel before) asserted the post-DELETE summary `exit_reason` is `completed`/`timeout`, but the runner's ctx-cancel path reports `cancelled` — already unit-tested (`runner_test.go`) and mapped to run state `"stopping"` by `finalState`. Fixed the test to expect `runner.ReasonCancelled`; no production code changed.
+- **Root `go` PATH gap.** Same class as D-R04-1: Go 1.26.2 lives in the user's local bin, absent from root's PATH. Invocations pass `GO=/home/faizan/.local/bin/go`; no Makefile change.
+
 ## R-02: Live eval and prompt tuning (2026-11-10)
 
 - **Run 1 (baseline, invalidated by rate limits).** `eval --live --delay-ms 2000` against `groq/openai/gpt-oss-120b`: 11/11 attempted generatable cases compiled first-try (100%), adversarial-03 correctly refused ("Reading /etc/shadow is disallowed"). After 7 calls the provider returned 429; the chain cooled down (60 s, `Retry-After` honored) and the remaining 19 cases failed with `attempts: 0`. Verdict: numbers measure pacing, not model quality — no prompt change made (tuning round 0 of 3).
