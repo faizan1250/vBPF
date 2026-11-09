@@ -5,12 +5,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   EvalPromptsSchema,
+  assertCallBudget,
   categoryFromId,
   loadPrompts,
+  parseEvalArgs,
+  renderMarkdown,
   runEval,
   summarize,
 } from "./eval.js";
-import { isRefusalPrompt } from "./llm.js";
+import { LlmOutputSchema, isRefusalPrompt } from "./llm.js";
 
 const PROMPTS_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -105,5 +108,123 @@ describe("eval runner", () => {
 
   it("summarizes empty input without crashing", () => {
     expect(summarize([]).total).toBe(0);
+  });
+
+  it("labels live reports without touching mock output", () => {
+    const fakeCase = {
+      id: "direct-01",
+      category: "direct",
+      must_refuse: false,
+      expected_view: "bar" as const,
+      expected_probe_family: "profile",
+      refused: false,
+      ok: true,
+      attempts: 1,
+      chart_type: "bar" as const,
+      view_match: true as const,
+      probe_match: true as const,
+      refusal_correct: true,
+      first_try: true,
+      latency_ms: 1,
+      tokens_approx: 10,
+      errors: [] as string[],
+    };
+    const summary = summarize([fakeCase]);
+    const live = renderMarkdown(
+      "2026-11-10",
+      "groq/test",
+      summary,
+      [fakeCase],
+      "live",
+    );
+    expect(live).toContain("Mode: live");
+    expect(live).toContain("SKIP (live)");
+    const mock = renderMarkdown("2026-11-10", "mock", summary, []);
+    expect(mock).toContain("Mode: mock-only");
+  });
+});
+
+describe("eval --live wiring", () => {
+  it("uses the injected llm factory (refusal path)", async () => {
+    const entries = loadPrompts(PROMPTS_PATH).filter(
+      (e) => e.id === "adversarial-01",
+    );
+    const { cases, db } = await runEval(entries, {
+      recipesDir: RECIPES_DIR,
+      model: "stub",
+      llmFactory: () => ({
+        model: "stub",
+        generate: async () =>
+          LlmOutputSchema.parse({
+            script: "",
+            chart_type: "events",
+            explanation: "",
+            duration_s: 10,
+            refusal: "nope",
+          }),
+      }),
+    });
+    try {
+      expect(cases).toHaveLength(1);
+      expect(cases[0]?.refused).toBe(true);
+      expect(cases[0]?.refusal_correct).toBe(true);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("passes probeArgsFn through to prompt assembly", async () => {
+    const entries = loadPrompts(PROMPTS_PATH).filter(
+      (e) => e.id === "direct-01",
+    );
+    let seen = "";
+    const { cases, db } = await runEval(entries, {
+      recipesDir: RECIPES_DIR,
+      model: "stub",
+      llmFactory: () => ({
+        model: "stub",
+        generate: async (prompt: string) => {
+          seen = prompt;
+          return LlmOutputSchema.parse({
+            script: "profile:hz:99 { @x = count(); }\n",
+            chart_type: "bar",
+            explanation: "ok",
+            duration_s: 10,
+            refusal: null,
+          });
+        },
+      }),
+      probeArgsFn: async () => "",
+    });
+    try {
+      expect(cases[0]?.ok).toBe(true);
+      expect(seen).toContain("==ARG_FORMATS==");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("enforces the 90-call live budget", () => {
+    expect(() => assertCallBudget(30)).not.toThrow();
+    expect(() => assertCallBudget(31)).toThrow();
+  });
+
+  it("parses live flags with safe defaults", () => {
+    const root = "/repo";
+    const base = parseEvalArgs([], root);
+    expect(base.live).toBe(false);
+    expect(base.limit).toBeNull();
+    expect(base.delayMs).toBe(0);
+    const live = parseEvalArgs(
+      ["--live", "--limit", "5", "--delay-ms", "500"],
+      root,
+    );
+    expect(live.live).toBe(true);
+    expect(live.limit).toBe(5);
+    expect(live.delayMs).toBe(500);
+    // Courtesy delay for free-tier budgets.
+    expect(parseEvalArgs(["--live"], root).delayMs).toBe(2000);
+    expect(() => parseEvalArgs(["--limit", "0"], root)).toThrow();
+    expect(() => parseEvalArgs(["--bogus"], root)).toThrow();
   });
 });

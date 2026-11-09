@@ -25,6 +25,8 @@ Output contract (JSON only):
 - `duration_s`: integer 1-60.
 - `refusal`: string when the request cannot be done safely (for example "kill the process",
   running a command on file open, reading credentials); otherwise null.
+- When refusing, `script` is `""` and the other fields stay valid
+  (`chart_type: "events"`, `explanation`: the one-sentence refusal reason, `duration_s: 10).
 
 Refusal policy: refuse destructive, privilege-escalation, credential-access, or
 unbounded-tracing requests. Name the refused action in one sentence.

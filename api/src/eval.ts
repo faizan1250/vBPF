@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 
 import type Database from "better-sqlite3";
 import yaml from "js-yaml";
@@ -11,6 +12,7 @@ import {
   makeMockLlm,
   runGenerate,
 } from "./generate.js";
+import type { LlmClient } from "./llm.js";
 import { loadRecipes } from "./recipes.js";
 
 export const EvalViewSchema = z.enum([
@@ -96,6 +98,28 @@ export interface EvalRunnerOptions {
     token: string,
     script: string,
   ) => Promise<{ ok: boolean; errors: string[]; probes: string[] }>;
+  probeArgsFn?: (url: string, token: string, probe: string) => Promise<string>;
+  // Live runs share one LLM chain across cases; tests inject a stub here.
+  // Defaults to the deterministic mock echoing the top-1 recipe.
+  llmFactory?: (db: Database.Database) => LlmClient;
+  // Courtesy pause between cases (ms), for live free-tier budgets.
+  delayMs?: number;
+}
+
+// One live eval of 30 prompts costs at most 90 LLM calls (3 attempts each).
+export const LIVE_CALL_BUDGET = 90;
+export const MAX_ATTEMPTS = 3;
+
+export function assertCallBudget(caseCount: number): void {
+  if (caseCount * MAX_ATTEMPTS > LIVE_CALL_BUDGET) {
+    throw new Error(
+      `eval selection too large: ${caseCount} cases * ${MAX_ATTEMPTS} attempts exceeds the ${LIVE_CALL_BUDGET}-call budget (use --limit)`,
+    );
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function runEvalCase(
@@ -103,7 +127,9 @@ export async function runEvalCase(
   entry: EvalPrompt,
   opts: EvalRunnerOptions,
 ): Promise<EvalCaseResult> {
-  const llm = makeMockLlm(db, opts.recipesDir, opts.model ?? "mock");
+  const llm =
+    opts.llmFactory?.(db) ??
+    makeMockLlm(db, opts.recipesDir, opts.model ?? "mock");
   const started = Date.now();
   let refused = false;
   let ok = false;
@@ -124,6 +150,9 @@ export async function runEvalCase(
         validateAgentFn:
           opts.validateAgentFn ??
           (async () => ({ ok: true, errors: [], probes: [] })),
+        ...(opts.probeArgsFn === undefined
+          ? {}
+          : { probeArgsFn: opts.probeArgsFn }),
       },
     });
     ok = true;
@@ -243,8 +272,68 @@ export async function runEval(
   const cases: EvalCaseResult[] = [];
   for (const entry of entries) {
     cases.push(await runEvalCase(db, entry, opts));
+    if (opts.delayMs !== undefined && opts.delayMs > 0) {
+      await sleep(opts.delayMs);
+    }
   }
   return { cases, summary: summarize(cases), db };
+}
+
+export interface EvalCliOptions {
+  promptsPath: string;
+  outPath: string | null;
+  live: boolean;
+  limit: number | null;
+  delayMs: number;
+}
+
+function positiveInt(raw: string | undefined, flag: string): number {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(`${flag} needs a positive integer`);
+  }
+  return value;
+}
+
+function nonNegativeInt(raw: string | undefined, flag: string): number {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${flag} needs a non-negative integer`);
+  }
+  return value;
+}
+
+// CLI flags for the eval runner. The first positional arg stays the prompts
+// file for backward compatibility with `pnpm run eval <path>`.
+export function parseEvalArgs(argv: string[], root: string): EvalCliOptions {
+  let promptsPath = join(root, "eval", "prompts.yaml");
+  let outPath: string | null = null;
+  let live = false;
+  let limit: number | null = null;
+  let delayMs = 0;
+  const rest = [...argv];
+  while (rest.length > 0) {
+    const arg = rest.shift() as string;
+    if (arg === "--live") {
+      live = true;
+    } else if (arg === "--limit") {
+      limit = positiveInt(rest.shift(), "--limit");
+    } else if (arg === "--delay-ms") {
+      delayMs = nonNegativeInt(rest.shift(), "--delay-ms");
+    } else if (arg === "--out") {
+      const raw = rest.shift();
+      if (raw === undefined || raw === "")
+        throw new Error("--out needs a path");
+      outPath = isAbsolute(raw) ? raw : resolve(root, raw);
+    } else if (arg.startsWith("--")) {
+      throw new Error(`unknown flag ${arg}`);
+    } else {
+      promptsPath = isAbsolute(arg) ? arg : resolve(root, arg);
+    }
+  }
+  // Courtesy delay for live free-tier budgets; mock stays instant.
+  if (live && delayMs === 0) delayMs = 2000;
+  return { promptsPath, outPath, live, limit, delayMs };
 }
 
 export function renderMarkdown(
@@ -252,12 +341,19 @@ export function renderMarkdown(
   model: string,
   summary: EvalSummary,
   cases: EvalCaseResult[],
+  mode: "mock" | "live" = "mock",
 ): string {
+  const modeLine =
+    mode === "live"
+      ? `Mode: live (model=${model}). Agent validation stubbed (stock runner, no root): compile = static validator only; scripts never executed.`
+      : `Mode: mock-only (model=${model}). No secrets, no root, no bpftrace.`;
+  const producedLine =
+    "produced-output is SKIP: scripts are compile-validated, never executed.";
   const lines = [
     `# vBPF eval report - ${date}`,
     "",
-    `Mode: mock-only (model=${model}). No secrets, no root, no bpftrace.`,
-    "produced-output is SKIP in mock: scripts are compile-validated, never executed.",
+    modeLine,
+    producedLine,
     "tokens are approximate (chars/4); the mock LLM reports no usage.",
     "",
     "## Summary",
@@ -267,7 +363,7 @@ export function renderMarkdown(
     `| total cases | ${summary.total} |`,
     `| first-try compile | ${summary.first_try_compile} |`,
     `| within-retries (ok) | ${summary.ok_within_retries} |`,
-    `| produced-output | SKIP (mock) |`,
+    `| produced-output | SKIP (${mode}) |`,
     `| correct-refusal | ${summary.refusal_correct}/${summary.refusal_total} |`,
     `| view-match | ${summary.view_match}/${summary.view_match_denominator} |`,
     `| probe-match | ${summary.probe_match}/${summary.probe_match_denominator} |`,
@@ -300,5 +396,22 @@ export function renderMarkdown(
     );
   }
   lines.push("");
+  if (mode === "live") {
+    lines.push("## Failures (full errors)", "");
+    const failed = cases.filter((c) => !c.ok && !c.refused);
+    if (failed.length === 0) {
+      lines.push("None: every generatable case compiled within retries.", "");
+    }
+    for (const c of failed) {
+      lines.push(
+        `### ${c.id}`,
+        "",
+        `Expected view: ${c.expected_view ?? "n/a"}; expected probe: ${c.expected_probe_family ?? "n/a"}; attempts: ${c.attempts}`,
+        "",
+      );
+      for (const e of c.errors) lines.push(`- ${e}`);
+      lines.push("");
+    }
+  }
   return lines.join("\n");
 }
