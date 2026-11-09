@@ -69,8 +69,13 @@ function hostIsLoopback(host: string | undefined): boolean {
   if (name.startsWith("[")) {
     const end = name.indexOf("]");
     if (end < 0) return false;
+    const rest = name.slice(end + 1);
+    if (rest !== "" && !/^:\d+$/.test(rest)) return false;
     name = name.slice(0, end + 1);
-  } else if (name.indexOf(":") === name.lastIndexOf(":")) {
+  } else if (
+    name.includes(":") &&
+    name.indexOf(":") === name.lastIndexOf(":")
+  ) {
     name = name.slice(0, name.indexOf(":"));
   }
   return (

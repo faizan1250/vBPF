@@ -57,8 +57,8 @@ func staleBPFtracePIDs(ctx context.Context) ([]int, error) {
 	return parseSweepPIDs(bytes.TrimSpace(out), sweepSelf()), nil
 }
 
-// SweepStale SIGKILLs leftover bpftrace process groups from crashed runs.
-// Call once at agent startup; safe to run when nothing is stale.
+// SweepStale kills leftover own-run bpftrace process groups (vbpf-*.bt)
+// from crashed runs. Call once at agent startup; safe when nothing is stale.
 func SweepStale(ctx context.Context) (int, error) {
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

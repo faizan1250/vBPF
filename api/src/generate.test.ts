@@ -523,17 +523,7 @@ describe("generate rate limit", () => {
   });
 
   it("budgets are per IP, not global", async () => {
-    const one = await buildApp({
-      agentUrl: fake.url,
-      tokenFile,
-      dbPath: ":memory:",
-      recipesDir: RECIPES_DIR,
-      webOrigin: "http://localhost:5173",
-      llmModel: "mock",
-      llmMode: "mock",
-      generateRateLimit: { max: 1, windowMs: 60_000 },
-    });
-    const other = await buildApp({
+    const limited = await buildApp({
       agentUrl: fake.url,
       tokenFile,
       dbPath: ":memory:",
@@ -544,27 +534,24 @@ describe("generate rate limit", () => {
       generateRateLimit: { max: 1, windowMs: 60_000 },
     });
     try {
-      const post = (baseUrl: string): Promise<Response> =>
-        fetch(`${baseUrl}/api/generate`, {
+      const post = (ip: string) =>
+        limited.inject({
           method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ prompt: "cpu?" }),
+          url: "/api/generate",
+          payload: { prompt: "cpu?" },
+          remoteAddress: ip,
+          headers: { host: "localhost", "content-type": "application/json" },
         });
-      const a1 = await one.listen({ host: "127.0.0.1", port: 0 });
-      const a2 = await other.listen({ host: "127.0.0.1", port: 0 });
-      const u1 = a1.replace("[::1]", "127.0.0.1");
-      const u2 = a2.replace("[::1]", "127.0.0.1");
-      expect((await post(u1)).status).toBe(200);
-      expect((await post(u1)).status).toBe(429);
-      expect((await post(u2)).status).toBe(200);
+      expect((await post("10.0.0.1")).statusCode).toBe(200);
+      expect((await post("10.0.0.1")).statusCode).toBe(429);
+      expect((await post("10.0.0.2")).statusCode).toBe(200);
     } finally {
-      await one.close();
-      await other.close();
+      await limited.close();
     }
   });
 });
 
-describe("adversarial caps", () => {
+describe("validator limits", () => {
   it("rejects wildcards expanding past the probe cap", () => {
     const known = Array.from(
       { length: 60 },
