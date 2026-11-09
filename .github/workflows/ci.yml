@@ -119,12 +119,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Validate compose config
+        run: docker compose config --quiet
       - name: Build images (no push, no privileged run)
-        run: |
-          if [ -f docker-compose.yml ]; then
-            docker compose build
-          elif [ -f Dockerfile ]; then
-            docker build -t vbpf:ci .
-          else
-            echo "SKIP: no Dockerfile yet (build-only check deferred)"
-          fi
+        run: docker compose build

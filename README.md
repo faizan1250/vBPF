@@ -173,7 +173,33 @@ Or run `./scripts/check-env.sh` for a full report.
 
 ## Quickstart
 
-Native development (agent on the host). From the repository root:
+Container quickstart (Linux or WSL2 with Docker, ~5 minutes, no toolchain needed):
+
+```bash
+git clone https://github.com/faizan1250/vBPF.git
+cd vBPF
+
+cp .env.example .env
+# optional: set a provider key for AI generation, or leave empty for recipe-only mode
+
+./scripts/quickstart.sh   # preflight, build, start, wait until healthy
+```
+
+Web UI: <http://localhost:5173>. Only the web port is published; the API and agent stay inside the compose network (see [Privacy and security](#privacy-and-security)).
+
+Five demo flows (~5 minutes):
+
+1. **Run a recipe, no key needed.** Open the UI, pick **Syscall counts by process**, click **Run this probe**, watch the live bar chart, press **Stop**.
+2. **Try another view.** Run **TCP connects** and watch the event stream; note the dropped-event badge if the rate cap trips.
+3. **Generate from English.** Type _"Show me which processes are opening the most files"_ and review the generated script. The validation badge must be green before anything can run.
+4. **Edit and re-validate.** Tweak the script, click **Validate**, and confirm a compile error surfaces before anything runs.
+5. **Check health and history.** `curl http://localhost:5173/api/health` shows `root`/`btf` warnings for your kernel; re-run a past probe from history and export it as JSON.
+
+Stop everything with `docker compose down -v`.
+
+### Native development
+
+Agent on the host instead of in a container. From the repository root:
 
 ```bash
 git clone https://github.com/faizan1250/vBPF.git
@@ -285,11 +311,12 @@ Probe availability depends on your kernel. A recipe that needs a missing tracepo
 
 ## Supported platforms
 
-| Environment       | Kernel                             | Status                                             |
-| ----------------- | ---------------------------------- | -------------------------------------------------- |
-| Ubuntu 24.04 (VM) | TBD                                | Pending                                            |
-| Ubuntu 22.04 (VM) | TBD                                | Pending                                            |
-| WSL2 Ubuntu       | `6.6.87.2-microsoft-standard-WSL2` | Probed 2026-11-09: BTF present, bpftrace `v0.20.2` |
+| Environment                                    | Kernel                                                     | Status                                                                             |
+| ---------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Ubuntu 24.04 (VM)                              | TBD                                                        | Pending                                                                            |
+| Ubuntu 22.04 (VM)                              | TBD                                                        | Pending                                                                            |
+| WSL2 Ubuntu                                    | `6.6.87.2-microsoft-standard-WSL2`                         | Probed 2026-11-09: BTF present, bpftrace `v0.20.2`                                 |
+| Compose quickstart (agent image, Ubuntu 24.04) | Host kernel (tested on `6.6.87.2-microsoft-standard-WSL2`) | Verified 2026-11-09: web/api/agent healthy, 5 s `openat` probe streamed 587 events |
 
 Per-environment recipe notes and fallbacks: [`docs/environment.md`](docs/environment.md).
 
@@ -405,7 +432,7 @@ Being explicit about what the project does not (yet) do:
 - **One host, one run at a time.** No fleets, no concurrent probes.
 - **bpftrace only.** No libbpf/CO-RE backend yet, so very long-running low-overhead probes are out of scope.
 - **Kernel-dependent.** Some tracepoints and functions differ between kernels and WSL builds. Recipes include fallbacks where possible.
-- **Native-dev packaging only.** There is no container image or compose quickstart yet.
+- **Container quickstart is single-host demo grade.** `docker compose up` publishes only the web port; production needs (TLS, multi-host agents, published API) are out of scope.
 - **Mock-only eval.** The checked-in harness verifies wiring without secrets or root; real generation scores are not measured yet.
 - **The LLM can be wrong.** Generated probes may compile but measure the wrong thing. Read the explanation and the script before trusting a result.
 - **Overhead is real.** Tracing hot paths (for example every syscall) costs CPU. Limits reduce but do not eliminate this.
@@ -417,7 +444,7 @@ Being explicit about what the project does not (yet) do:
 ## Roadmap
 
 - [ ] Real generation scores from the eval harness, published above
-- [ ] Container packaging (`docker compose up` quickstart)
+- [x] Container packaging (`docker compose up` quickstart)
 - [ ] libbpf / CO-RE backend for long-running probes
 - [ ] Flame graphs and off-CPU analysis
 - [ ] Multi-host agents over TLS with enrollment tokens

@@ -1,0 +1,12 @@
+# Keep build contexts lean and hermetic: never copy host installs or outputs.
+node_modules
+**/node_modules
+web/dist
+web/test-results
+web/playwright-report
+run
+logs
+bin
+data
+.env
+.git

@@ -1,0 +1,79 @@
+# vBPF compose quickstart: `cp .env.example .env && docker compose up --build`.
+# Only the web front door is published. The agent is reachable solely inside
+# this network (no ports published) and still requires its bearer token on
+# every endpoint. The API binds 0.0.0.0 but keeps its Host/Origin gates, so
+# set WEB_ORIGIN to the exact browser-facing URL when WEB_PORT changes.
+services:
+  agent:
+    build:
+      context: .
+      dockerfile: ./agent/Dockerfile
+    # The agent needs root, the host PID namespace, and kernel tracing mounts.
+    privileged: true
+    pid: host
+    # Separate loopbacks per container, so the agent binds the wildcard here;
+    # the code still refuses a specific non-loopback address (see security.md).
+    command:
+      ["serve", "--addr", "0.0.0.0:8787", "--token-file", "/token/agent.token"]
+    volumes:
+      - agent-token:/token
+      - /sys/kernel/debug:/sys/kernel/debug:rw
+      - /sys/kernel/tracing:/sys/kernel/tracing:rw
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'curl -sf -H "Authorization: Bearer $$(cat /token/agent.token)" http://127.0.0.1:8787/health || exit 1',
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+
+  api:
+    build:
+      context: .
+      dockerfile: ./api/Dockerfile
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      AGENT_URL: http://agent:8787
+      AGENT_TOKEN_FILE: /token/agent.token
+      DATABASE_PATH: /data/api.sqlite3
+      RECIPES_DIR: /app/recipes
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:5173}
+    volumes:
+      - agent-token:/token:ro
+      - api-data:/data
+    depends_on:
+      agent:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:8080/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  web:
+    build:
+      context: .
+      dockerfile: ./web/Dockerfile
+    ports:
+      - "${WEB_PORT:-5173}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  agent-token:
+  api-data:
