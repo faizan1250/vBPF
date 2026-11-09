@@ -1,5 +1,12 @@
 # Decisions
 
+## R-16: Agent WebSocket origin allowlist (2026-11-10)
+
+- **Default deny, explicit allowlist.** `handleStream` passes `Config.AllowedOrigins` to `websocket.Accept` as `OriginPatterns`; empty (the default) refuses every browser `Origin` with 403. Requests without an `Origin` header (server-to-server, like the API relay dial) and same-host origins are always accepted by the library, so the API path keeps working with no change.
+- **Bearer token still gates first.** The `auth` middleware wraps the stream route, so a missing/wrong token is 401 before origin is even evaluated; origin is defense-in-depth, not the primary gate.
+- **Config surface mirrors the token file.** `AGENT_ALLOWED_ORIGINS` (comma-separated, `server.SplitOrigins`) with a `--allowed-origins` serve-flag override; entries use the library's `path.Match` semantics (plain host or `scheme://host`).
+- **Verification.** New `origin_test.go`: browser `Origin` → 403 by default, no-`Origin` + valid token → stream reads, allowlisted `Origin` → stream reads, non-allowlisted → 403, bad token → 401.
+
 ## R-14: Sessions and export, Option A (2026-11-10)
 
 - **Client-side history for this release; server-side sessions deferred to v0.3.** History entries persist in browser localStorage (`vbpf:history:v1`, cap 50 entries, 200 sampled events each) with re-run and JSON-download export per entry. Smallest change: already works, no new routes.
