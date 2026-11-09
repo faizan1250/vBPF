@@ -1,8 +1,9 @@
 # Overhead (stub)
 
 Tracing costs CPU, especially on hot paths (every syscall, every block I/O).
-Limits reduce but do not eliminate overhead. Numbers below are **not measured
-yet**; this file records the method so future runs are comparable.
+Limits reduce but do not eliminate overhead. No measurements have been
+collected yet — overhead benchmarking is deferred to a later release.
+This file records the method so future runs are comparable.
 
 ## Method
 
