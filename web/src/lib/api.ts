@@ -156,22 +156,18 @@ export function fetchRecipes(query = ""): Promise<{ recipes: Recipe[] }> {
   );
 }
 
-// Degrades gracefully: the backend has no explain endpoint, so callers show
-// local generation context instead. Never rejects with a raw stack.
-export async function explainScript(): Promise<string | null> {
-  try {
-    const res = await fetch("/api/explain", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    if (res.status === 404) return null;
-    if (!res.ok) return null;
-    const body = (await res.json()) as { explanation?: unknown };
-    return typeof body.explanation === "string" ? body.explanation : null;
-  } catch {
-    return null;
-  }
+// Server-side probe walkthrough. Shows loading and error states; the
+// generation summary stays visible above while the walkthrough loads.
+export interface ExplainResult {
+  explanation: string;
+  cached: boolean;
+  model: string;
+}
+
+export function explainScript(script: string): Promise<ExplainResult> {
+  const oversize = rejectOversizeScript(script);
+  if (oversize) return Promise.reject(oversize);
+  return postJson<ExplainResult>("/api/explain", { script });
 }
 
 export type {

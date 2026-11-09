@@ -67,11 +67,51 @@ describe("explainScript", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
-  it("degrades to null when the endpoint is missing", async () => {
+  it("rejects oversize scripts without fetching", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    const big = "x".repeat(MAX_SCRIPT_BYTES + 1);
+    await expect(explainScript(big)).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+      message: expect.stringMatching(/exceeds 8 KB/) as unknown as string,
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it("posts the script and returns the walkthrough", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response("nope", { status: 404 })),
+      vi.fn(async () =>
+        Response.json({
+          explanation: "Counts opens.",
+          cached: false,
+          model: "mock",
+        }),
+      ),
     );
-    await expect(explainScript()).resolves.toBeNull();
+    await expect(explainScript("BEGIN { @x = count(); }")).resolves.toEqual({
+      explanation: "Counts opens.",
+      cached: false,
+      model: "mock",
+    });
+  });
+
+  it("surfaces server errors as ApiError", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: "bad", code: "X" }), {
+            status: 422,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+    await expect(
+      explainScript("BEGIN { @x = count(); }"),
+    ).rejects.toMatchObject({
+      code: "X",
+      status: 422,
+    });
   });
 });
