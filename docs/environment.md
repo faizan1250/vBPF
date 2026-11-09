@@ -29,18 +29,18 @@ documented root path on this machine).
 
 All 10 recipes: required probes listed, no alternatives needed.
 
-| Recipe | `requires` | `bpftrace -l` result | Status |
-|---|---|---|---|
-| `block-latency-histogram` | `tracepoint:block:block_rq_issue`, `tracepoint:block:block_rq_complete` | both listed verbatim | available |
-| `cpu-by-process` | `profile:hz:99` | `profile:hz:` listed | available |
-| `dns-lookups` | `uprobe:libc:getaddrinfo` | resolved to `uprobe:/lib/x86_64-linux-gnu/libc.so.6:getaddrinfo` | available |
-| `files-opened-by-process` | `tracepoint:syscalls:sys_enter_openat` | listed verbatim | available |
-| `new-processes` | `tracepoint:sched:sched_process_exec` | listed verbatim | available |
-| `page-faults-by-process` | `software:page-faults` | `software:page-faults:` listed | available |
-| `slow-disk-io-by-process` | `tracepoint:block:block_rq_issue`, `tracepoint:block:block_rq_complete` | both listed verbatim | available |
-| `syscall-counts-by-process` | `tracepoint:raw_syscalls:sys_enter` | listed verbatim | available |
-| `tcp-connects` | `tracepoint:sock:inet_sock_set_state` | listed verbatim | available |
-| `tcp-retransmits` | `tracepoint:tcp:tcp_retransmit_skb` (+ `interval:s:1`) | both listed (`interval:s:` is synthetic) | available |
+| Recipe                      | `requires`                                                              | `bpftrace -l` result                                             | Status    |
+| --------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------- | --------- |
+| `block-latency-histogram`   | `tracepoint:block:block_rq_issue`, `tracepoint:block:block_rq_complete` | both listed verbatim                                             | available |
+| `cpu-by-process`            | `profile:hz:99`                                                         | `profile:hz:` listed                                             | available |
+| `dns-lookups`               | `uprobe:libc:getaddrinfo`                                               | resolved to `uprobe:/lib/x86_64-linux-gnu/libc.so.6:getaddrinfo` | available |
+| `files-opened-by-process`   | `tracepoint:syscalls:sys_enter_openat`                                  | listed verbatim                                                  | available |
+| `new-processes`             | `tracepoint:sched:sched_process_exec`                                   | listed verbatim                                                  | available |
+| `page-faults-by-process`    | `software:page-faults`                                                  | `software:page-faults:` listed                                   | available |
+| `slow-disk-io-by-process`   | `tracepoint:block:block_rq_issue`, `tracepoint:block:block_rq_complete` | both listed verbatim                                             | available |
+| `syscall-counts-by-process` | `tracepoint:raw_syscalls:sys_enter`                                     | listed verbatim                                                  | available |
+| `tcp-connects`              | `tracepoint:sock:inet_sock_set_state`                                   | listed verbatim                                                  | available |
+| `tcp-retransmits`           | `tracepoint:tcp:tcp_retransmit_skb` (+ `interval:s:1`)                  | both listed (`interval:s:` is synthetic)                         | available |
 
 Negative control: `bpftrace -l tracepoint:doesnotexist:nope_xyz` returns no
 output, confirming non-empty output above means "present".
@@ -52,7 +52,7 @@ output, confirming non-empty output above means "present".
    normal user's PATH but not root's — an environment gap, not a script bug,
    so the script was left unchanged. Fix: run with the user-local bin dir on
    PATH, e.g. `wsl -u root bash -lc 'export
-   PATH=$PATH:/home/faizan/.local/bin && bash scripts/check-env.sh'`.
+PATH=$PATH:/home/faizan/.local/bin && bash scripts/check-env.sh'`.
 2. Node in WSL is nvm-managed (`~/.nvm/versions/node/v24.15.0/bin/node`,
    v24.15.0) and absent from non-interactive shells (nvm init lives in
    `.bashrc`, which early-returns when non-interactive). `pnpm` in WSL
