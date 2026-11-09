@@ -21,6 +21,7 @@ COPY recipes recipes
 FROM node:22-slim
 
 WORKDIR /app
+# devDeps retained: runtime executes TS via tsx with no build step.
 COPY --from=builder /app /app
 
 ENV HOST=0.0.0.0 \

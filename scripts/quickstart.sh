@@ -17,9 +17,16 @@ if [ ! -f .env ]; then
   printf 'quickstart: created .env from .env.example (recipe-only defaults)\n'
 fi
 
+# Align shell defaults below with compose interpolation (compose reads .env itself).
+set -a
+# shellcheck disable=SC1091
+. ./.env
+set +a
+
 docker compose up --build -d
 
 printf 'quickstart: waiting for services to turn healthy...\n'
+healthy=0
 for _ in $(seq 1 36); do
   healthy=0
   for svc in agent api web; do
@@ -34,6 +41,9 @@ for _ in $(seq 1 36); do
   sleep 5
 done
 docker compose ps
+if [ "$healthy" -lt 3 ]; then
+  fail "services did not turn healthy in time (healthy=$healthy/3)"
+fi
 
 printf 'quickstart: web UI http://localhost:%s api http://localhost:%s (via web /api proxy)\n' \
   "${WEB_PORT:-5173}" "${WEB_PORT:-5173}"

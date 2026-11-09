@@ -120,7 +120,7 @@ func bindAllowed(host string) bool {
 	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
 }
 
-// ListenAndServe binds loopback only and serves until ctx ends.
+// ListenAndServe binds loopback or wildcard and serves until ctx ends.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	host, _, err := net.SplitHostPort(s.addr)
 	if err != nil {
