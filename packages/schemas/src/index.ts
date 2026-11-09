@@ -19,6 +19,16 @@ export const ValidateResponseSchema = z
   })
   .strict();
 
+export const ExplainRequestSchema = z.object({ script: ScriptSchema }).strict();
+
+export const ExplainResponseSchema = z
+  .object({
+    explanation: z.string().min(1).max(2048),
+    cached: z.boolean(),
+    model: z.string().min(1).max(128),
+  })
+  .strict();
+
 export const CreateRunRequestSchema = z
   .object({ script: ScriptSchema, duration_s: DurationSchema.optional() })
   .strict();
@@ -155,6 +165,8 @@ export const GenerateResponseSchema = z
 
 export type ValidateRequest = z.infer<typeof ValidateRequestSchema>;
 export type ValidateResponse = z.infer<typeof ValidateResponseSchema>;
+export type ExplainRequest = z.infer<typeof ExplainRequestSchema>;
+export type ExplainResponse = z.infer<typeof ExplainResponseSchema>;
 export type CreateRunRequest = z.infer<typeof CreateRunRequestSchema>;
 export type CreateRunResponse = z.infer<typeof CreateRunResponseSchema>;
 export type Recipe = z.infer<typeof RecipeSchema>;

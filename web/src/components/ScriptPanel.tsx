@@ -13,6 +13,7 @@ import type * as Monaco from "monaco-editor";
 import { configureMonaco } from "../lib/monaco.js";
 import { errorToMarker } from "../lib/markers.js";
 import { useAppStore } from "../store/useAppStore.js";
+import { ExplainSection } from "./ExplainSection.js";
 import { Badge } from "./ui/badge.js";
 import { Card, CardBody, CardHeader, CardTitle } from "./ui/card.js";
 
@@ -117,6 +118,7 @@ class EditorErrorBoundary extends Component<
 
 export function ScriptPanel({ validating }: { validating: boolean }) {
   const generation = useAppStore((s) => s.generation);
+  const script = useAppStore((s) => s.script);
   const validationOk = useAppStore((s) => s.validationOk);
   const validationErrors = useAppStore((s) => s.validationErrors);
   const validationProbes = useAppStore((s) => s.validationProbes);
@@ -171,15 +173,12 @@ export function ScriptPanel({ validating }: { validating: boolean }) {
         )}
 
         <div>
-          <h3 className="mb-1 text-xs font-semibold">Explanation</h3>
+          <h3 className="mb-1 text-xs font-semibold">Generation summary</h3>
           <p className="text-sm text-muted-foreground">
             {generation.explanation}
           </p>
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            Server-side probe walkthrough unavailable; showing the generation
-            summary instead.
-          </p>
         </div>
+        <ExplainSection script={script} />
 
         {generation.warnings.length > 0 && (
           <div>

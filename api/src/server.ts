@@ -13,6 +13,8 @@ import {
   CreateRunRequestSchema,
   CreateRunResponseSchema,
   EventEnvelopeSchema,
+  ExplainRequestSchema,
+  ExplainResponseSchema,
   GenerateRequestSchema,
   HealthResponseSchema,
   RecipeListResponseSchema,
@@ -29,6 +31,7 @@ import {
   type AgentHealth,
 } from "./agent-client.js";
 import { indexRecipes, migrate, openDb, searchRecipes } from "./db.js";
+import { ExplainValidationError, explainScriptText } from "./explain.js";
 import {
   RefusalError,
   ValidationFailedError,
@@ -398,6 +401,57 @@ export async function buildApp(
       }
     },
   );
+
+  app.post("/api/explain", async (req: FastifyRequest, reply: FastifyReply) => {
+    if (!checkGenerateRate(req.ip, Date.now())) {
+      return reply
+        .code(429)
+        .header("retry-after", String(generateWindowS))
+        .send({ error: "rate limit exceeded", code: "RATE_LIMITED" });
+    }
+    const parsed = ExplainRequestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .code(400)
+        .send({ error: "invalid request", code: "VALIDATION_FAILED" });
+    }
+    const mode = opts.llmMode ?? "mock";
+    const llm = mode === "mock" ? null : liveLlm;
+    if (mode !== "mock" && llm === null) {
+      return reply.code(503).send({
+        error: "LLM unavailable in this environment",
+        code: "LLM_UNAVAILABLE",
+      });
+    }
+    try {
+      const result = await explainScriptText(parsed.data.script, {
+        db: database,
+        recipesDir: opts.recipesDir,
+        llm,
+      });
+      return reply.send(ExplainResponseSchema.parse(result));
+    } catch (err) {
+      if (err instanceof ExplainValidationError) {
+        return reply.code(422).send({
+          error: "validation failed",
+          code: "VALIDATION_FAILED",
+          errors: err.errors,
+        });
+      }
+      if (err instanceof LlmUnavailableError) {
+        return reply.code(503).send({
+          error: "LLM unavailable in this environment",
+          code: "LLM_UNAVAILABLE",
+        });
+      }
+      if (err instanceof LlmRequestError) {
+        return reply
+          .code(502)
+          .send({ error: "LLM request failed", code: "LLM_ERROR" });
+      }
+      throw err;
+    }
+  });
 
   app.post(
     "/api/validate",
