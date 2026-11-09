@@ -1,0 +1,10 @@
+{"type": "printf", "data": "pid=39508 comm=ls file=/bin/ls\n"}
+{"type": "printf", "data": "pid=39509 comm=ls file=/bin/ls\n"}
+{"type": "printf", "data": "pid=39510 comm=ls file=/bin/ls\n"}
+{"type": "printf", "data": "pid=39511 comm=ls file=/bin/ls\n"}
+{"type": "printf", "data": "pid=39512 comm=ls file=/bin/ls\n"}
+{"type": "printf", "data": "pid=39513 comm=ls file=/bin/ls\n"}
+{"type": "printf", "data": "pid=39514 comm=ls file=/bin/ls\n"}
+{"type": "printf", "data": "pid=39515 comm=ls file=/bin/ls\n"}
+{"type": "printf", "data": "pid=39516 comm=ls file=/bin/ls\n"}
+{"type": "printf", "data": "pid=39517 comm=ls file=/bin/ls\n"}

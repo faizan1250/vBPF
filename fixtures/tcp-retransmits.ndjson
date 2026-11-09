@@ -1,0 +1,10 @@
+{"type": "map", "data": {"@retrans": {"swapper/5": 1, "swapper/7": 2, "swapper/0": 5, "iperf3": 28}}}
+{"type": "map", "data": {"@retrans": {"swapper/4": 3, "swapper/0": 5, "swapper/2": 7, "swapper/7": 9, "iperf3": 40}}}
+{"type": "map", "data": {"@retrans": {"swapper/7": 2, "swapper/4": 7, "swapper/2": 9, "swapper/0": 13, "iperf3": 20}}}
+{"type": "map", "data": {"@retrans": {"swapper/4": 1, "ksoftirqd/0": 3, "swapper/0": 7, "iperf3": 25}}}
+{"type": "map", "data": {"@retrans": {"swapper/4": 3, "swapper/7": 4, "swapper/0": 4, "swapper/2": 11, "iperf3": 16}}}
+{"type": "map", "data": {"@retrans": {"ksoftirqd/4": 1, "swapper/0": 2, "swapper/7": 4, "swapper/2": 5, "swapper/4": 6, "iperf3": 43}}}
+{"type": "map", "data": {"@retrans": {"swapper/7": 3, "ksoftirqd/0": 3, "swapper/0": 4, "swapper/2": 15, "iperf3": 16}}}
+{"type": "map", "data": {"@retrans": {"swapper/0": 5, "swapper/7": 7, "swapper/2": 10, "iperf3": 12}}}
+{"type": "map", "data": {"@retrans": {"swapper/7": 5, "swapper/2": 6, "swapper/0": 7, "iperf3": 17}}}
+{"type": "map", "data": {"@retrans": {"swapper/1": 1, "iperf3": 1}}}
