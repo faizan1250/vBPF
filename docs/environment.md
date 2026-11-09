@@ -106,3 +106,32 @@ test-integration` as above.
   expectation.
 - D-R05-2: No `Makefile` change for root's missing `go`. Same class of
   environment gap as D-R04-1; passing `GO=...` on invocation is the fix.
+
+## Platform matrix (R-09) — 2026-11-10
+
+Re-verified as root via `wsl -u root` (same root path as R-04/R-05).
+
+### Tested: WSL2
+
+- Distro: Ubuntu 24.04.5 LTS (Noble) userspace on the Microsoft WSL2 kernel.
+- Kernel (`uname -r`): `6.6.87.2-microsoft-standard-WSL2` (x86_64).
+- bpftrace: v0.20.2. BTF: present, `/sys/kernel/btf/vmlinux`
+  (6,050,732 bytes, root-readable).
+- All 10 recipe probes list via `bpftrace -l` (see R-04 table above; no
+  change since 2026-11-09).
+
+### Untested: Ubuntu 22.04 and 24.04 VMs (stock kernels)
+
+No VM tooling is available on this machine, so neither VM was tested:
+
+- `multipass` is not installed (`where.exe multipass` finds nothing).
+- `wsl --list --verbose` shows a single distro (`Ubuntu`, VERSION 2) plus
+  `docker-desktop`; there is no second distro to stand in for 22.04.
+- Hyper-V feature state could not be confirmed without elevation
+  (`Get-WindowsOptionalFeature` requires elevation); no VM exists regardless.
+- Note: WSL2 runs Ubuntu 24.04 _userspace_ on the Microsoft WSL2 kernel, so
+  it does not count as testing the stock Ubuntu 24.04 kernel.
+
+Per R-09 these are recorded as "untested", not "pending", in the README
+support table. Minimum requirement stays 5.8+ with BTF; stock 22.04/24.04
+kernels and older 5.x kernels are unverified.

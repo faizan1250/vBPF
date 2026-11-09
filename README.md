@@ -143,14 +143,14 @@ Default limits:
 
 ## Requirements
 
-| Requirement | Details                                                                           |
-| ----------- | --------------------------------------------------------------------------------- |
-| OS          | Linux (Ubuntu 22.04 / 24.04 tested) or Windows 11 with WSL2                       |
-| Kernel      | 5.8+ with BTF (`/sys/kernel/btf/vmlinux` must exist)                              |
-| bpftrace    | 0.20+ recommended                                                                 |
-| Privileges  | Root for the agent only                                                           |
-| Node / Go   | Node 22+ with pnpm 9+, Go 1.23+ (native development only)                         |
-| LLM access  | A provider API key (Groq by default; optional: recipe-only mode works without it) |
+| Requirement | Details                                                                                                 |
+| ----------- | ------------------------------------------------------------------------------------------------------- |
+| OS          | Linux (WSL2 tested; native installs and VMs untested — see [Supported platforms](#supported-platforms)) |
+| Kernel      | 5.8+ with BTF (`/sys/kernel/btf/vmlinux` must exist)                                                    |
+| bpftrace    | 0.20+ recommended                                                                                       |
+| Privileges  | Root for the agent only                                                                                 |
+| Node / Go   | Node 22+ with pnpm 9+, Go 1.23+ (native development only)                                               |
+| LLM access  | A provider API key (Groq by default; optional: recipe-only mode works without it)                       |
 
 Quick check on your machine:
 
@@ -325,10 +325,17 @@ Probe availability depends on your kernel. A recipe that needs a missing tracepo
 
 | Environment                                    | Kernel                                                     | Status                                                                             |
 | ---------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Ubuntu 24.04 (VM)                              | TBD                                                        | Pending (deferred)                                                                 |
-| Ubuntu 22.04 (VM)                              | TBD                                                        | Pending (deferred)                                                                 |
-| WSL2 Ubuntu                                    | `6.6.87.2-microsoft-standard-WSL2`                         | Probed 2026-11-09: BTF present, bpftrace `v0.20.2`                                 |
+| Ubuntu 24.04 (VM, stock kernel)                | n/a                                                        | Untested — no Multipass binary and no second VM available on this machine          |
+| Ubuntu 22.04 (VM, stock kernel)                | n/a                                                        | Untested — no Multipass binary and no second VM available on this machine          |
+| WSL2 Ubuntu 24.04 userspace                    | `6.6.87.2-microsoft-standard-WSL2`                         | Tested 2026-11-10: BTF present, bpftrace `v0.20.2`, all 10 recipe probes listed    |
 | Compose quickstart (agent image, Ubuntu 24.04) | Host kernel (tested on `6.6.87.2-microsoft-standard-WSL2`) | Verified 2026-11-09: web/api/agent healthy, 5 s `openat` probe streamed 587 events |
+
+**Supported kernels:** 5.8+ with BTF (`/sys/kernel/btf/vmlinux` must exist).
+Verified only on `6.6.87.2-microsoft-standard-WSL2` (x86_64); stock Ubuntu
+22.04/24.04 kernels and older 5.x kernels are untested, so a recipe that
+needs a missing tracepoint reports `PROBE_NOT_FOUND` with a suggestion.
+WSL2 runs Ubuntu 24.04 userspace on the Microsoft WSL2 kernel, which is not
+equivalent to testing the stock Ubuntu 24.04 kernel.
 
 Per-environment recipe notes and fallbacks: [`docs/environment.md`](docs/environment.md).
 
