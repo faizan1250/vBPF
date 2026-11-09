@@ -61,7 +61,11 @@ export const HealthResponseSchema = z
     ok: z.literal(true),
     agent: z.union([
       z
-        .object({ reachable: z.literal(true), health: AgentHealthSchema })
+        .object({
+          reachable: z.literal(true),
+          health: AgentHealthSchema,
+          warnings: z.array(z.string()),
+        })
         .strict(),
       z
         .object({

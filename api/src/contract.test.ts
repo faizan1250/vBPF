@@ -2,13 +2,18 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createServer, type IncomingMessage, type Server } from "node:http";
+import {
+  createServer,
+  request,
+  type IncomingMessage,
+  type Server,
+} from "node:http";
 
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 
-import { buildApp } from "./server.js";
+import { buildApp, healthWarnings } from "./server.js";
 
 const TOKEN = "test-token-123";
 const HEALTH = {
@@ -151,6 +156,19 @@ function startFakeAgent(): Promise<FakeAgent> {
           }),
       });
     });
+  });
+}
+
+// node:http honors an explicit Host header (undici fetch does not), so Host
+// gate tests use this instead of fetch.
+function getWithHost(url: string, host: string): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const req = request(url, { headers: { host } }, (res) => {
+      res.resume();
+      res.on("end", () => resolve(res.statusCode ?? 0));
+    });
+    req.on("error", reject);
+    req.end();
   });
 }
 
@@ -335,7 +353,7 @@ describe("health and recipes", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       ok: true,
-      agent: { reachable: true, health: HEALTH },
+      agent: { reachable: true, health: HEALTH, warnings: ["NO_PRIVILEGE"] },
     });
   });
 
@@ -354,6 +372,43 @@ describe("health and recipes", () => {
       headers: { origin: "http://evil.example" },
     });
     expect(res.status).toBe(403);
+  });
+
+  it("rejects non-loopback host", async () => {
+    const status = await getWithHost(`${base}/api/health`, "evil.example");
+    expect(status).toBe(403);
+  });
+
+  it("allows loopback hosts with any port", async () => {
+    for (const host of ["127.0.0.1:1", "localhost:5173", "[::1]:8080"]) {
+      expect(await getWithHost(`${base}/api/health`, host), host).toBe(200);
+    }
+  });
+});
+
+describe("health warnings", () => {
+  it("maps missing privileges and BTF to taxonomy codes", () => {
+    expect(
+      healthWarnings({
+        ...HEALTH,
+        root: true,
+        btf: true,
+        tracefs: true,
+      }),
+    ).toEqual([]);
+    expect(healthWarnings({ ...HEALTH, root: false })).toEqual([
+      "NO_PRIVILEGE",
+    ]);
+    expect(healthWarnings({ ...HEALTH, root: true, btf: false })).toEqual([
+      "KERNEL_UNSUPPORTED",
+    ]);
+    expect(healthWarnings({ ...HEALTH, root: true, tracefs: false })).toEqual([
+      "KERNEL_UNSUPPORTED",
+    ]);
+    expect(healthWarnings({ ...HEALTH, root: false, btf: false })).toEqual([
+      "NO_PRIVILEGE",
+      "KERNEL_UNSUPPORTED",
+    ]);
   });
 });
 

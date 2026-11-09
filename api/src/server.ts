@@ -26,6 +26,7 @@ import {
   AgentProxyError,
   fetchAgentHealth,
   readAgentToken,
+  type AgentHealth,
 } from "./agent-client.js";
 import { indexRecipes, migrate, openDb, searchRecipes } from "./db.js";
 import {
@@ -44,14 +45,70 @@ export interface AppOptions {
   webOrigin: string;
   llmModel?: string;
   llmMode?: "mock" | "live";
+  generateRateLimit?: { max: number; windowMs: number };
 }
 
 const BODY_LIMIT = 64 * 1024;
 const DEFAULT_DURATION_S = 10;
+// POST /api/generate budget: 10 requests per IP per minute. LLM-backed
+// generation is the most expensive handler; per-route limiter only.
+const GENERATE_RATE_MAX = 10;
+const GENERATE_RATE_WINDOW_MS = 60_000;
 
 function agentWsUrl(agentUrl: string, path: string): string {
   const base = agentUrl.replace(/\/$/, "").replace(/^http/, "ws");
   return base + path;
+}
+
+// Loopback-only Host gate (DNS-rebinding protection). The API binds
+// loopback, so a non-loopback Host means a rebinding or proxy attack.
+// WEB_ORIGIN's host is loopback too, so legit browser traffic passes.
+function hostIsLoopback(host: string | undefined): boolean {
+  if (typeof host !== "string" || host === "") return false;
+  let name = host.toLowerCase();
+  if (name.startsWith("[")) {
+    const end = name.indexOf("]");
+    if (end < 0) return false;
+    name = name.slice(0, end + 1);
+  } else if (name.indexOf(":") === name.lastIndexOf(":")) {
+    name = name.slice(0, name.indexOf(":"));
+  }
+  return (
+    name === "127.0.0.1" ||
+    name === "localhost" ||
+    name === "[::1]" ||
+    name === "::1"
+  );
+}
+
+// Fixed-window per-IP limiter scoped to one route. Returns false when the
+// caller is over budget; state lives on the app instance (no shared global).
+function createRouteLimiter(
+  max: number,
+  windowMs: number,
+): (ip: string, now: number) => boolean {
+  const hits = new Map<string, number[]>();
+  return (ip: string, now: number): boolean => {
+    let arr = hits.get(ip);
+    if (arr === undefined) {
+      arr = [];
+      hits.set(ip, arr);
+    }
+    while (arr.length > 0 && (arr[0] ?? 0) <= now - windowMs) arr.shift();
+    if (arr.length >= max) return false;
+    arr.push(now);
+    if (hits.size > 1000) {
+      for (const [key, times] of hits) {
+        if (
+          times.length === 0 ||
+          (times[times.length - 1] ?? 0) <= now - windowMs
+        ) {
+          hits.delete(key);
+        }
+      }
+    }
+    return true;
+  };
 }
 
 async function proxyVerbatim(
@@ -130,6 +187,15 @@ function agentDelete(
     .finally(() => clearTimeout(timer));
 }
 
+// Derives taxonomy warning codes from agent health signals. Exported for
+// tests; the full mapping (including gaps) lives in docs/security.md.
+export function healthWarnings(health: AgentHealth): string[] {
+  const warnings: string[] = [];
+  if (!health.root) warnings.push("NO_PRIVILEGE");
+  if (!health.btf || !health.tracefs) warnings.push("KERNEL_UNSUPPORTED");
+  return warnings;
+}
+
 export async function buildApp(
   opts: AppOptions,
   db?: Database.Database,
@@ -161,7 +227,20 @@ export async function buildApp(
   await app.register(cors, { origin: opts.webOrigin, credentials: false });
   await app.register(websocket);
 
+  const checkGenerateRate = createRouteLimiter(
+    opts.generateRateLimit?.max ?? GENERATE_RATE_MAX,
+    opts.generateRateLimit?.windowMs ?? GENERATE_RATE_WINDOW_MS,
+  );
+  const generateWindowS = Math.ceil(
+    (opts.generateRateLimit?.windowMs ?? GENERATE_RATE_WINDOW_MS) / 1000,
+  );
+
   app.addHook("onRequest", async (req, reply) => {
+    if (!hostIsLoopback(req.headers.host)) {
+      return reply
+        .code(403)
+        .send({ error: "forbidden host", code: "FORBIDDEN" });
+    }
     const origin = req.headers.origin;
     if (typeof origin === "string" && origin !== opts.webOrigin) {
       return reply
@@ -176,7 +255,11 @@ export async function buildApp(
       return reply.send(
         HealthResponseSchema.parse({
           ok: true,
-          agent: { reachable: true, health },
+          agent: {
+            reachable: true,
+            health,
+            warnings: healthWarnings(health),
+          },
         }),
       );
     } catch (err) {
@@ -206,6 +289,12 @@ export async function buildApp(
   app.post(
     "/api/generate",
     async (req: FastifyRequest, reply: FastifyReply) => {
+      if (!checkGenerateRate(req.ip, Date.now())) {
+        return reply
+          .code(429)
+          .header("retry-after", String(generateWindowS))
+          .send({ error: "rate limit exceeded", code: "RATE_LIMITED" });
+      }
       const parsed = GenerateRequestSchema.safeParse(req.body);
       if (!parsed.success) {
         return reply
