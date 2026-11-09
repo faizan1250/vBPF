@@ -113,6 +113,7 @@ func realMain(args []string, stdout, stderr io.Writer) int {
 func realServe(args []string, _, stderr io.Writer) int {
 	addr := "127.0.0.1:8787"
 	tokenFile := ""
+	allowedOrigins := server.AllowedOriginsFromEnv()
 	bin := os.Getenv("BPFTRACE_PATH")
 	for i := 0; i < len(args); i++ {
 		a := args[i]
@@ -122,6 +123,11 @@ func realServe(args []string, _, stderr io.Writer) int {
 			addr = args[i]
 		case strings.HasPrefix(a, "--addr="):
 			addr = strings.TrimPrefix(a, "--addr=")
+		case a == "--allowed-origins" && i+1 < len(args):
+			i++
+			allowedOrigins = server.SplitOrigins(args[i])
+		case strings.HasPrefix(a, "--allowed-origins="):
+			allowedOrigins = server.SplitOrigins(strings.TrimPrefix(a, "--allowed-origins="))
 		case a == "--token-file" && i+1 < len(args):
 			i++
 			tokenFile = args[i]
@@ -133,7 +139,7 @@ func realServe(args []string, _, stderr io.Writer) int {
 		case strings.HasPrefix(a, "--bpftrace="):
 			bin = strings.TrimPrefix(a, "--bpftrace=")
 		default:
-			efprintf(stderr, "usage: agent serve [--addr 127.0.0.1:8787] [--token-file run/agent.token]")
+			efprintf(stderr, "usage: agent serve [--addr 127.0.0.1:8787] [--token-file run/agent.token] [--allowed-origins https://app.example]")
 			return 2
 		}
 	}
@@ -147,11 +153,12 @@ func realServe(args []string, _, stderr io.Writer) int {
 		log.Info().Int("pids", swept).Msg("swept stale bpftrace children")
 	}
 	srv, err := server.New(server.Config{
-		Addr:         addr,
-		TokenFile:    tokenFile,
-		BPFtracePath: bin,
-		Logger:       log,
-		StartTime:    time.Now(),
+		Addr:           addr,
+		TokenFile:      tokenFile,
+		AllowedOrigins: allowedOrigins,
+		BPFtracePath:   bin,
+		Logger:         log,
+		StartTime:      time.Now(),
 	})
 	if err != nil {
 		efprintf(stderr, "agent:", err)

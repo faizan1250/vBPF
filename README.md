@@ -238,22 +238,23 @@ Stop the agent with `./scripts/dev-agent.sh stop`.
 
 Configuration is via environment variables (`.env` for local development). Never commit `.env`.
 
-| Variable                | Default                 | Description                                                                 |
-| ----------------------- | ----------------------- | --------------------------------------------------------------------------- |
-| `LLM_MODEL`             | `claude-sonnet-5-5`     | Default model; per-provider `LLM_<NAME>_MODEL` takes precedence             |
-| `LLM_MODE`              | `mock`                  | `mock` (CI-safe, no secrets) or live (requires a provider key, never in CI) |
-| `LLM_PROVIDER_CHAIN`    | `groq`                  | Comma-separated live providers tried in order (see below)                   |
-| `AGENT_URL`             | `http://127.0.0.1:8787` | Where the API reaches the agent                                             |
-| `AGENT_TOKEN_FILE`      | `./run/agent.token`     | Bearer token file (mode `0600`), created by the agent on first start        |
-| `PORT` / `HOST`         | `8080` / `127.0.0.1`    | Where the API listens                                                       |
-| `WEB_ORIGIN`            | `http://localhost:5173` | Allowed web origin (CORS)                                                   |
-| `DATABASE_PATH`         | `./run/api.sqlite3`     | SQLite database file                                                        |
-| `RECIPES_DIR`           | `./recipes`             | Recipe library directory                                                    |
-| `DEFAULT_DURATION_S`    | `10`                    | Default probe duration                                                      |
-| `MAX_DURATION_S`        | `60`                    | Hard maximum duration                                                       |
-| `BPFTRACE_MAP_KEYS_MAX` | `4096`                  | Cap on map keys per probe                                                   |
-| `BPFTRACE_MAX_PROBES`   | `50`                    | Cap on attached probes (limits wildcard expansion)                          |
-| `BPFTRACE_STRLEN`       | `64`                    | Maximum string length captured                                              |
+| Variable                | Default                 | Description                                                                   |
+| ----------------------- | ----------------------- | ----------------------------------------------------------------------------- |
+| `LLM_MODEL`             | `claude-sonnet-5-5`     | Default model; per-provider `LLM_<NAME>_MODEL` takes precedence               |
+| `LLM_MODE`              | `mock`                  | `mock` (CI-safe, no secrets) or live (requires a provider key, never in CI)   |
+| `LLM_PROVIDER_CHAIN`    | `groq`                  | Comma-separated live providers tried in order (see below)                     |
+| `AGENT_URL`             | `http://127.0.0.1:8787` | Where the API reaches the agent                                               |
+| `AGENT_TOKEN_FILE`      | `./run/agent.token`     | Bearer token file (mode `0600`), created by the agent on first start          |
+| `AGENT_ALLOWED_ORIGINS` | _(none)_                | Comma-separated WebSocket origin allowlist; empty refuses all browser origins |
+| `PORT` / `HOST`         | `8080` / `127.0.0.1`    | Where the API listens                                                         |
+| `WEB_ORIGIN`            | `http://localhost:5173` | Allowed web origin (CORS)                                                     |
+| `DATABASE_PATH`         | `./run/api.sqlite3`     | SQLite database file                                                          |
+| `RECIPES_DIR`           | `./recipes`             | Recipe library directory                                                      |
+| `DEFAULT_DURATION_S`    | `10`                    | Default probe duration                                                        |
+| `MAX_DURATION_S`        | `60`                    | Hard maximum duration                                                         |
+| `BPFTRACE_MAP_KEYS_MAX` | `4096`                  | Cap on map keys per probe                                                     |
+| `BPFTRACE_MAX_PROBES`   | `50`                    | Cap on attached probes (limits wildcard expansion)                            |
+| `BPFTRACE_STRLEN`       | `64`                    | Maximum string length captured                                                |
 
 Limits can be lowered freely; raising them increases overhead and risk.
 

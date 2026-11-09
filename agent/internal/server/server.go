@@ -21,28 +21,34 @@ type Config struct {
 	Addr         string
 	TokenFile    string
 	BPFtracePath string
-	CatalogFn    func(ctx context.Context) ([]string, error)
-	RunFn        RunnerFunc
-	DryRun       DryRunFunc
-	ProbeArgs    ProbeArgsFunc
-	Health       *HealthProvider
-	Logger       zerolog.Logger
-	StartTime    time.Time
+	// AllowedOrigins is the WebSocket cross-origin allowlist, passed to
+	// websocket.Accept as OriginPatterns. Empty (the default) denies every
+	// browser origin; requests without an Origin header (server-to-server,
+	// like the API dial) and same-host origins are always allowed.
+	AllowedOrigins []string
+	CatalogFn      func(ctx context.Context) ([]string, error)
+	RunFn          RunnerFunc
+	DryRun         DryRunFunc
+	ProbeArgs      ProbeArgsFunc
+	Health         *HealthProvider
+	Logger         zerolog.Logger
+	StartTime      time.Time
 }
 
 // Server is the agent HTTP and WebSocket front end.
 type Server struct {
-	addr         string
-	token        string
-	mux          *http.ServeMux
-	runs         *Registry
-	catalog      *Catalog
-	health       *HealthProvider
-	dryRun       DryRunFunc
-	probeArgs    ProbeArgsFunc
-	logger       zerolog.Logger
-	startTime    time.Time
-	bpftracePath string
+	addr           string
+	token          string
+	allowedOrigins []string
+	mux            *http.ServeMux
+	runs           *Registry
+	catalog        *Catalog
+	health         *HealthProvider
+	dryRun         DryRunFunc
+	probeArgs      ProbeArgsFunc
+	logger         zerolog.Logger
+	startTime      time.Time
+	bpftracePath   string
 }
 
 // New loads or creates the bearer token and registers authenticated routes.
@@ -75,17 +81,18 @@ func New(cfg Config) (*Server, error) {
 		probeArgs = DefaultProbeArgs(cfg.BPFtracePath)
 	}
 	s := &Server{
-		addr:         cfg.Addr,
-		token:        tok,
-		mux:          http.NewServeMux(),
-		runs:         NewRegistry(cfg.RunFn, cfg.BPFtracePath, cfg.Logger),
-		catalog:      catalog,
-		health:       health,
-		dryRun:       dryRun,
-		probeArgs:    probeArgs,
-		logger:       cfg.Logger,
-		startTime:    cfg.StartTime,
-		bpftracePath: cfg.BPFtracePath,
+		addr:           cfg.Addr,
+		token:          tok,
+		allowedOrigins: cfg.AllowedOrigins,
+		mux:            http.NewServeMux(),
+		runs:           NewRegistry(cfg.RunFn, cfg.BPFtracePath, cfg.Logger),
+		catalog:        catalog,
+		health:         health,
+		dryRun:         dryRun,
+		probeArgs:      probeArgs,
+		logger:         cfg.Logger,
+		startTime:      cfg.StartTime,
+		bpftracePath:   cfg.BPFtracePath,
 	}
 	s.routes()
 	return s, nil
@@ -300,7 +307,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NOT_FOUND", "unknown run")
 		return
 	}
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: s.allowedOrigins})
 	if err != nil {
 		return
 	}
