@@ -35,6 +35,11 @@ import {
   makeMockLlm,
   runGenerate,
 } from "./generate.js";
+import {
+  LiveLlmChain,
+  LlmRequestError,
+  LlmUnavailableError,
+} from "./live-llm.js";
 import { loadRecipes } from "./recipes.js";
 
 export interface AppOptions {
@@ -45,6 +50,9 @@ export interface AppOptions {
   webOrigin: string;
   llmModel?: string;
   llmMode?: "mock" | "live";
+  llmChain?: string;
+  llmEnv?: NodeJS.ProcessEnv;
+  llmFetch?: typeof fetch;
   generateRateLimit?: { max: number; windowMs: number };
 }
 
@@ -240,6 +248,28 @@ export async function buildApp(
     (opts.generateRateLimit?.windowMs ?? GENERATE_RATE_WINDOW_MS) / 1000,
   );
 
+  // Live chain is built once and shared: key-disable and cooldown state
+  // persist across requests for the process lifetime.
+  const llmMode = opts.llmMode ?? "mock";
+  const liveChain =
+    llmMode === "live"
+      ? new LiveLlmChain({
+          env: opts.llmEnv ?? process.env,
+          fetchFn: opts.llmFetch,
+          chain: opts.llmChain,
+        })
+      : null;
+  const liveLlm = liveChain !== null && liveChain.configured ? liveChain : null;
+
+  const llmHealth = (): {
+    mode: "mock" | "live";
+    providers: Array<{
+      name: string;
+      state: "ready" | "cooldown" | "unconfigured" | "exhausted";
+      keys: number;
+    }>;
+  } => liveChain?.health() ?? { mode: llmMode, providers: [] };
+
   app.addHook("onRequest", async (req, reply) => {
     if (!hostIsLoopback(req.headers.host)) {
       return reply
@@ -260,6 +290,7 @@ export async function buildApp(
       return reply.send(
         HealthResponseSchema.parse({
           ok: true,
+          llm: llmHealth(),
           agent: {
             reachable: true,
             health,
@@ -272,6 +303,7 @@ export async function buildApp(
         return reply.send(
           HealthResponseSchema.parse({
             ok: true,
+            llm: llmHealth(),
             agent: {
               reachable: false,
               code: "AGENT_OFFLINE",
@@ -307,17 +339,16 @@ export async function buildApp(
           .send({ error: "invalid request", code: "VALIDATION_FAILED" });
       }
       const mode = opts.llmMode ?? "mock";
-      if (mode !== "mock") {
+      const llm =
+        mode === "mock"
+          ? makeMockLlm(database, opts.recipesDir, opts.llmModel ?? "mock")
+          : liveLlm;
+      if (llm === null) {
         return reply.code(503).send({
           error: "LLM unavailable in this environment",
           code: "LLM_UNAVAILABLE",
         });
       }
-      const llm = makeMockLlm(
-        database,
-        opts.recipesDir,
-        opts.llmModel ?? "mock",
-      );
       try {
         const result = await runGenerate(parsed.data.prompt, {
           sessionId: parsed.data.session_id,
@@ -351,6 +382,17 @@ export async function buildApp(
           return reply
             .code(503)
             .send({ error: "agent offline", code: "AGENT_OFFLINE" });
+        }
+        if (err instanceof LlmUnavailableError) {
+          return reply.code(503).send({
+            error: "LLM unavailable in this environment",
+            code: "LLM_UNAVAILABLE",
+          });
+        }
+        if (err instanceof LlmRequestError) {
+          return reply
+            .code(502)
+            .send({ error: "LLM request failed", code: "LLM_ERROR" });
         }
         throw err;
       }

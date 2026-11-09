@@ -26,6 +26,12 @@ export interface LlmClient {
   generate(prompt: string, feedback?: LlmFeedback): Promise<LlmOutput>;
 }
 
+/** Per-request result with provider/model attribution (live chains). */
+export interface LlmDetailedResult {
+  output: LlmOutput;
+  model: string;
+}
+
 const REFUSAL_PATTERNS = [
   /\bkill\b/i,
   /\brm\s+-?-?r?f?\b/i,

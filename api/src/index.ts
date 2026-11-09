@@ -13,6 +13,7 @@ const app = await buildApp({
   webOrigin: config.WEB_ORIGIN,
   llmModel: config.LLM_MODEL,
   llmMode: config.LLM_MODE,
+  llmChain: config.LLM_PROVIDER_CHAIN,
 });
 
 app.listen({ host: config.HOST, port: config.PORT }).catch((err: unknown) => {

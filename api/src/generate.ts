@@ -11,7 +11,13 @@ import {
   validateScript,
 } from "./agent-client.js";
 import { ensureSession, insertGeneration, searchRecipes } from "./db.js";
-import { MockLlm, type LlmClient } from "./llm.js";
+import {
+  MockLlm,
+  type LlmClient,
+  type LlmDetailedResult,
+  type LlmFeedback,
+  type LlmOutput,
+} from "./llm.js";
 import { buildGeneratePrompt, type RecipeWithBody } from "./prompts.js";
 import { extractKeywords } from "./retrieval.js";
 import { staticValidate, truncateErrors } from "./validator.js";
@@ -24,6 +30,27 @@ export interface GenerateDeps {
   llm: LlmClient;
   searchProbesFn?: typeof searchProbes;
   validateAgentFn?: typeof validateScript;
+}
+
+/** Live chains report per-request attribution; MockLlm only has .model. */
+type PossiblyDetailedLlm = LlmClient & {
+  generateDetailed?: (
+    prompt: string,
+    feedback?: LlmFeedback,
+  ) => Promise<LlmDetailedResult>;
+};
+
+async function generateWithAttribution(
+  llm: LlmClient,
+  prompt: string,
+  feedback?: LlmFeedback,
+): Promise<{ out: LlmOutput; model: string }> {
+  const detailed = (llm as PossiblyDetailedLlm).generateDetailed;
+  if (typeof detailed === "function") {
+    const result = await detailed.call(llm, prompt, feedback);
+    return { out: result.output, model: result.model };
+  }
+  return { out: await llm.generate(prompt, feedback), model: llm.model };
 }
 
 export class RefusalError extends Error {
@@ -131,10 +158,12 @@ export async function runGenerate(
   let lastErrors: string[] = [];
   let previousScript = "";
   let warnings: string[] = [];
+  let modelUsed = llm.model;
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     attempts = attempt;
-    const out = await llm.generate(
+    const generated = await generateWithAttribution(
+      llm,
       attempt === 1
         ? assembled
         : `${assembled}\n\n==FEEDBACK==\nPrevious script:\n${previousScript}\nErrors:\n${truncateErrors(lastErrors).join("\n")}\nFix the script and return full JSON again.`,
@@ -142,6 +171,8 @@ export async function runGenerate(
         ? undefined
         : { previousScript, errors: truncateErrors(lastErrors) },
     );
+    const out = generated.out;
+    modelUsed = generated.model;
     if (out.refusal !== null && out.refusal !== "") {
       const latencyMs = Date.now() - started;
       insertGeneration(db, {
@@ -154,7 +185,7 @@ export async function runGenerate(
         duration_s: null,
         validation_status: "refused",
         attempts,
-        model: llm.model,
+        model: modelUsed,
         based_on_recipe: basedOnRecipe,
         warnings: JSON.stringify([]),
         refusal: out.refusal,
@@ -195,7 +226,7 @@ export async function runGenerate(
       duration_s: out.duration_s,
       validation_status: "ok",
       attempts,
-      model: llm.model,
+      model: modelUsed,
       based_on_recipe: basedOnRecipe,
       warnings: JSON.stringify(warnings),
       refusal: null,
@@ -224,7 +255,7 @@ export async function runGenerate(
     duration_s: null,
     validation_status: "failed",
     attempts,
-    model: llm.model,
+    model: modelUsed,
     based_on_recipe: basedOnRecipe,
     warnings: JSON.stringify(warnings),
     refusal: null,

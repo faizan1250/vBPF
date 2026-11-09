@@ -56,9 +56,25 @@ export const AgentHealthSchema = z
   })
   .strict();
 
+export const LlmProviderHealthSchema = z
+  .object({
+    name: z.string().min(1).max(64),
+    state: z.enum(["ready", "cooldown", "unconfigured", "exhausted"]),
+    keys: z.number().int().min(0),
+  })
+  .strict();
+
+export const LlmHealthSchema = z
+  .object({
+    mode: z.enum(["mock", "live"]),
+    providers: z.array(LlmProviderHealthSchema).max(16),
+  })
+  .strict();
+
 export const HealthResponseSchema = z
   .object({
     ok: z.literal(true),
+    llm: LlmHealthSchema.optional(),
     agent: z.union([
       z
         .object({
@@ -142,6 +158,8 @@ export type ValidateResponse = z.infer<typeof ValidateResponseSchema>;
 export type CreateRunRequest = z.infer<typeof CreateRunRequestSchema>;
 export type CreateRunResponse = z.infer<typeof CreateRunResponseSchema>;
 export type Recipe = z.infer<typeof RecipeSchema>;
+export type LlmProviderHealth = z.infer<typeof LlmProviderHealthSchema>;
+export type LlmHealth = z.infer<typeof LlmHealthSchema>;
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 export type EventEnvelope = z.infer<typeof EventEnvelopeSchema>;
 export type ChartType = z.infer<typeof ChartTypeSchema>;
