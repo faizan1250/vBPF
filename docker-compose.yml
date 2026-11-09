@@ -12,9 +12,11 @@ services:
     privileged: true
     pid: host
     # Separate loopbacks per container, so the agent binds the wildcard here;
-    # the code still refuses a specific non-loopback address (see security.md).
+    # the code only allows it with AGENT_ALLOW_WILDCARD_BIND=1 (see security.md).
     command:
       ["serve", "--addr", "0.0.0.0:8787", "--token-file", "/token/agent.token"]
+    environment:
+      AGENT_ALLOW_WILDCARD_BIND: "1"
     volumes:
       - agent-token:/token
       - /sys/kernel/debug:/sys/kernel/debug:rw

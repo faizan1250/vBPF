@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -125,23 +126,43 @@ func (s *Server) auth(next http.Handler) http.Handler {
 	})
 }
 
-// bindAllowed reports whether the agent may listen on host. Loopback and
-// the wildcard address are allowed; a specific non-loopback address is
-// refused. The wildcard exists for container networks, where each container
-// has its own loopback: the compose file binds 0.0.0.0 without publishing
-// the port, so the agent stays reachable only inside that network.
+// WildcardBindEnv gates the 0.0.0.0/:: wildcard bind. Unset (or anything
+// but "1") means loopback only; compose sets it for the agent container,
+// where each container has its own loopback.
+const WildcardBindEnv = "AGENT_ALLOW_WILDCARD_BIND"
+
+// wildcardBindAllowed reports whether the wildcard bind is explicitly
+// opted in. Strict "1" match so "true"/"yes" never widen the bind.
+func wildcardBindAllowed() bool { return os.Getenv(WildcardBindEnv) == "1" }
+
+// bindAllowed reports whether the agent may listen on host. Loopback is
+// always allowed; the wildcard requires AGENT_ALLOW_WILDCARD_BIND=1; a
+// specific non-loopback address is always refused.
 func bindAllowed(host string) bool {
 	ip := net.ParseIP(host)
-	return ip != nil && (ip.IsLoopback() || ip.IsUnspecified())
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	if ip.IsUnspecified() {
+		return wildcardBindAllowed()
+	}
+	return false
 }
 
-// ListenAndServe binds loopback or wildcard and serves until ctx ends.
+// ListenAndServe binds loopback (or the wildcard with the opt-in flag) and
+// serves until ctx ends.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	host, _, err := net.SplitHostPort(s.addr)
 	if err != nil {
 		return fmt.Errorf("server: bad addr: %w", err)
 	}
 	if !bindAllowed(host) {
+		if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+			return fmt.Errorf("server: refuses wildcard bind %q without %s=1", host, WildcardBindEnv)
+		}
 		return fmt.Errorf("server: refuses non-loopback bind %q", host)
 	}
 	_ = s.catalog.Refresh(ctx)

@@ -439,7 +439,7 @@ More detail: [`docs/environment.md`](docs/environment.md).
 
 **Hardening in place:**
 
-- Agent and API bind to `127.0.0.1` by default.
+- Agent and API bind to `127.0.0.1` by default. The agent binds `0.0.0.0` only with `AGENT_ALLOW_WILDCARD_BIND=1` (compose sets it for the agent container); without the flag the wildcard bind is refused.
 - Bearer token required on every agent endpoint; compared in constant time; stored in a `0600` file.
 - `Origin` and `Host` validation on the API; no wildcard CORS.
 - Scripts run from private temp files, never through a shell.
