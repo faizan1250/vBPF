@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/faizan1250/vBPF/actions/workflows/ci.yml/badge.svg)](https://github.com/faizan1250/vBPF/actions/workflows/ci.yml)
 ![Linux](https://img.shields.io/badge/platform-Linux%20%7C%20WSL2-lightgrey)
-![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8)
+![Go](https://img.shields.io/badge/Go-1.23%2B-00ADD8)
 ![Node](https://img.shields.io/badge/Node-22%2B-339933)
 
 <!-- TODO: add a 60-90 second demo GIF or video: prompt -> probe review -> run -> live chart -->
@@ -149,7 +149,7 @@ Default limits:
 | Kernel      | 5.8+ with BTF (`/sys/kernel/btf/vmlinux` must exist)               |
 | bpftrace    | 0.20+ recommended                                                  |
 | Privileges  | Root for the agent only                                            |
-| Node / Go   | Node 22+ with pnpm 9+, Go 1.22+ (native development only)          |
+| Node / Go   | Node 22+ with pnpm 9+, Go 1.23+ (native development only)          |
 | LLM access  | An Anthropic API key (optional: recipe-only mode works without it) |
 
 Quick check on your machine:
@@ -313,8 +313,8 @@ Probe availability depends on your kernel. A recipe that needs a missing tracepo
 
 | Environment                                    | Kernel                                                     | Status                                                                             |
 | ---------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Ubuntu 24.04 (VM)                              | TBD                                                        | Pending                                                                            |
-| Ubuntu 22.04 (VM)                              | TBD                                                        | Pending                                                                            |
+| Ubuntu 24.04 (VM)                              | TBD                                                        | Pending (deferred)                                                                 |
+| Ubuntu 22.04 (VM)                              | TBD                                                        | Pending (deferred)                                                                 |
 | WSL2 Ubuntu                                    | `6.6.87.2-microsoft-standard-WSL2`                         | Probed 2026-11-09: BTF present, bpftrace `v0.20.2`                                 |
 | Compose quickstart (agent image, Ubuntu 24.04) | Host kernel (tested on `6.6.87.2-microsoft-standard-WSL2`) | Verified 2026-11-09: web/api/agent healthy, 5 s `openat` probe streamed 587 events |
 
@@ -328,13 +328,17 @@ Generation quality is measured, not assumed. The checked-in harness is **mock-on
 
 Quality targets for the full harness:
 
-| Metric                                  | Target       | Latest           |
-| --------------------------------------- | ------------ | ---------------- |
-| Compiles on first try                   | at least 80% | not measured yet |
-| Compiles within retries                 | at least 95% | not measured yet |
-| Produces output when run                | TBD          | not measured yet |
-| Correct view type selected              | TBD          | not measured yet |
-| Adversarial prompts refused or rejected | 100%         | not measured yet |
+| Metric                                  | Target       | Latest (mock-only, 2026-11-09)                   |
+| --------------------------------------- | ------------ | ------------------------------------------------ |
+| Compiles on first try                   | at least 80% | 26/30 (87%)                                      |
+| Compiles within retries                 | at least 95% | 26/26 (100% of generatable)                      |
+| Produces output when run                | TBD          | SKIP (scripts compile-validated, never executed) |
+| Correct view type selected              | TBD          | 26/26 view-match, 26/26 probe-match              |
+| Adversarial prompts refused or rejected | 100%         | 30/30                                            |
+
+Full report: [`eval/reports/2026-11-09.md`](eval/reports/2026-11-09.md). Adversarial
+cases (4) are correctly refused, not generated, so generation metrics cover the
+remaining 26.
 
 Run it yourself:
 
@@ -380,9 +384,9 @@ Common tasks (run inside Linux or WSL, from the repository root):
 
 CI ([`ci.yml`](.github/workflows/ci.yml)) runs the same checks mock-only on every push/PR to `main`: lint, unit tests, contract check, mocked Playwright e2e, mock eval, and image-build checks. No secrets, no root, no privileged runs. Real-probe tests live in [`integration-manual.yml`](.github/workflows/integration-manual.yml) (`workflow_dispatch` only).
 
-**Testing without root.** `scripts/fake-bpftrace.sh` replays recorded output from `fixtures/`, so the parser, API, and UI can be developed and tested without a privileged environment.
+**Testing without root.** `scripts/fake-bpftrace.sh` replays recorded output from `fixtures/` (5 of 10 recipes have captured fixtures), so the parser, API, and UI can be developed and tested without a privileged environment.
 
-**Stack:** Go 1.22+, Node 22+, pnpm 9, Fastify, zod, SQLite, React, Vite, Tailwind, Monaco, Recharts, Playwright.
+**Stack:** Go 1.23+, Node 22+, pnpm 9, Fastify, zod, SQLite, React, Vite, Tailwind, Monaco, Recharts, Playwright.
 
 **Conventions:** Conventional Commits, `gofmt` and `golangci-lint`, strict TypeScript, `shellcheck` for scripts, and `go test -race` in CI.
 
@@ -433,7 +437,7 @@ Being explicit about what the project does not (yet) do:
 - **bpftrace only.** No libbpf/CO-RE backend yet, so very long-running low-overhead probes are out of scope.
 - **Kernel-dependent.** Some tracepoints and functions differ between kernels and WSL builds. Recipes include fallbacks where possible.
 - **Container quickstart is single-host demo grade.** `docker compose up` publishes only the web port; production needs (TLS, multi-host agents, published API) are out of scope.
-- **Mock-only eval.** The checked-in harness verifies wiring without secrets or root; real generation scores are not measured yet.
+- **Mock-only eval.** The checked-in harness verifies wiring without secrets or root; mock scores are published above, real-LLM generation scores are not measured yet.
 - **The LLM can be wrong.** Generated probes may compile but measure the wrong thing. Read the explanation and the script before trusting a result.
 - **Overhead is real.** Tracing hot paths (for example every syscall) costs CPU. Limits reduce but do not eliminate this.
 - **Root agent.** Treat the host accordingly.
@@ -459,6 +463,7 @@ Have a request? [Open an issue](https://github.com/faizan1250/vBPF/issues/new/ch
 ## Contributing
 
 Contributions are welcome, especially **new recipes** and **kernel compatibility reports**.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the issue templates.
 
 1. Open an issue to discuss larger changes.
 2. Fork, create a branch (`feat/<area>-<name>`), and make focused commits using Conventional Commits.

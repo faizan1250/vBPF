@@ -1,0 +1,21 @@
+name: New recipe proposal
+description: Propose a hand-written bpftrace probe for the library
+body:
+  - type: textarea
+    attributes:
+      label: What it shows
+      description: The question this probe answers, in one or two sentences.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Probe sketch
+      description: Tracepoints or kprobes used, plus a draft script if you have one.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Kernel tested on
+      description: uname -r and bpftrace version, if already tested.
+    validations:
+      required: false
