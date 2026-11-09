@@ -24,6 +24,7 @@ type Config struct {
 	CatalogFn    func(ctx context.Context) ([]string, error)
 	RunFn        RunnerFunc
 	DryRun       DryRunFunc
+	ProbeArgs    ProbeArgsFunc
 	Health       *HealthProvider
 	Logger       zerolog.Logger
 	StartTime    time.Time
@@ -38,6 +39,7 @@ type Server struct {
 	catalog      *Catalog
 	health       *HealthProvider
 	dryRun       DryRunFunc
+	probeArgs    ProbeArgsFunc
 	logger       zerolog.Logger
 	startTime    time.Time
 	bpftracePath string
@@ -68,6 +70,10 @@ func New(cfg Config) (*Server, error) {
 	if dryRun == nil {
 		dryRun = DefaultDryRun(cfg.BPFtracePath)
 	}
+	probeArgs := cfg.ProbeArgs
+	if probeArgs == nil {
+		probeArgs = DefaultProbeArgs(cfg.BPFtracePath)
+	}
 	s := &Server{
 		addr:         cfg.Addr,
 		token:        tok,
@@ -76,6 +82,7 @@ func New(cfg Config) (*Server, error) {
 		catalog:      catalog,
 		health:       health,
 		dryRun:       dryRun,
+		probeArgs:    probeArgs,
 		logger:       cfg.Logger,
 		startTime:    cfg.StartTime,
 		bpftracePath: cfg.BPFtracePath,
@@ -93,6 +100,7 @@ func (s *Server) Token() string { return s.token }
 func (s *Server) routes() {
 	s.mux.Handle("GET /health", s.auth(http.HandlerFunc(s.handleHealth)))
 	s.mux.Handle("GET /v1/probes", s.auth(http.HandlerFunc(s.handleProbes)))
+	s.mux.Handle("GET /v1/probe-args", s.auth(http.HandlerFunc(s.handleProbeArgs)))
 	s.mux.Handle("POST /v1/validate", s.auth(http.HandlerFunc(s.handleValidate)))
 	s.mux.Handle("POST /v1/runs", s.auth(http.HandlerFunc(s.handleCreateRun)))
 	s.mux.Handle("DELETE /v1/runs/{id}", s.auth(http.HandlerFunc(s.handleDeleteRun)))
@@ -166,6 +174,41 @@ func (s *Server) handleProbes(w http.ResponseWriter, r *http.Request) {
 		probes = []string{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"probes": probes, "count": len(probes)})
+}
+
+// handleProbeArgs returns `bpftrace -vl` output for one catalog-validated
+// probe name. The name must exactly match a catalog entry, so no arbitrary
+// input reaches exec (argv only, no shell).
+func (s *Server) handleProbeArgs(w http.ResponseWriter, r *http.Request) {
+	probe := r.URL.Query().Get("probe")
+	if probe == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "missing probe")
+		return
+	}
+	if len(probe) > MaxProbeNameLen {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "probe name too long")
+		return
+	}
+	if !s.catalog.Contains(probe) {
+		writeError(w, http.StatusNotFound, "NOT_FOUND", "unknown probe")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), ProbeArgsTimeout)
+	defer cancel()
+	out, err := s.probeArgs(ctx, probe)
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			writeError(w, http.StatusGatewayTimeout, "TIMEOUT", "probe args timed out")
+			return
+		}
+		s.logger.Error().Str("probe", probe).Err(err).Msg("probe args failed")
+		writeError(w, http.StatusInternalServerError, "PROBE_ARGS_FAILED", "probe args failed")
+		return
+	}
+	if len(out) > ProbeArgsMaxBytes {
+		out = out[:ProbeArgsMaxBytes]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"probe": probe, "output": out})
 }
 
 type validateRequest struct {

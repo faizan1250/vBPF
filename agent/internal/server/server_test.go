@@ -58,6 +58,7 @@ func TestAuthRequiredEverywhere(t *testing.T) {
 	paths := []struct{ method, path, body string }{
 		{"GET", "/health", ""},
 		{"GET", "/v1/probes", ""},
+		{"GET", "/v1/probe-args?probe=tracepoint:block:block_rq_issue", ""},
 		{"POST", "/v1/validate", `{"script":"BEGIN {}"}`},
 		{"POST", "/v1/runs", `{"script":"BEGIN {}"}`},
 		{"DELETE", "/v1/runs/x", ""},

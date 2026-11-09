@@ -7,6 +7,7 @@ import type { GenerateResponse } from "@vbpf/schemas";
 
 import {
   AgentOfflineError,
+  fetchProbeArgs,
   searchProbes,
   validateScript,
 } from "./agent-client.js";
@@ -30,6 +31,7 @@ export interface GenerateDeps {
   llm: LlmClient;
   searchProbesFn?: typeof searchProbes;
   validateAgentFn?: typeof validateScript;
+  probeArgsFn?: typeof fetchProbeArgs;
 }
 
 /** Live chains report per-request attribution; MockLlm only has .model. */
@@ -112,6 +114,47 @@ export function makeMockLlm(
   return new MockLlm(model, resolveTopRecipe(db, recipesDir));
 }
 
+// Top 1-3 tracepoints whose `bpftrace -vl` output is injected into
+// ==ARG_FORMATS==. Recipe bodies come first (they drive the few-shot),
+// then catalog probes from search.
+export const MAX_ARG_PROBES = 3;
+export const ARG_OUTPUT_CAP = 2000;
+
+const TRACEPOINT_RE = /\btracepoint:[A-Za-z0-9_]+:[A-Za-z0-9_]+/g;
+const TRACEPOINT_EXACT_RE = /^tracepoint:[A-Za-z0-9_]+:[A-Za-z0-9_]+$/;
+
+export function selectTracepointProbes(
+  recipes: RecipeWithBody[],
+  probes: string[],
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (p: string): boolean => {
+    if (seen.has(p)) return false;
+    seen.add(p);
+    out.push(p);
+    return out.length >= MAX_ARG_PROBES;
+  };
+  for (const r of recipes) {
+    for (const m of r.body.match(TRACEPOINT_RE) ?? []) {
+      if (push(m)) return out;
+    }
+  }
+  for (const p of probes) {
+    if (!TRACEPOINT_EXACT_RE.test(p)) continue;
+    if (push(p)) break;
+  }
+  return out;
+}
+
+export function formatProbeArgs(
+  entries: Array<{ probe: string; output: string }>,
+): string {
+  return entries
+    .map((e) => `${e.probe}:\n${e.output.slice(0, ARG_OUTPUT_CAP)}`)
+    .join("\n\n");
+}
+
 function newGenerationId(): string {
   return `gen_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
 }
@@ -152,7 +195,28 @@ export async function runGenerate(
     probes = [];
   }
 
-  const { text: assembled } = buildGeneratePrompt(prompt, withBodies, probes);
+  const probeArgsFn = opts.deps.probeArgsFn ?? fetchProbeArgs;
+  let argFormats: string | undefined;
+  const candidates = selectTracepointProbes(withBodies, probes);
+  if (candidates.length > 0) {
+    const sections: Array<{ probe: string; output: string }> = [];
+    for (const probe of candidates) {
+      try {
+        const output = await probeArgsFn(agentUrl, tokenFile, probe);
+        if (output.trim() !== "") sections.push({ probe, output });
+      } catch {
+        continue;
+      }
+    }
+    if (sections.length > 0) argFormats = formatProbeArgs(sections);
+  }
+
+  const { text: assembled } = buildGeneratePrompt(
+    prompt,
+    withBodies,
+    probes,
+    argFormats,
+  );
 
   let attempts = 0;
   let lastErrors: string[] = [];

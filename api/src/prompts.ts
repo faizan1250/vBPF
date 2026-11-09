@@ -23,8 +23,9 @@ export const GOTCHAS = [
   "Always delete() temporary map keys; clear() snapshot maps after print().",
 ].join("\n");
 
-// No agent endpoint exposes `bpftrace -vl`; hardcode the safe subset instead.
-export const ARG_FORMATS_STUB = [
+// Fallback when agent probe-args is unreachable; runGenerate replaces this
+// with real `bpftrace -vl` output for the top tracepoints when available.
+export const ARG_FORMATS_FALLBACK = [
   "Arg formats (stub): tracepoint:block:block_rq_issue has args->dev, args->sector;",
   "tracepoint:syscalls:sys_enter_openat has args->filename (use str());",
   "tracepoint:sock:inet_sock_set_state has args->newstate, args->family, ntop(args->saddr/daddr).",
@@ -62,6 +63,7 @@ export function buildGeneratePrompt(
   prompt: string,
   recipes: RecipeWithBody[],
   probes: string[],
+  argFormats?: string,
 ): AssembledPrompt {
   const staticPrefix = `${SYSTEM_PROMPT}\n\n${GOTCHAS}`;
   const recipeBlock =
@@ -72,6 +74,10 @@ export function buildGeneratePrompt(
     probes.length === 0
       ? "Probes: catalog unavailable; use BEGIN/END or well-known tracepoints only."
       : `Probes:\n${probes.slice(0, 40).join("\n")}`;
+  const argBlock =
+    argFormats !== undefined && argFormats.trim() !== ""
+      ? argFormats.trim()
+      : ARG_FORMATS_FALLBACK;
   const text = [
     "==SYSTEM==",
     staticPrefix,
@@ -80,7 +86,7 @@ export function buildGeneratePrompt(
     "==PROBES==",
     probeBlock,
     "==ARG_FORMATS==",
-    ARG_FORMATS_STUB,
+    argBlock,
     "==USER==",
     prompt.trim(),
   ].join("\n\n");

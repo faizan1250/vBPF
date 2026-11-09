@@ -14,10 +14,13 @@ import { indexRecipes, migrate, openDb } from "./db.js";
 import {
   RefusalError,
   ValidationFailedError,
+  formatProbeArgs,
   runGenerate,
+  selectTracepointProbes,
 } from "./generate.js";
 import { LlmOutputSchema, MockLlm } from "./llm.js";
 import {
+  ARG_FORMATS_FALLBACK,
   buildGeneratePrompt,
   GOTCHAS,
   SYSTEM_PROMPT,
@@ -83,6 +86,27 @@ function startFakeAgent(): Promise<{
         ],
         count: 11,
       });
+      return;
+    }
+    if (req.method === "GET" && url.pathname === "/v1/probe-args") {
+      const probe = url.searchParams.get("probe") ?? "";
+      const known = [
+        "tracepoint:block:block_rq_issue",
+        "tracepoint:block:block_rq_complete",
+        "tracepoint:syscalls:sys_enter_openat",
+        "tracepoint:sched:sched_process_exec",
+        "tracepoint:sock:inet_sock_set_state",
+        "tracepoint:tcp:tcp_retransmit_skb",
+        "tracepoint:raw_syscalls:sys_enter",
+      ];
+      if (!known.includes(probe)) {
+        send(404, { error: "unknown probe", code: "NOT_FOUND" });
+      } else {
+        send(200, {
+          probe,
+          output: `${probe}\n  int field_${probe.length};\n`,
+        });
+      }
       return;
     }
     if (req.method === "POST" && url.pathname === "/v1/validate") {
@@ -190,6 +214,146 @@ describe("prompt assembly order", () => {
     const { text } = buildGeneratePrompt("hi", [], many);
     expect(text).not.toContain("sys_enter_59");
     expect(text).toContain("sys_enter_39");
+  });
+
+  it("falls back to canned formats when no args provided", () => {
+    const { text } = buildGeneratePrompt("hi", [], [], undefined);
+    expect(text).toContain(ARG_FORMATS_FALLBACK);
+  });
+
+  it("injects real arg formats when provided", () => {
+    const injected =
+      "tracepoint:syscalls:sys_enter_openat:\n  const char * filename;\n";
+    const { text } = buildGeneratePrompt("hi", [], [], injected);
+    expect(text).toContain(injected);
+    expect(text).not.toContain(ARG_FORMATS_FALLBACK);
+  });
+});
+
+describe("tracepoint selection", () => {
+  it("prefers recipe tracepoints then catalog probes, capped at 3", () => {
+    const recipes: RecipeWithBody[] = [
+      {
+        ...cpuRecipe(),
+        body: "tracepoint:block:block_rq_issue { @x = count(); }\ntracepoint:syscalls:sys_enter_openat { @y = count(); }\n",
+      },
+    ];
+    const probes = [
+      "tracepoint:sock:inet_sock_set_state",
+      "tracepoint:tcp:tcp_retransmit_skb",
+      "tracepoint:syscalls:sys_enter_openat",
+      "kprobe:tcp_v4_connect",
+      "tracepoint:syscalls:*",
+    ];
+    expect(selectTracepointProbes(recipes, probes)).toEqual([
+      "tracepoint:block:block_rq_issue",
+      "tracepoint:syscalls:sys_enter_openat",
+      "tracepoint:sock:inet_sock_set_state",
+    ]);
+  });
+
+  it("skips wildcards and non-tracepoints", () => {
+    expect(
+      selectTracepointProbes([], ["kprobe:tcp_v4_connect", "BEGIN"]),
+    ).toEqual([]);
+    expect(
+      selectTracepointProbes(
+        [],
+        ["tracepoint:syscalls:*", "tracepoint:block:block_rq_issue"],
+      ),
+    ).toEqual(["tracepoint:block:block_rq_issue"]);
+  });
+
+  it("caps formatted output per probe", () => {
+    const out = formatProbeArgs([
+      { probe: "tracepoint:a:b", output: `x${"y".repeat(5000)}` },
+    ]);
+    expect(out).toContain("tracepoint:a:b:");
+    expect(out.length).toBeLessThanOrEqual("tracepoint:a:b:\n".length + 2000);
+  });
+});
+
+describe("probe-args injection", () => {
+  it("fetches top tracepoint args into the llm prompt", async () => {
+    const db = makeDb();
+    let seenPrompt = "";
+    const stub = {
+      model: "mock",
+      generate: async (prompt: string) => {
+        seenPrompt = prompt;
+        return LlmOutputSchema.parse({
+          script: "tracepoint:syscalls:sys_enter_openat { @x = count(); }\n",
+          chart_type: "events",
+          explanation: "ok",
+          duration_s: 10,
+          refusal: null,
+        });
+      },
+    };
+    await runGenerate("who is opening files", {
+      deps: {
+        db,
+        recipesDir: RECIPES_DIR,
+        agentUrl: fake.url,
+        tokenFile,
+        llm: stub,
+        searchProbesFn: async () => ["tracepoint:syscalls:sys_enter_openat"],
+        validateAgentFn: async () => ({ ok: true, errors: [], probes: [] }),
+        probeArgsFn: async () =>
+          "tracepoint:syscalls:sys_enter_openat\n  const char * filename;\n",
+      },
+    });
+    expect(seenPrompt).toContain("==ARG_FORMATS==");
+    expect(seenPrompt).toContain("filename");
+    expect(seenPrompt).not.toContain(ARG_FORMATS_FALLBACK);
+    db.close();
+  });
+
+  it("falls back when probe-args fetch fails", async () => {
+    const db = makeDb();
+    let seenPrompt = "";
+    const stub = {
+      model: "mock",
+      generate: async (prompt: string) => {
+        seenPrompt = prompt;
+        return LlmOutputSchema.parse({
+          script: "tracepoint:syscalls:sys_enter_openat { @x = count(); }\n",
+          chart_type: "events",
+          explanation: "ok",
+          duration_s: 10,
+          refusal: null,
+        });
+      },
+    };
+    await runGenerate("who is opening files", {
+      deps: {
+        db,
+        recipesDir: RECIPES_DIR,
+        agentUrl: fake.url,
+        tokenFile,
+        llm: stub,
+        searchProbesFn: async () => ["tracepoint:syscalls:sys_enter_openat"],
+        validateAgentFn: async () => ({ ok: true, errors: [], probes: [] }),
+        probeArgsFn: async () => {
+          throw new Error("agent down");
+        },
+      },
+    });
+    expect(seenPrompt).toContain(ARG_FORMATS_FALLBACK);
+    db.close();
+  });
+
+  it("fake agent serves the probe-args contract", async () => {
+    const { fetchProbeArgs } = await import("./agent-client.js");
+    const output = await fetchProbeArgs(
+      fake.url,
+      tokenFile,
+      "tracepoint:block:block_rq_issue",
+    );
+    expect(output).toContain("tracepoint:block:block_rq_issue");
+    await expect(
+      fetchProbeArgs(fake.url, tokenFile, "tracepoint:nope:missing"),
+    ).rejects.toThrow();
   });
 });
 
