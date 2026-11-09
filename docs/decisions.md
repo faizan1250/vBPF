@@ -1,5 +1,13 @@
 # Decisions
 
+## R-13: Run summaries and GET /api/runs/:id (2026-11-10)
+
+- **Persistence point is the API WS relay.** Summary envelopes forwarded upstream→client also update the `runs` row (`state`, `ended_at`, `events_count`, `bytes`, `dropped`, `exit_reason`). Stream end covers both natural completion and timeout, since the agent ends every run with a summary event.
+- **`exit_reason` → `state` mapping mirrors the agent's `finalState`.** `completed`/`timeout` → `completed`, `cancelled` → `stopping`, anything else (`failed`, `limit_bytes`, unknown) → `failed`.
+- **Stop paths mark `stopping` + `ended_at` immediately** (`POST /api/runs/:id/stop` and a `stop` message over the run websocket). Counts arrive with the later summary event if a stream is attached; a run stopped with no stream attached keeps `summary: null`. No backfill: the agent has no GET-run endpoint to poll, and adding one is out of scope.
+- **`GET /api/runs/:id` returns metadata + summary only** (`run_id`, `state`, `duration_s`, `started_at`, `ended_at`, `summary`). `script_text`/`script_sha256` are deliberately excluded. Unknown, empty, or overlong ids are 404 `NOT_FOUND`.
+- **No migration.** The `runs` table already had `ended_at`, `events_count`, `bytes`, `dropped`, and `exit_reason` columns; only the writes were missing.
+
 ## R-12: /api/explain and the Explain panel (2026-11-10)
 
 - **Shared rate-limit bucket with generate.** One fixed-window limiter (10 req/min/IP) guards both `POST /api/generate` and `POST /api/explain`; a generate consumes explain budget and vice versa. Reason: both hit paid LLM quota, and one shared budget is the smallest change that protects free-tier limits.

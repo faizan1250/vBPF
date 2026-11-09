@@ -10,12 +10,14 @@ import Fastify, {
 } from "fastify";
 import { WebSocket } from "ws";
 import {
+  AgentRunSummarySchema,
   CreateRunRequestSchema,
   CreateRunResponseSchema,
   EventEnvelopeSchema,
   ExplainRequestSchema,
   ExplainResponseSchema,
   GenerateRequestSchema,
+  GetRunResponseSchema,
   HealthResponseSchema,
   RecipeListResponseSchema,
   StopRunResponseSchema,
@@ -203,6 +205,15 @@ function agentDelete(
     .finally(() => clearTimeout(timer));
 }
 
+// Maps an agent exit_reason to the stored run state, mirroring the agent's
+// finalState: completed/timeout are terminal-ok, cancelled is user-stopped,
+// everything else (failed, limit_bytes, unknown) is failed.
+function stateForExitReason(reason: string): string {
+  if (reason === "completed" || reason === "timeout") return "completed";
+  if (reason === "cancelled") return "stopping";
+  return "failed";
+}
+
 // Derives taxonomy warning codes from agent health signals. Exported for
 // tests; the full mapping (including gaps) lives in docs/security.md.
 export function healthWarnings(health: AgentHealth): string[] {
@@ -235,6 +246,44 @@ export async function buildApp(
   const database = db ?? openDb(opts.dbPath);
   migrate(database);
   indexRecipes(database, loadRecipes(opts.recipesDir));
+
+  // Persists the terminal summary from the agent's summary event. One update
+  // per termination; stream end covers natural completion and timeout.
+  const persistRunSummary = (runId: string, data: unknown): void => {
+    const parsed = AgentRunSummarySchema.safeParse(data);
+    if (!parsed.success) return;
+    const s = parsed.data;
+    try {
+      database
+        .prepare(
+          "UPDATE runs SET state = ?, ended_at = ?, events_count = ?, bytes = ?, dropped = ?, exit_reason = ? WHERE id = ?",
+        )
+        .run(
+          stateForExitReason(s.exit_reason),
+          Date.now(),
+          s.events,
+          s.bytes,
+          s.dropped,
+          s.exit_reason,
+          runId,
+        );
+    } catch (err) {
+      app.log.error({ err }, "run summary update failed");
+    }
+  };
+
+  // Marks a run stopping when termination is requested (stop endpoint or a
+  // stop message over the run's websocket). The later summary event, if a
+  // stream is attached, fills in the counts.
+  const markRunStopping = (runId: string): void => {
+    try {
+      database
+        .prepare("UPDATE runs SET state = ?, ended_at = ? WHERE id = ?")
+        .run("stopping", Date.now(), runId);
+    } catch (err) {
+      app.log.error({ err }, "run stop update failed");
+    }
+  };
 
   app.addHook("onClose", async () => {
     database.close();
@@ -562,16 +611,56 @@ export async function buildApp(
         }
         throw err;
       }
-      try {
-        database
-          .prepare("UPDATE runs SET state = ? WHERE id = ?")
-          .run(stopped.state, stopped.run_id);
-      } catch (err) {
-        app.log.error({ err }, "run stop update failed");
-      }
+      markRunStopping(stopped.run_id);
       return reply.send(stopped);
     },
   );
+
+  app.get("/api/runs/:id", async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id } = req.params as { id: string };
+    if (typeof id !== "string" || id === "" || id.length > 256) {
+      return reply.code(404).send({ error: "unknown run", code: "NOT_FOUND" });
+    }
+    const row = database
+      .prepare(
+        "SELECT id, duration_s, state, started_at, ended_at, events_count, bytes, dropped, exit_reason FROM runs WHERE id = ?",
+      )
+      .get(id) as
+      | {
+          id: string;
+          duration_s: number;
+          state: string;
+          started_at: number;
+          ended_at: number | null;
+          events_count: number;
+          bytes: number;
+          dropped: number;
+          exit_reason: string | null;
+        }
+      | undefined;
+    if (row === undefined) {
+      return reply.code(404).send({ error: "unknown run", code: "NOT_FOUND" });
+    }
+    // script_text stays out of this response: metadata and the summary only.
+    return reply.send(
+      GetRunResponseSchema.parse({
+        run_id: row.id,
+        state: row.state,
+        duration_s: row.duration_s,
+        started_at: row.started_at,
+        ended_at: row.ended_at,
+        summary:
+          row.exit_reason === null
+            ? null
+            : {
+                events_count: row.events_count,
+                bytes: row.bytes,
+                dropped: row.dropped,
+                exit_reason: row.exit_reason,
+              },
+      }),
+    );
+  });
 
   app.get(
     "/ws/runs/:id",
@@ -605,7 +694,10 @@ export async function buildApp(
         if (socket.readyState !== WebSocket.OPEN) return;
         const text = data.toString();
         try {
-          EventEnvelopeSchema.parse(JSON.parse(text));
+          const envelope = EventEnvelopeSchema.parse(JSON.parse(text));
+          if (envelope.kind === "summary") {
+            persistRunSummary(id, envelope.data);
+          }
         } catch {
           return;
         }
@@ -628,6 +720,7 @@ export async function buildApp(
         } catch {
           return;
         }
+        markRunStopping(id);
         upstream.send(text);
       });
       const closeBoth = (): void => {

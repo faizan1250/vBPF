@@ -41,6 +41,39 @@ export const StopRunResponseSchema = z
   .object({ run_id: z.string().min(1), state: z.string().min(1) })
   .strict();
 
+// Terminal per-run totals as emitted by the agent's summary event.
+export const AgentRunSummarySchema = z
+  .object({
+    events: z.number().int().nonnegative(),
+    bytes: z.number().int().nonnegative(),
+    dropped: z.number().int().nonnegative(),
+    duration_ms: z.number().int(),
+    exit_reason: z.string().min(1).max(64),
+  })
+  .passthrough();
+
+export const RunSummarySchema = z
+  .object({
+    events_count: z.number().int().nonnegative(),
+    bytes: z.number().int().nonnegative(),
+    dropped: z.number().int().nonnegative(),
+    exit_reason: z.string().min(1).max(64),
+  })
+  .strict();
+
+// GET /api/runs/:id: metadata plus the persisted summary. script_text and
+// script_sha256 are deliberately excluded.
+export const GetRunResponseSchema = z
+  .object({
+    run_id: z.string().min(1),
+    state: z.string().min(1),
+    duration_s: DurationSchema,
+    started_at: z.number().int().nonnegative(),
+    ended_at: z.number().int().nonnegative().nullable(),
+    summary: RunSummarySchema.nullable(),
+  })
+  .strict();
+
 export const RecipeSchema = z
   .object({
     id: z.string().min(1).max(128),
@@ -169,6 +202,10 @@ export type ExplainRequest = z.infer<typeof ExplainRequestSchema>;
 export type ExplainResponse = z.infer<typeof ExplainResponseSchema>;
 export type CreateRunRequest = z.infer<typeof CreateRunRequestSchema>;
 export type CreateRunResponse = z.infer<typeof CreateRunResponseSchema>;
+export type StopRunResponse = z.infer<typeof StopRunResponseSchema>;
+export type AgentRunSummary = z.infer<typeof AgentRunSummarySchema>;
+export type RunSummary = z.infer<typeof RunSummarySchema>;
+export type GetRunResponse = z.infer<typeof GetRunResponseSchema>;
 export type Recipe = z.infer<typeof RecipeSchema>;
 export type LlmProviderHealth = z.infer<typeof LlmProviderHealthSchema>;
 export type LlmHealth = z.infer<typeof LlmHealthSchema>;
