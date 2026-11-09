@@ -473,6 +473,8 @@ describe("POST /api/generate", () => {
       webOrigin: "http://localhost:5173",
       llmModel: "claude-sonnet-5-5",
       llmMode: "live",
+      llmChain: "groq",
+      llmEnv: {},
     });
     const addr = await live.listen({ host: "127.0.0.1", port: 0 });
     const url = addr.replace("[::1]", "127.0.0.1");

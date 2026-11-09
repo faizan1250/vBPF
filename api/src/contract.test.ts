@@ -353,6 +353,7 @@ describe("health and recipes", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       ok: true,
+      llm: { mode: "mock", providers: [] },
       agent: { reachable: true, health: HEALTH, warnings: ["NO_PRIVILEGE"] },
     });
   });

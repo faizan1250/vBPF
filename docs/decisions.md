@@ -1,0 +1,13 @@
+# Decisions
+
+## R-01: Live LLM client with provider fallback (2026-11-10)
+
+- **Chain default `groq`.** `LLM_PROVIDER_CHAIN=groq` in `.env.example` and local `.env`. Supported presets: `groq`, `cerebras`, `openrouter`, `ollama`, `custom` (`LLM_CUSTOM_BASE_URL`).
+- **Gemini preset included.** Google's official docs (ai.google.dev Gemini API OpenAI compatibility) confirm the OpenAI-compatible base URL `https://generativelanguage.googleapis.com/v1beta/openai`, so `gemini` ships as a preset alongside `custom`.
+- **Key semantics.** `401/403` disables the key for the process lifetime and advances to the next key; `429` never rotates to another key of the same provider (shared account quota, and rotation could violate provider terms) — the provider cools down (default 60 s, `Retry-After` honored, capped at 5 m) and the chain moves on.
+- **Model choice (live probe 2026-11-10).** `GET <groq-base>/models` returned 11 IDs; after dropping non-chat IDs (whisper/tts/guard/embed/transcri/moderation/speech/playai) and preferring production over preview/beta/experimental and larger instruct models first, JSON-mode smoke tests gave: winner `openai/gpt-oss-120b` (200, passed `LlmOutputSchema`). `allam-2-7b` returned 200 but failed the schema; three audio models returned 400; one request reset mid-probe. No passing alternates, so `LLM_GROQ_FALLBACK_MODELS` is left unset by default. Written to local `.env` only (`LLM_GROQ_MODEL=openai/gpt-oss-120b`); `.env.example` keeps a comment-only placeholder.
+- **Attribution without races.** `runGenerate` prefers `generateDetailed()` (per-request `{output, model}`) over the shared `llm.model` getter, so concurrent requests record the right `provider/model` in `generations.model`.
+- **Health shape.** `GET /api/health` gains an optional top-level `llm: {mode, providers[]}` block (`ready`/`cooldown`/`unconfigured`/`exhausted`, key counts, no key material). Mock mode reports `{mode: "mock", providers: []}`; existing contract tests updated. No model IDs or keys are hardcoded in code or logs.
+- **Transport guards.** `redirect: "manual"` (3xx fails over, never followed), 256 KB response cap, 45 s timeout, 4-way concurrent-request semaphore, 24 k-char prompt cap.
+- **Errors.** No usable provider (or all cooling) → 503 `LLM_UNAVAILABLE`; providers tried but unusable → 502 `LLM_ERROR`. Mock mode and CI are unchanged (no secrets, live 503 only when unconfigured).
+- **Live verification (2026-11-10).** With local keys and `LLM_MODE=live`, `POST /api/generate` for "Which processes open the most files?" returned 200 `validation ok` in 1 attempt; `generations.model` = `groq/openai/gpt-oss-120b`; health showed groq `ready` with 3 keys. Real-agent validation was out of scope here (no root); agent validation used a stub.

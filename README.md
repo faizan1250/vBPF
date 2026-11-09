@@ -143,14 +143,14 @@ Default limits:
 
 ## Requirements
 
-| Requirement | Details                                                            |
-| ----------- | ------------------------------------------------------------------ |
-| OS          | Linux (Ubuntu 22.04 / 24.04 tested) or Windows 11 with WSL2        |
-| Kernel      | 5.8+ with BTF (`/sys/kernel/btf/vmlinux` must exist)               |
-| bpftrace    | 0.20+ recommended                                                  |
-| Privileges  | Root for the agent only                                            |
-| Node / Go   | Node 22+ with pnpm 9+, Go 1.23+ (native development only)          |
-| LLM access  | An Anthropic API key (optional: recipe-only mode works without it) |
+| Requirement | Details                                                                           |
+| ----------- | --------------------------------------------------------------------------------- |
+| OS          | Linux (Ubuntu 22.04 / 24.04 tested) or Windows 11 with WSL2                       |
+| Kernel      | 5.8+ with BTF (`/sys/kernel/btf/vmlinux` must exist)                              |
+| bpftrace    | 0.20+ recommended                                                                 |
+| Privileges  | Root for the agent only                                                           |
+| Node / Go   | Node 22+ with pnpm 9+, Go 1.23+ (native development only)                         |
+| LLM access  | A provider API key (Groq by default; optional: recipe-only mode works without it) |
 
 Quick check on your machine:
 
@@ -240,8 +240,9 @@ Configuration is via environment variables (`.env` for local development). Never
 
 | Variable                | Default                 | Description                                                                 |
 | ----------------------- | ----------------------- | --------------------------------------------------------------------------- |
-| `LLM_MODEL`             | `claude-sonnet-5-5`     | Model used for generation                                                   |
+| `LLM_MODEL`             | `claude-sonnet-5-5`     | Default model; per-provider `LLM_<NAME>_MODEL` takes precedence             |
 | `LLM_MODE`              | `mock`                  | `mock` (CI-safe, no secrets) or live (requires a provider key, never in CI) |
+| `LLM_PROVIDER_CHAIN`    | `groq`                  | Comma-separated live providers tried in order (see below)                   |
 | `AGENT_URL`             | `http://127.0.0.1:8787` | Where the API reaches the agent                                             |
 | `AGENT_TOKEN_FILE`      | `./run/agent.token`     | Bearer token file (mode `0600`), created by the agent on first start        |
 | `PORT` / `HOST`         | `8080` / `127.0.0.1`    | Where the API listens                                                       |
@@ -255,6 +256,17 @@ Configuration is via environment variables (`.env` for local development). Never
 | `BPFTRACE_STRLEN`       | `64`                    | Maximum string length captured                                              |
 
 Limits can be lowered freely; raising them increases overhead and risk.
+
+### Live LLM providers
+
+Set `LLM_MODE=live` and at least one provider key (local `.env` only, never CI). Presets: `groq`, `cerebras`, `openrouter`, `ollama`, `gemini`, plus `custom` via `LLM_CUSTOM_BASE_URL`. All speak an OpenAI-compatible `/chat/completions` API; redirects are never followed.
+
+- **Chain.** `LLM_PROVIDER_CHAIN` lists providers in fallback order (default `groq`). The first ready provider answers; `generations.model` records `provider/model`.
+- **Keys.** For provider `NAME` the client collects `LLM_<NAME>_API_KEY`, `<NAME>_API_KEY`, then `<NAME>_API_KEY1`..`5` (stops at the first numbering gap). Multiple keys provide resilience if one is revoked; they do not increase your quota. Provider limits normally apply per account or organization. Check your provider's terms.
+- **Key failure.** A `401/403` disables that key for the process lifetime and moves to the next key. A `429` cools the whole provider down (honoring `Retry-After`) and moves to the next provider or model — never to another key of the same provider.
+- **Models.** Set `LLM_<NAME>_MODEL`; free model IDs change, so list current ones via the provider's models endpoint. `LLM_<NAME>_FALLBACK_MODELS` (comma-separated) retries other models of the same provider with the same key on `429` or model-specific `4xx`.
+- **Health.** `GET /api/health` reports `llm.providers` with per-provider state (`ready`, `cooldown`, `unconfigured`, `exhausted`) and key counts only — never key material.
+- **Caps.** At most 4 concurrent provider requests, 256 KB response bodies, 45 s per request.
 
 ---
 
@@ -404,6 +416,7 @@ CI ([`ci.yml`](.github/workflows/ci.yml)) runs the same checks mock-only on ever
 | Validation fails after edit        | Compile error or blocked construct   | Read the inline error; remove blocked calls such as `system()`                  |
 | `LIMIT_EXCEEDED`                   | Output or duration cap reached       | Aggregate in-kernel (`count()`, `hist()`), narrow the filter, or lower the rate |
 | `LLM_UNAVAILABLE`                  | Missing key or provider down         | Set a provider key and `LLM_MODE=live`, or use recipe-only mode                 |
+| `LLM_ERROR`                        | Provider answered unusably           | Retry later; check provider status; fallback chain engages automatically        |
 | UI not reachable from Windows      | WSL localhost forwarding             | Use `http://localhost:<port>`; try `networkingMode=mirrored` in `.wslconfig`    |
 | Leftover process after a crash     | Interrupted run                      | `pgrep -a bpftrace`; restart the agent (it sweeps stale children on startup)    |
 

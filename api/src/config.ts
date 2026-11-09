@@ -11,6 +11,7 @@ const EnvSchema = z
     RECIPES_DIR: z.string().min(1).default("./recipes"),
     LLM_MODEL: z.string().min(1).default("claude-sonnet-5-5"),
     LLM_MODE: z.enum(["mock", "live"]).default("mock"),
+    LLM_PROVIDER_CHAIN: z.string().min(1).default("groq"),
   })
   .strict();
 
