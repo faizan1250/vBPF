@@ -1,5 +1,13 @@
 # Decisions
 
+## R-07: Real produced-output (2026-11-10)
+
+- **Recipe scripts stand in for generations.** The eval harness does not persist generated scripts, and the live report's probe-match was 26/26, so generations use the same probes as the 10 recipes. 9/10 produced events in the 5 s window; zero live LLM calls needed.
+- **dns workload is python, not getent.** `getent hosts localhost` produced zero `getaddrinfo` uprobe hits over 15 s (it bypasses `getaddrinfo` on this libc); python `socket.getaddrinfo` hits reliably (227-hit direct-bpftrace control run). `scripts/produced-output.sh` uses the python loop.
+- **Harness deadlock fixed before commit.** First script version called bare `wait` before killing the `tcp-connects` http.server, wedging the run; fixed to kill all workloads first, single `wait` after (shellcheck-clean).
+- **slow-disk-io 5 s zero is a measurement.** Recipe counts only ≥10 ms block IO; a 10 s retest with the same workload class produced 1 map event, so the recipe works — the window had no slow IO. Recorded `no`, not a failure.
+- **No leftovers.** `pgrep -a bpftrace` empty, `tc qdisc show dev lo` back to `noqueue` after the run.
+
 ## R-05: Unrun tests (2026-11-10)
 
 - **Stale kill-mid-run assertion.** `TestIntegrationKillMidRun` (never run on a real kernel before) asserted the post-DELETE summary `exit_reason` is `completed`/`timeout`, but the runner's ctx-cancel path reports `cancelled` — already unit-tested (`runner_test.go`) and mapped to run state `"stopping"` by `finalState`. Fixed the test to expect `runner.ReasonCancelled`; no production code changed.

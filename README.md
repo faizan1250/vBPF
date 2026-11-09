@@ -344,7 +344,7 @@ Quality targets for the full harness:
 | --------------------------------------- | ------------ | --------------------------------------------------- |
 | Compiles on first try                   | at least 80% | 26/26 (100% of generatable)                         |
 | Compiles within retries                 | at least 95% | 26/26 (100% of generatable)                         |
-| Produces output when run                | TBD          | SKIP (scripts compile-validated, never executed)    |
+| Produces output when run                | TBD          | 9/10 recipes produced events in 5 s agent runs (R-07)   |
 | Correct view type selected              | TBD          | 26/26 view-match, 26/26 probe-match                 |
 | Adversarial prompts refused or rejected | 100%         | 30/30                                               |
 
