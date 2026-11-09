@@ -336,26 +336,27 @@ Per-environment recipe notes and fallbacks: [`docs/environment.md`](docs/environ
 
 ## Evaluation
 
-Generation quality is measured, not assumed. The checked-in harness is **mock-only by design**: `make eval` runs with `LLM_MODE=mock`, reads no secrets, and needs no root — the same policy CI enforces (see [`docs/ci.md`](docs/ci.md)).
+Generation quality is measured, not assumed. CI stays **mock-only by design**: `make eval` runs with `LLM_MODE=mock`, reads no secrets, and needs no root (see [`docs/ci.md`](docs/ci.md)). Live scores come from explicit local runs: `make -C eval run-live` (or `pnpm -C api run eval -- --live --delay-ms 15000`) reads provider keys from the repo-root `.env`, paces calls for free-tier limits, and stubs agent validation on stock runners (compile = static validator only; scripts never executed).
 
 Quality targets for the full harness:
 
-| Metric                                  | Target       | Latest (mock-only, 2026-11-09)                   |
-| --------------------------------------- | ------------ | ------------------------------------------------ |
-| Compiles on first try                   | at least 80% | 26/30 (87%)                                      |
-| Compiles within retries                 | at least 95% | 26/26 (100% of generatable)                      |
-| Produces output when run                | TBD          | SKIP (scripts compile-validated, never executed) |
-| Correct view type selected              | TBD          | 26/26 view-match, 26/26 probe-match              |
-| Adversarial prompts refused or rejected | 100%         | 30/30                                            |
+| Metric                                  | Target       | Latest (live, groq/openai/gpt-oss-120b, 2026-11-09) |
+| --------------------------------------- | ------------ | --------------------------------------------------- |
+| Compiles on first try                   | at least 80% | 26/26 (100% of generatable)                         |
+| Compiles within retries                 | at least 95% | 26/26 (100% of generatable)                         |
+| Produces output when run                | TBD          | SKIP (scripts compile-validated, never executed)    |
+| Correct view type selected              | TBD          | 26/26 view-match, 26/26 probe-match                 |
+| Adversarial prompts refused or rejected | 100%         | 30/30                                               |
 
-Full report: [`eval/reports/2026-11-09.md`](eval/reports/2026-11-09.md). Adversarial
+Full report: [`eval/reports/2026-11-09-live.md`](eval/reports/2026-11-09-live.md). Adversarial
 cases (4) are correctly refused, not generated, so generation metrics cover the
-remaining 26.
+remaining 26. The mock baseline is kept at [`eval/reports/2026-11-09.md`](eval/reports/2026-11-09.md).
 
 Run it yourself:
 
 ```bash
-make eval            # mock mode, no root, no secrets
+make eval            # mock mode, no root, no secrets (CI-safe)
+make -C eval run-live  # live mode, local keys only, ~8 min paced run
 ```
 
 Real bpftrace runs need root and BTF: `sudo make test-integration` (manual workflow, expected to SKIP on stock runners).
@@ -372,7 +373,7 @@ Real bpftrace runs need root and BTF: `sudo make test-integration` (manual workf
 ├── web/          React UI
 ├── recipes/      Hand-written, tested .bt scripts with YAML metadata
 ├── fixtures/     Captured bpftrace JSON output for offline tests and UI development
-├── eval/         Mock-only eval harness (real-LLM runs are out of scope)
+├── eval/         Mock eval harness + explicit local live runs (`run-live`, never CI)
 ├── scripts/      check-env, dev-agent, run-recipe, fake-bpftrace, validate-recipes
 ├── docs/         CI picture, environment notes
 └── Makefile
@@ -450,7 +451,7 @@ Being explicit about what the project does not (yet) do:
 - **bpftrace only.** No libbpf/CO-RE backend yet, so very long-running low-overhead probes are out of scope.
 - **Kernel-dependent.** Some tracepoints and functions differ between kernels and WSL builds. Recipes include fallbacks where possible.
 - **Container quickstart is single-host demo grade.** `docker compose up` publishes only the web port; production needs (TLS, multi-host agents, published API) are out of scope.
-- **Mock-only eval.** The checked-in harness verifies wiring without secrets or root; mock scores are published above, real-LLM generation scores are not measured yet.
+- **Live eval is local-only.** Real-LLM generation scores are published above from a paced local run; CI stays mock-only and agent validation is stubbed without root.
 - **The LLM can be wrong.** Generated probes may compile but measure the wrong thing. Read the explanation and the script before trusting a result.
 - **Overhead is real.** Tracing hot paths (for example every syscall) costs CPU. Limits reduce but do not eliminate this.
 - **Root agent.** Treat the host accordingly.
@@ -460,7 +461,7 @@ Being explicit about what the project does not (yet) do:
 
 ## Roadmap
 
-- [ ] Real generation scores from the eval harness, published above
+- [x] Real generation scores from the eval harness, published above
 - [x] Container packaging (`docker compose up` quickstart)
 - [ ] libbpf / CO-RE backend for long-running probes
 - [ ] Flame graphs and off-CPU analysis
