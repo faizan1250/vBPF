@@ -101,7 +101,7 @@ flowchart LR
 
 | Component                | Role                                                                                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Web UI** (`/web`)      | Prompt box, script editor, confirmation modal, live views, browser-local history (localStorage + JSON export)                                    |
+| **Web UI** (`/web`)      | Prompt box, script editor, confirmation modal, live views, browser-local history (localStorage + JSON export)                                     |
 | **API** (`/api`)         | Retrieval, LLM generation, static validation, run orchestration, WebSocket relay, SQLite storage                                                  |
 | **Agent** (`/agent`)     | The only privileged component. Re-validates scripts, dry-run compiles, runs bpftrace in its own process group, enforces limits, normalizes output |
 | **Recipes** (`/recipes`) | Hand-written, tested `.bt` scripts with metadata; used as examples for the LLM and as a template picker                                           |
