@@ -228,6 +228,11 @@ describe("prompt assembly order", () => {
     expect(text).toContain(injected);
     expect(text).not.toContain(ARG_FORMATS_FALLBACK);
   });
+
+  it("keeps the output contract valid on refusal", () => {
+    const { text } = buildGeneratePrompt("hi", [], [], undefined);
+    expect(text).toContain("When refusing");
+  });
 });
 
 describe("tracepoint selection", () => {

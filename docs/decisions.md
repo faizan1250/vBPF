@@ -1,5 +1,10 @@
 # Decisions
 
+## R-02: Live eval and prompt tuning (2026-11-10)
+
+- **Run 1 (baseline, invalidated by rate limits).** `eval --live --delay-ms 2000` against `groq/openai/gpt-oss-120b`: 11/11 attempted generatable cases compiled first-try (100%), adversarial-03 correctly refused ("Reading /etc/shadow is disallowed"). After 7 calls the provider returned 429; the chain cooled down (60 s, `Retry-After` honored) and the remaining 19 cases failed with `attempts: 0`. Verdict: numbers measure pacing, not model quality — no prompt change made (tuning round 0 of 3).
+- **Pacing fix for run 2.** Free-tier 429s kill the rest of a run because cooldown is process-lifetime by design (R-01: 429 never rotates keys). Re-running with `--delay-ms 15000` (~8 min wall clock, still ≤90 calls). Agent validation stays stubbed (stock runner, no root); compile = static validator only.
+
 ## R-01: Live LLM client with provider fallback (2026-11-10)
 
 - **Chain default `groq`.** `LLM_PROVIDER_CHAIN=groq` in `.env.example` and local `.env`. Supported presets: `groq`, `cerebras`, `openrouter`, `ollama`, `custom` (`LLM_CUSTOM_BASE_URL`).
