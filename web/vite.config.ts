@@ -17,10 +17,9 @@ export default defineConfig({
         changeOrigin: true,
       },
       "/ws": {
-        target: (process.env["VBPF_API_URL"] ?? "http://127.0.0.1:8080").replace(
-          /^http/,
-          "ws",
-        ),
+        target: (
+          process.env["VBPF_API_URL"] ?? "http://127.0.0.1:8080"
+        ).replace(/^http/, "ws"),
         ws: true,
         changeOrigin: true,
       },

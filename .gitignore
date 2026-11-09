@@ -9,6 +9,11 @@ run/
 bin/
 data/
 
+# Web build and Playwright artifacts
+web/dist/
+web/test-results/
+web/playwright-report/
+
 # Dependencies
 node_modules/
 

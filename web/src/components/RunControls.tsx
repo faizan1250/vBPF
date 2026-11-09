@@ -18,7 +18,10 @@ export function RunControls() {
   const validationOk = useAppStore((s) => s.validationOk);
   const [elapsed, setElapsed] = useState(0);
 
-  const active = runPhase === "running" || runPhase === "starting" || runPhase === "stopping";
+  const active =
+    runPhase === "running" ||
+    runPhase === "starting" ||
+    runPhase === "stopping";
 
   useEffect(() => {
     if (!active) {
@@ -71,13 +74,22 @@ export function RunControls() {
         </span>
         <div className="ml-auto flex gap-2">
           {!active && (
-            <Button intent="primary" onClick={() => setConfirmOpen(true)} disabled={validationOk !== true}>
+            <Button
+              intent="primary"
+              onClick={() => setConfirmOpen(true)}
+              disabled={validationOk !== true}
+            >
               <Play aria-hidden />
               Review & run
             </Button>
           )}
           {active && (
-            <Button intent="danger" size="lg" onClick={() => void stopCurrentRun(runId)} disabled={runPhase === "stopping"}>
+            <Button
+              intent="danger"
+              size="lg"
+              onClick={() => void stopCurrentRun(runId)}
+              disabled={runPhase === "stopping"}
+            >
               <OctagonX aria-hidden />
               {runPhase === "stopping" ? "Stopping…" : "Stop"}
             </Button>

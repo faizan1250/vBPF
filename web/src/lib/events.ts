@@ -16,13 +16,6 @@ export interface SummaryInfo {
   exitReason: string;
 }
 
-const VIEW_BY_KIND: Record<string, ViewKind> = {
-  printf: "events",
-  map: "bar",
-  hist: "histogram",
-  lhist: "histogram",
-};
-
 export function autoView(
   events: EventEnvelope[],
   hint: ChartType | null,
@@ -67,23 +60,43 @@ export function histBuckets(data: unknown): HistBucket[] {
   if (!Array.isArray(first)) return [];
   return (first as unknown[]).flatMap((b) => {
     if (!isRecord(b)) return [];
-    const { min, max, count } = b as { min?: unknown; max?: unknown; count?: unknown };
-    if (typeof min !== "number" || typeof max !== "number" || typeof count !== "number") return [];
+    const { min, max, count } = b as {
+      min?: unknown;
+      max?: unknown;
+      count?: unknown;
+    };
+    if (
+      typeof min !== "number" ||
+      typeof max !== "number" ||
+      typeof count !== "number"
+    )
+      return [];
     return [{ min, max, count }];
   });
 }
 
 export function bucketLabel(b: HistBucket): string {
   const fmt = (n: number): string =>
-    n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}s` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+    n >= 1_000_000
+      ? `${(n / 1_000_000).toFixed(1)}s`
+      : n >= 1000
+        ? `${(n / 1000).toFixed(1)}k`
+        : `${n}`;
   return `${fmt(b.min)}–${fmt(b.max)}`;
 }
 
 export function summaryFrom(data: unknown): SummaryInfo | null {
   if (!isRecord(data)) return null;
-  const num = (k: string): number => (typeof data[k] === "number" ? (data[k] as number) : 0);
-  const str = (k: string): string => (typeof data[k] === "string" ? (data[k] as string) : "");
-  if (!("events" in data) && !("exit_reason" in data) && !("exitReason" in data)) return null;
+  const num = (k: string): number =>
+    typeof data[k] === "number" ? (data[k] as number) : 0;
+  const str = (k: string): string =>
+    typeof data[k] === "string" ? (data[k] as string) : "";
+  if (
+    !("events" in data) &&
+    !("exit_reason" in data) &&
+    !("exitReason" in data)
+  )
+    return null;
   return {
     events: num("events"),
     bytes: num("bytes"),
@@ -116,7 +129,9 @@ export function accumulateSeries(
   const capped = snapshots.slice(-1200);
   const t0 = capped.length > 0 ? capped[0]!.ts : 0;
   const points = capped.map((snap) => {
-    const point: SeriesPoint = { t: Math.max(0, Math.round((snap.ts - t0) / 1000)) };
+    const point: SeriesPoint = {
+      t: Math.max(0, Math.round((snap.ts - t0) / 1000)),
+    };
     let other = 0;
     for (const [k, v] of snap.rows) {
       if (topSet.has(k)) point[k] = v;
@@ -130,8 +145,10 @@ export function accumulateSeries(
 
 export function stderrText(data: unknown): string | null {
   if (typeof data === "string") return data;
-  if (isRecord(data) && typeof data["text"] === "string") return data["text"] as string;
-  if (isRecord(data) && typeof data["message"] === "string") return data["message"] as string;
+  if (isRecord(data) && typeof data["text"] === "string")
+    return data["text"] as string;
+  if (isRecord(data) && typeof data["message"] === "string")
+    return data["message"] as string;
   return null;
 }
 

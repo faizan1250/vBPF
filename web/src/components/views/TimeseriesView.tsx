@@ -39,14 +39,29 @@ export function TimeseriesView({ events }: { events: EventEnvelope[] }) {
   }
 
   return (
-    <div className="h-80 w-full" role="img" aria-label="Time series of top keys">
+    <div
+      className="h-80 w-full"
+      role="img"
+      aria-label="Time series of top keys"
+    >
       <ResponsiveContainer>
         <LineChart data={points} margin={{ left: 8, right: 16 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-          <XAxis dataKey="t" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" label={{ value: "s", position: "insideRight", fontSize: 11 }} />
-          <YAxis tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
+          <XAxis
+            dataKey="t"
+            tick={{ fontSize: 11 }}
+            stroke="hsl(var(--muted-foreground))"
+            label={{ value: "s", position: "insideRight", fontSize: 11 }}
+          />
+          <YAxis
+            tick={{ fontSize: 11 }}
+            stroke="hsl(var(--muted-foreground))"
+          />
           <Tooltip
-            contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))" }}
+            contentStyle={{
+              background: "hsl(var(--card))",
+              border: "1px solid hsl(var(--border))",
+            }}
             labelStyle={{ color: "hsl(var(--foreground))" }}
           />
           <Legend wrapperStyle={{ fontSize: 11 }} />

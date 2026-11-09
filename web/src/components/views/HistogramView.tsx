@@ -14,7 +14,9 @@ import { bucketLabel, histBuckets } from "../../lib/events.js";
 
 export function HistogramView({ events }: { events: EventEnvelope[] }) {
   const [logScale, setLogScale] = useState(false);
-  const latest = events.filter((e) => e.kind === "hist" || e.kind === "lhist").at(-1);
+  const latest = events
+    .filter((e) => e.kind === "hist" || e.kind === "lhist")
+    .at(-1);
 
   const rows = useMemo(() => {
     if (!latest) return [];
@@ -43,11 +45,20 @@ export function HistogramView({ events }: { events: EventEnvelope[] }) {
         />
         Log scale
       </label>
-      <div className="h-80 w-full" role="img" aria-label="Histogram of bucketed values">
+      <div
+        className="h-80 w-full"
+        role="img"
+        aria-label="Histogram of bucketed values"
+      >
         <ResponsiveContainer>
           <BarChart data={rows} margin={{ left: 8, right: 16 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-            <XAxis dataKey="bucket" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" interval="preserveStartEnd" />
+            <XAxis
+              dataKey="bucket"
+              tick={{ fontSize: 11 }}
+              stroke="hsl(var(--muted-foreground))"
+              interval="preserveStartEnd"
+            />
             <YAxis
               scale={logScale ? "log" : "linear"}
               domain={logScale ? ["auto", "auto"] : [0, "auto"]}
@@ -56,7 +67,10 @@ export function HistogramView({ events }: { events: EventEnvelope[] }) {
               stroke="hsl(var(--muted-foreground))"
             />
             <Tooltip
-              contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))" }}
+              contentStyle={{
+                background: "hsl(var(--card))",
+                border: "1px solid hsl(var(--border))",
+              }}
               labelStyle={{ color: "hsl(var(--foreground))" }}
             />
             <Bar dataKey="count" fill="hsl(var(--primary))" />

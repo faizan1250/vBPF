@@ -30,7 +30,9 @@ describe("ApiError", () => {
 describe("generatePrompt", () => {
   it("rejects empty prompts without fetching", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-    await expect(generatePrompt("   ")).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
+    await expect(generatePrompt("   ")).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+    });
     expect(fetchSpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
   });
@@ -41,7 +43,10 @@ describe("explainScript", () => {
     vi.unstubAllGlobals();
   });
   it("degrades to null when the endpoint is missing", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 404 })));
-    await expect(explainScript("BEGIN { }")).resolves.toBeNull();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 404 })),
+    );
+    await expect(explainScript()).resolves.toBeNull();
   });
 });

@@ -53,7 +53,10 @@ export function HistoryPanel() {
         {entries.map((entry) => (
           <div key={entry.id} className="rounded-md border border-border p-2">
             <div className="flex items-center gap-2">
-              <History aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+              <History
+                aria-hidden
+                className="size-3.5 shrink-0 text-muted-foreground"
+              />
               <p className="truncate text-xs font-medium" title={entry.prompt}>
                 {entry.title}
               </p>
@@ -81,7 +84,9 @@ export function HistoryPanel() {
                 size="sm"
                 intent="ghost"
                 aria-label={`Export ${entry.title}`}
-                onClick={() => downloadJson(`vbpf-${entry.id}.json`, exportEntry(entry))}
+                onClick={() =>
+                  downloadJson(`vbpf-${entry.id}.json`, exportEntry(entry))
+                }
               >
                 <Download aria-hidden /> Export
               </Button>
@@ -97,7 +102,8 @@ export function HistoryPanel() {
           </div>
         ))}
         <p className="text-[11px] text-muted-foreground">
-          Browser-local only; the API has no session store. Export to keep a run.
+          Browser-local only; the API has no session store. Export to keep a
+          run.
         </p>
       </CardBody>
     </Card>
@@ -109,7 +115,10 @@ export function recordRunToHistory(): void {
   if (!s.generation && s.script.trim() === "") return;
   saveHistory({
     id: `${Date.now()}`,
-    title: s.prompt.trim().slice(0, 80) || s.script.split("\n")[0]!.slice(0, 80) || "untitled run",
+    title:
+      s.prompt.trim().slice(0, 80) ||
+      s.script.split("\n")[0]!.slice(0, 80) ||
+      "untitled run",
     createdAt: Date.now(),
     prompt: s.prompt,
     script: s.script,

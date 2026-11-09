@@ -18,7 +18,9 @@ export function useDebouncedValidate(): { validating: boolean } {
 
   useEffect(() => {
     if (fixtureMode()) {
-      useAppStore.getState().setValidation(true, [], ["tracepoint:raw_syscalls:sys_enter"]);
+      useAppStore
+        .getState()
+        .setValidation(true, [], ["tracepoint:raw_syscalls:sys_enter"]);
       return;
     }
     if (script.trim() === "") {
@@ -30,11 +32,16 @@ export function useDebouncedValidate(): { validating: boolean } {
     timer.current = window.setTimeout(() => {
       validate.mutate(script, {
         onSuccess: (result) => {
-          useAppStore.getState().setValidation(result.ok, result.errors, result.probes);
+          useAppStore
+            .getState()
+            .setValidation(result.ok, result.errors, result.probes);
           setValidating(false);
         },
         onError: (err) => {
-          const message = err instanceof ApiError ? `${err.code}: ${err.message}` : "validation request failed";
+          const message =
+            err instanceof ApiError
+              ? `${err.code}: ${err.message}`
+              : "validation request failed";
           useAppStore.getState().setValidation(false, [message], []);
           setValidating(false);
         },
@@ -43,7 +50,6 @@ export function useDebouncedValidate(): { validating: boolean } {
     return () => {
       if (timer.current !== null) window.clearTimeout(timer.current);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [script]);
 
   return { validating };

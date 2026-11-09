@@ -30,7 +30,11 @@ test("happy path: prompt, review, confirm, chart, stop", async ({ page }) => {
   let stopRequested = false;
 
   await page.route("**/api/health", (route) =>
-    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(HEALTH) }),
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(HEALTH),
+    }),
   );
   await page.route("**/api/recipes*", (route) =>
     route.fulfill({
@@ -60,7 +64,11 @@ test("happy path: prompt, review, confirm, chart, stop", async ({ page }) => {
     route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ ok: true, errors: [], probes: ["tracepoint:raw_syscalls:sys_enter"] }),
+      body: JSON.stringify({
+        ok: true,
+        errors: [],
+        probes: ["tracepoint:raw_syscalls:sys_enter"],
+      }),
     }),
   );
   await page.route("**/api/runs", (route) => {
@@ -83,6 +91,9 @@ test("happy path: prompt, review, confirm, chart, stop", async ({ page }) => {
   });
 
   await page.routeWebSocket("**/ws/**", (ws) => {
+    ws.onClose(() => {
+      closed = true;
+    });
     ws.send(
       JSON.stringify({
         run_id: "run_e2e",
@@ -93,8 +104,9 @@ test("happy path: prompt, review, confirm, chart, stop", async ({ page }) => {
       }),
     );
     let seq = 1;
+    let closed = false;
     const timer = setInterval(() => {
-      if (ws.readyState !== ws.OPEN) {
+      if (closed) {
         clearInterval(timer);
         return;
       }
@@ -106,7 +118,13 @@ test("happy path: prompt, review, confirm, chart, stop", async ({ page }) => {
             seq,
             ts: Date.now(),
             kind: "summary",
-            data: { events: 12, bytes: 480, dropped: 0, duration_s: 3, exit_reason: "stopped" },
+            data: {
+              events: 12,
+              bytes: 480,
+              dropped: 0,
+              duration_s: 3,
+              exit_reason: "stopped",
+            },
           }),
         );
         ws.send(
@@ -137,21 +155,33 @@ test("happy path: prompt, review, confirm, chart, stop", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByText("agent online")).toBeVisible();
 
-  await page.getByLabel(/what do you want to observe/i).fill("Count system calls by process");
+  await page
+    .getByLabel(/what do you want to observe/i)
+    .fill("Count system calls by process");
   await page.getByRole("button", { name: /generate probe/i }).click();
 
-  await expect(page.getByRole("button", { name: /review & run/i })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: /review & run/i }),
+  ).toBeVisible();
   await page.getByRole("button", { name: /review & run/i }).click();
 
   const runButton = page.getByRole("button", { name: /run this probe/i });
   await expect(runButton).toBeEnabled({ timeout: 10_000 });
-  await expect(page.getByText(GENERATION.script)).toBeVisible();
+  await expect(
+    page.getByRole("dialog").getByText(GENERATION.script),
+  ).toBeVisible();
   await runButton.click();
 
-  await expect(page.getByRole("button", { name: /^stop$/i })).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByRole("img", { name: /bar chart/i })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByRole("button", { name: /^stop$/i })).toBeVisible({
+    timeout: 10_000,
+  });
+  await expect(page.getByRole("img", { name: /bar chart/i })).toBeVisible({
+    timeout: 10_000,
+  });
 
   await page.getByRole("button", { name: /^stop$/i }).click();
   await expect(page.getByText("Run summary")).toBeVisible({ timeout: 10_000 });
-  await expect(page.getByText("Run completed")).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Run completed")).toBeVisible({
+    timeout: 10_000,
+  });
 });

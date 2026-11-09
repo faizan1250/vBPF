@@ -53,7 +53,8 @@ async function parseError(res: Response): Promise<never> {
   let message = `request failed (${res.status})`;
   try {
     const body = (await res.json()) as { error?: unknown; code?: unknown };
-    if (typeof body.error === "string" && body.error !== "") message = body.error;
+    if (typeof body.error === "string" && body.error !== "")
+      message = body.error;
     if (typeof body.code === "string" && body.code !== "") code = body.code;
   } catch {
     try {
@@ -87,10 +88,15 @@ export function generatePrompt(
   sessionId?: string,
 ): Promise<GenerateResponse> {
   const trimmed = prompt.trim().slice(0, MAX_PROMPT_CHARS);
-  if (trimmed === "") return Promise.reject(new ApiError(400, "VALIDATION_FAILED", "prompt is empty"));
+  if (trimmed === "")
+    return Promise.reject(
+      new ApiError(400, "VALIDATION_FAILED", "prompt is empty"),
+    );
   return postJson<GenerateResponse>("/api/generate", {
     prompt: trimmed,
-    ...(sessionId ? { session_id: sessionId.slice(0, MAX_SESSION_ID_CHARS) } : {}),
+    ...(sessionId
+      ? { session_id: sessionId.slice(0, MAX_SESSION_ID_CHARS) }
+      : {}),
   });
 }
 
@@ -98,13 +104,25 @@ export function validateScript(script: string): Promise<ValidateResult> {
   return postJson<ValidateResult>("/api/validate", { script });
 }
 
-export function createRun(script: string, durationS: number): Promise<CreateRunResult> {
-  const duration = Math.min(MAX_DURATION_S, Math.max(MIN_DURATION_S, Math.round(durationS)));
-  return postJson<CreateRunResult>("/api/runs", { script, duration_s: duration });
+export function createRun(
+  script: string,
+  durationS: number,
+): Promise<CreateRunResult> {
+  const duration = Math.min(
+    MAX_DURATION_S,
+    Math.max(MIN_DURATION_S, Math.round(durationS)),
+  );
+  return postJson<CreateRunResult>("/api/runs", {
+    script,
+    duration_s: duration,
+  });
 }
 
 export function stopRun(runId: string): Promise<StopRunResult> {
-  return postJson<StopRunResult>(`/api/runs/${encodeURIComponent(runId)}/stop`, {});
+  return postJson<StopRunResult>(
+    `/api/runs/${encodeURIComponent(runId)}/stop`,
+    {},
+  );
 }
 
 export function fetchHealth(): Promise<HealthResponse> {
@@ -113,12 +131,14 @@ export function fetchHealth(): Promise<HealthResponse> {
 
 export function fetchRecipes(query = ""): Promise<{ recipes: Recipe[] }> {
   const q = query.trim().slice(0, 256);
-  return getJson<{ recipes: Recipe[] }>(`/api/recipes${q === "" ? "" : `?q=${encodeURIComponent(q)}`}`);
+  return getJson<{ recipes: Recipe[] }>(
+    `/api/recipes${q === "" ? "" : `?q=${encodeURIComponent(q)}`}`,
+  );
 }
 
 // Degrades gracefully: the backend has no explain endpoint, so callers show
 // local generation context instead. Never rejects with a raw stack.
-export async function explainScript(_script: string): Promise<string | null> {
+export async function explainScript(): Promise<string | null> {
   try {
     const res = await fetch("/api/explain", {
       method: "POST",
@@ -134,4 +154,10 @@ export async function explainScript(_script: string): Promise<string | null> {
   }
 }
 
-export type { ChartType, EventEnvelope, GenerateResponse, HealthResponse, Recipe };
+export type {
+  ChartType,
+  EventEnvelope,
+  GenerateResponse,
+  HealthResponse,
+  Recipe,
+};

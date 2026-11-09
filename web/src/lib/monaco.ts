@@ -1,19 +1,19 @@
 import { loader } from "@monaco-editor/react";
-import * as monaco from "monaco-editor";
+import type * as Monaco from "monaco-editor";
+import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 
 let configured = false;
 
 // Bundle monaco locally (no CDN) and register a minimal bpftrace language.
+// The editor module loads lazily so unit tests and SSR never pay for it.
 // Plain-text features only, so the single editor worker suffices.
-export function configureMonaco(): void {
+export async function configureMonaco(): Promise<void> {
   if (configured) return;
   configured = true;
+  const monaco: typeof import("monaco-editor") = await import("monaco-editor");
   self.MonacoEnvironment = {
     getWorker() {
-      return new Worker(
-        new URL("monaco-editor/esm/vs/editor/editor.worker?worker", import.meta.url),
-        { type: "module" },
-      );
+      return new EditorWorker() as Worker;
     },
   };
   loader.config({ monaco });
@@ -57,12 +57,24 @@ export function configureMonaco(): void {
         [/"([^"\\]|\\.)*$/, "string.invalid"],
         [/"/, "string", "@string"],
         [/\b(BEGIN|END)\b/, "keyword"],
-        [/\b(tracepoint|kprobe|kretprobe|uprobe|uretprobe|profile|interval|software)(?=:)/, "type"],
+        [
+          /\b(tracepoint|kprobe|kretprobe|uprobe|uretprobe|profile|interval|software)(?=:)/,
+          "type",
+        ],
         [/[a-zA-Z_]\w*(?=\s*\()/, "predefined"],
         [/@[a-zA-Z_]\w*/, "variable"],
         [/\b\d[\dxXoObB]*/, "number"],
         [/[{}()[\];,]/, "delimiter"],
-        [/[a-zA-Z_]\w*/, { cases: { "@keywords": "keyword", "@builtins": "predefined", "@default": "identifier" } }],
+        [
+          /[a-zA-Z_]\w*/,
+          {
+            cases: {
+              "@keywords": "keyword",
+              "@builtins": "predefined",
+              "@default": "identifier",
+            },
+          },
+        ],
       ],
       comment: [
         [/[^/*]+/, "comment"],
@@ -77,24 +89,4 @@ export function configureMonaco(): void {
   } as never);
 }
 
-// Best-effort mapping of a validation error string to an editor line.
-// Falls back to line 1 so the marker is always visible.
-export function errorToMarker(
-  script: string,
-  message: string,
-): { line: number; text: string } {
-  const lineMatch = /line\s+(\d+)/i.exec(message);
-  if (lineMatch) {
-    return { line: Math.max(1, Number(lineMatch[1])), text: message };
-  }
-  const probeMatch = /(tracepoint|kprobe|kretprobe|uprobe|uretprobe|profile|interval|software):[^\s,;]*/.exec(
-    message,
-  );
-  if (probeMatch) {
-    const idx = script.indexOf(probeMatch[0]);
-    if (idx >= 0) {
-      return { line: script.slice(0, idx).split("\n").length, text: message };
-    }
-  }
-  return { line: 1, text: message };
-}
+export type MonacoModule = typeof Monaco;

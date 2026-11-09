@@ -9,20 +9,43 @@ export function fixtureScript(chart: ChartType): string {
     case "timeseries":
       return "tracepoint:tcp:tcp_retransmit_skb { @retx[comm] = count(); }\ninterval:s:1 { print(@retx); clear(@retx); }";
     case "events":
-      return "tracepoint:sched:sched_process_exec { printf(\"%s pid=%d\\n\", comm, pid); }";
+      return 'tracepoint:sched:sched_process_exec { printf("%s pid=%d\\n", comm, pid); }';
     default:
       return "tracepoint:raw_syscalls:sys_enter { @syscalls[comm] = count(); }\ninterval:s:1 { print(@syscalls); clear(@syscalls); }";
   }
 }
 
-const MAP_KEYS = ["systemd", "bash", "dockerd", "postgres", "containerd", "init", "chronyd", "dbus-daemon"];
+const MAP_KEYS = [
+  "systemd",
+  "bash",
+  "dockerd",
+  "postgres",
+  "containerd",
+  "init",
+  "chronyd",
+  "dbus-daemon",
+];
 
-export function fixtureEvents(chart: ChartType, runId: string, tick: number): EventEnvelope[] {
+export function fixtureEvents(
+  chart: ChartType,
+  runId: string,
+  tick: number,
+): EventEnvelope[] {
   const base = { run_id: runId, ts: Date.now() };
   if (chart === "events") {
     return [
-      { ...base, seq: tick, kind: "printf", data: `bash pid=${1000 + tick} exec ls\n` },
-      { ...base, seq: tick, kind: "printf", data: `curl pid=${2000 + tick} exec curl\n` },
+      {
+        ...base,
+        seq: tick,
+        kind: "printf",
+        data: `bash pid=${1000 + tick} exec ls\n`,
+      },
+      {
+        ...base,
+        seq: tick,
+        kind: "printf",
+        data: `curl pid=${2000 + tick} exec curl\n`,
+      },
     ];
   }
   if (chart === "histogram") {

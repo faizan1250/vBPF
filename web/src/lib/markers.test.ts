@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { errorToMarker } from "./monaco.js";
+import { errorToMarker } from "./markers.js";
 
 describe("errorToMarker", () => {
   it("maps explicit line numbers", () => {
@@ -11,7 +11,9 @@ describe("errorToMarker", () => {
   });
   it("maps probe names to their line", () => {
     const script = "BEGIN { }\ntracepoint:foo:bar { }";
-    expect(errorToMarker(script, "probe not found: tracepoint:foo:bar").line).toBe(2);
+    expect(
+      errorToMarker(script, "probe not found: tracepoint:foo:bar").line,
+    ).toBe(2);
   });
   it("falls back to line 1", () => {
     expect(errorToMarker("BEGIN { }", "mystery failure").line).toBe(1);

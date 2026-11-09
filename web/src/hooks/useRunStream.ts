@@ -1,7 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import { fixtureMode } from "../lib/api.js";
-import type { EventEnvelope } from "../lib/api.js";
+import { fixtureMode, type EventEnvelope } from "../lib/api.js";
 import { stderrText, summaryFrom } from "../lib/events.js";
 import { fixtureEvents as replayEvents } from "../lib/fixtures.js";
 import { useAppStore } from "../store/useAppStore.js";
@@ -18,7 +17,8 @@ function wsUrl(runId: string): string {
 function parseEnvelope(raw: string, runId: string): EventEnvelope | null {
   try {
     const parsed = JSON.parse(raw) as Partial<EventEnvelope>;
-    if (typeof parsed.seq !== "number" || typeof parsed.kind !== "string") return null;
+    if (typeof parsed.seq !== "number" || typeof parsed.kind !== "string")
+      return null;
     return {
       run_id: typeof parsed.run_id === "string" ? parsed.run_id : runId,
       seq: parsed.seq,
@@ -34,7 +34,10 @@ function parseEnvelope(raw: string, runId: string): EventEnvelope | null {
 // Streams run events: batches socket messages at 10 Hz, keeps a bounded ring
 // in the store, surfaces lost/stderr/summary side-channels. Reconnects with
 // backoff; fixture mode replays synthetic events instead of opening a socket.
-export function useRunStream(runId: string | null, chartHint: string | null): void {
+export function useRunStream(
+  runId: string | null,
+  chartHint: string | null,
+): void {
   const attemptRef = useRef(0);
   const bufferRef = useRef<EventEnvelope[]>([]);
   const timerRef = useRef<number | null>(null);
@@ -55,7 +58,9 @@ export function useRunStream(runId: string | null, chartHint: string | null): vo
       bufferRef.current = [];
       if (batch.length === 0) return;
       const current = useAppStore.getState();
-      const dataEvents = batch.filter((e) => e.kind !== "lost" && e.kind !== "stderr" && e.kind !== "summary");
+      const dataEvents = batch.filter(
+        (e) => e.kind !== "lost" && e.kind !== "stderr" && e.kind !== "summary",
+      );
       const lost = batch.filter((e) => e.kind === "lost").length;
       for (const e of batch) {
         if (e.kind === "stderr") {
@@ -74,7 +79,11 @@ export function useRunStream(runId: string | null, chartHint: string | null): vo
       for (const e of batch) {
         if (e.kind === "status" && isRecord(e.data)) {
           const state = (e.data as Record<string, unknown>)["state"];
-          if (state === "completed" || state === "failed" || state === "killed") {
+          if (
+            state === "completed" ||
+            state === "failed" ||
+            state === "killed"
+          ) {
             current.setRunPhase(state === "failed" ? "failed" : "done");
           } else if (state === "stopping") {
             current.setRunPhase("stopping");
@@ -87,14 +96,21 @@ export function useRunStream(runId: string | null, chartHint: string | null): vo
 
     if (fixtureMode()) {
       let tick = 0;
-      const chart = (chartHint ?? "bar") as "bar" | "histogram" | "timeseries" | "events" | "table";
+      const chart = (chartHint ?? "bar") as
+        "bar" | "histogram" | "timeseries" | "events" | "table";
       fixtureTimer = window.setInterval(() => {
         tick += 1;
         bufferRef.current.push(...replayEvents(chart, runId, tick));
         const s = useAppStore.getState();
         if (s.runPhase === "stopping" || s.events.length >= 60) {
           s.setRunPhase("done");
-          s.setSummary({ events: s.events.length, bytes: 0, dropped: 0, durationS: s.durationS, exitReason: "completed" });
+          s.setSummary({
+            events: s.events.length,
+            bytes: 0,
+            dropped: 0,
+            durationS: s.durationS,
+            exitReason: "completed",
+          });
           if (fixtureTimer !== null) window.clearInterval(fixtureTimer);
         }
       }, 250);
@@ -110,7 +126,9 @@ export function useRunStream(runId: string | null, chartHint: string | null): vo
           if (closed) return;
           attemptRef.current += 1;
           if (attemptRef.current > MAX_ATTEMPTS) {
-            useAppStore.getState().setRunError("stream disconnected (AGENT_OFFLINE)");
+            useAppStore
+              .getState()
+              .setRunError("stream disconnected (AGENT_OFFLINE)");
             useAppStore.getState().setRunPhase("failed");
             return;
           }
@@ -140,12 +158,9 @@ export function useRunStream(runId: string | null, chartHint: string | null): vo
         /* already closed */
       }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId]);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
-
-import type { EventEnvelope } from "../lib/api.js";

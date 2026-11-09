@@ -30,7 +30,9 @@ describe("useAppStore", () => {
   });
 
   it("caps the event ring at 5000 and counts overflow", () => {
-    const many = Array.from({ length: EVENT_RING_CAP + 100 }, (_, i) => envelope(i));
+    const many = Array.from({ length: EVENT_RING_CAP + 100 }, (_, i) =>
+      envelope(i),
+    );
     useAppStore.getState().pushEvents(many);
     const state = useAppStore.getState();
     expect(state.events).toHaveLength(EVENT_RING_CAP);

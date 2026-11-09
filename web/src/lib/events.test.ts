@@ -95,8 +95,20 @@ describe("accumulateSeries", () => {
 describe("summaryFrom", () => {
   it("parses snake_case summary", () => {
     expect(
-      summaryFrom({ events: 10, bytes: 99, dropped: 1, duration_s: 10, exit_reason: "completed" }),
-    ).toEqual({ events: 10, bytes: 99, dropped: 1, durationS: 10, exitReason: "completed" });
+      summaryFrom({
+        events: 10,
+        bytes: 99,
+        dropped: 1,
+        duration_s: 10,
+        exit_reason: "completed",
+      }),
+    ).toEqual({
+      events: 10,
+      bytes: 99,
+      dropped: 1,
+      durationS: 10,
+      exitReason: "completed",
+    });
   });
   it("rejects non-summary payloads", () => {
     expect(summaryFrom({ foo: 1 })).toBeNull();

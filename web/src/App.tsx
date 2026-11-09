@@ -21,7 +21,12 @@ function ThemeToggle() {
     document.documentElement.classList.toggle("dark");
   };
   return (
-    <Button intent="ghost" size="sm" onClick={toggle} aria-label="Toggle color theme">
+    <Button
+      intent="ghost"
+      size="sm"
+      onClick={toggle}
+      aria-label="Toggle color theme"
+    >
       <Sun aria-hidden className="hidden dark:inline" />
       <Moon aria-hidden className="dark:hidden" />
     </Button>
@@ -55,7 +60,10 @@ export function App() {
         </div>
       </div>
       {runError && (
-        <p role="alert" className="border-b border-border bg-destructive/10 px-4 py-2 text-sm text-red-400">
+        <p
+          role="alert"
+          className="border-b border-border bg-destructive/10 px-4 py-2 text-sm text-red-400"
+        >
           {runError}
         </p>
       )}

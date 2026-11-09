@@ -48,7 +48,11 @@ interface AppState {
   setDuration: (durationS: number) => void;
   setGeneration: (generation: GenerateResponse | null) => void;
   setScript: (script: string) => void;
-  setValidation: (ok: boolean | null, errors: string[], probes: string[]) => void;
+  setValidation: (
+    ok: boolean | null,
+    errors: string[],
+    probes: string[],
+  ) => void;
   setConfirmOpen: (open: boolean) => void;
   setRunPhase: (phase: RunPhase) => void;
   setRunId: (runId: string | null) => void;
@@ -102,7 +106,11 @@ export const useAppStore = create<AppState>()((set) => ({
     }),
   setScript: (script) => set({ script }),
   setValidation: (ok, errors, probes) =>
-    set({ validationOk: ok, validationErrors: errors, validationProbes: probes }),
+    set({
+      validationOk: ok,
+      validationErrors: errors,
+      validationProbes: probes,
+    }),
   setConfirmOpen: (open) => set({ confirmOpen: open }),
   setRunPhase: (phase) => set({ runPhase: phase }),
   setRunId: (runId) => set({ runId }),
@@ -136,7 +144,8 @@ export const useAppStore = create<AppState>()((set) => ({
       viewOverride: null,
       eventsPaused: false,
     }),
-  bumpHistory: () => set((state) => ({ historyVersion: state.historyVersion + 1 })),
+  bumpHistory: () =>
+    set((state) => ({ historyVersion: state.historyVersion + 1 })),
   resetForGenerate: () =>
     set({
       runPhase: "generating",
@@ -149,11 +158,3 @@ export const useAppStore = create<AppState>()((set) => ({
       eventsPaused: false,
     }),
 }));
-
-export function selectConfirmRequest(state: AppState): ConfirmRequest {
-  return {
-    script: state.script,
-    durationS: state.durationS,
-    warnings: state.generation?.warnings ?? [],
-  };
-}

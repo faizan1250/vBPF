@@ -43,7 +43,11 @@ export function ViewSwitcher({
             {dropped} events dropped
           </Badge>
         )}
-        <div className="ml-auto flex gap-1" role="tablist" aria-label="View selector">
+        <div
+          className="ml-auto flex gap-1"
+          role="tablist"
+          aria-label="View selector"
+        >
           {VIEWS.map((v) => (
             <button
               key={v.id}

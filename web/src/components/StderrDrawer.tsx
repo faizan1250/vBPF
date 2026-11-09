@@ -20,7 +20,13 @@ export function StderrDrawer() {
       >
         <Terminal aria-hidden className="size-3.5" />
         Probe log ({stderrLines.length})
-        <ChevronDown aria-hidden className={cn("ml-auto size-4 transition-transform", open && "rotate-180")} />
+        <ChevronDown
+          aria-hidden
+          className={cn(
+            "ml-auto size-4 transition-transform",
+            open && "rotate-180",
+          )}
+        />
       </button>
       {open && (
         <pre className="max-h-48 overflow-auto border-t border-border p-3 font-mono text-[11px] text-muted-foreground">

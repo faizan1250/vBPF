@@ -6,9 +6,11 @@ import { Badge } from "./ui/badge.js";
 import { cn } from "./ui/cn.js";
 
 const FIX_HINTS: Record<string, string> = {
-  AGENT_OFFLINE: "Start the agent as root: ./scripts/dev-agent.sh start, then retry.",
+  AGENT_OFFLINE:
+    "Start the agent as root: ./scripts/dev-agent.sh start, then retry.",
   NO_PRIVILEGE: "Agent needs root: restart it with sudo or -u root.",
-  KERNEL_UNSUPPORTED: "Kernel lacks BTF or required probes; see docs/environment.md.",
+  KERNEL_UNSUPPORTED:
+    "Kernel lacks BTF or required probes; see docs/environment.md.",
   PROBE_NOT_FOUND: "Probe missing on this kernel; pick a recipe alternative.",
   VALIDATION_FAILED: "Fix the highlighted script errors and retry.",
   LIMIT_EXCEEDED: "Shorten duration or narrow the probe; see run summary.",
@@ -27,7 +29,11 @@ export function TopBar() {
   const agent = health.data?.agent;
   const online = agent?.reachable === true;
   const offlineCode =
-    agent && !agent.reachable ? agent.code : health.isError ? "AGENT_OFFLINE" : null;
+    agent && !agent.reachable
+      ? agent.code
+      : health.isError
+        ? "AGENT_OFFLINE"
+        : null;
 
   return (
     <header className="border-b border-border bg-card">
@@ -52,8 +58,14 @@ export function TopBar() {
         </div>
       </div>
       {offlineCode && (
-        <p role="alert" className={cn("border-t border-border px-4 py-1.5 text-xs text-amber-400")}>
-          {FIX_HINTS[offlineCode] ?? "Agent unreachable; check the API and agent logs."}
+        <p
+          role="alert"
+          className={cn(
+            "border-t border-border px-4 py-1.5 text-xs text-amber-400",
+          )}
+        >
+          {FIX_HINTS[offlineCode] ??
+            "Agent unreachable; check the API and agent logs."}
         </p>
       )}
     </header>

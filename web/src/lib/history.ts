@@ -42,7 +42,10 @@ function readAll(): HistoryEntry[] {
 
 function writeAll(entries: HistoryEntry[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)));
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(entries.slice(0, MAX_ENTRIES)),
+    );
   } catch {
     /* storage full or unavailable: history is best-effort */
   }

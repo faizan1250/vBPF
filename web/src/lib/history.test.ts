@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { exportEntry, listHistory, sampleEvents, saveHistory } from "./history.js";
+import {
+  exportEntry,
+  listHistory,
+  sampleEvents,
+  saveHistory,
+} from "./history.js";
 import type { EventEnvelope } from "./api.js";
 
 function envelope(seq: number): EventEnvelope {

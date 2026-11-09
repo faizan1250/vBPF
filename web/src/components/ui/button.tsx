@@ -10,7 +10,8 @@ const button = cva(
       intent: {
         primary: "btn-primary-3d text-primary-foreground",
         secondary: "bg-accent text-accent-foreground hover:bg-accent/80",
-        danger: "bg-destructive text-destructive-foreground hover:bg-destructive/90",
+        danger:
+          "bg-destructive text-destructive-foreground hover:bg-destructive/90",
         ghost: "hover:bg-accent hover:text-accent-foreground",
       },
       size: {
@@ -24,12 +25,18 @@ const button = cva(
 );
 
 export interface ButtonProps
-  extends ButtonHTMLAttributes<HTMLButtonElement>,
+  extends
+    ButtonHTMLAttributes<HTMLButtonElement>,
     VariantProps<typeof button> {}
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, intent, size, type = "button", ...rest }, ref) => (
-    <button ref={ref} type={type} className={cn(button({ intent, size }), className)} {...rest} />
+    <button
+      ref={ref}
+      type={type}
+      className={cn(button({ intent, size }), className)}
+      {...rest}
+    />
   ),
 );
 Button.displayName = "Button";

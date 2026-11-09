@@ -1,8 +1,17 @@
 import Editor, { type OnMount } from "@monaco-editor/react";
-import { Component, Suspense, lazy, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Component,
+  Suspense,
+  lazy,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type * as Monaco from "monaco-editor";
 
-import { configureMonaco, errorToMarker } from "../lib/monaco.js";
+import { configureMonaco } from "../lib/monaco.js";
+import { errorToMarker } from "../lib/markers.js";
 import { useAppStore } from "../store/useAppStore.js";
 import { Badge } from "./ui/badge.js";
 import { Card, CardBody, CardHeader, CardTitle } from "./ui/card.js";
@@ -18,7 +27,7 @@ const MONACO_OPTIONS: Monaco.editor.IStandaloneEditorConstructionOptions = {
 };
 
 const LazyEditor = lazy(async () => {
-  configureMonaco();
+  await configureMonaco();
   return { default: Editor };
 });
 
@@ -41,7 +50,7 @@ function ScriptEditor() {
   const setScript = useAppStore((s) => s.setScript);
   const validationErrors = useAppStore((s) => s.validationErrors);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
-  const monacoRef = useRef<typeof Monaco | null>(null);
+  const monacoRef = useRef<Parameters<OnMount>[1] | null>(null);
   const [failed, setFailed] = useState(false);
 
   const handleMount: OnMount = (editor, monaco) => {
@@ -163,9 +172,12 @@ export function ScriptPanel({ validating }: { validating: boolean }) {
 
         <div>
           <h3 className="mb-1 text-xs font-semibold">Explanation</h3>
-          <p className="text-sm text-muted-foreground">{generation.explanation}</p>
+          <p className="text-sm text-muted-foreground">
+            {generation.explanation}
+          </p>
           <p className="mt-1 text-[11px] text-muted-foreground">
-            Server-side probe walkthrough unavailable; showing the generation summary instead.
+            Server-side probe walkthrough unavailable; showing the generation
+            summary instead.
           </p>
         </div>
 

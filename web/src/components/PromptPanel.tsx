@@ -10,6 +10,8 @@ import {
   fetchRecipes,
   fixtureMode,
   generatePrompt,
+  type ChartType,
+  type GenerateResponse,
 } from "../lib/api.js";
 import { fixtureScript } from "../lib/fixtures.js";
 import { useAppStore } from "../store/useAppStore.js";
@@ -46,18 +48,26 @@ export function PromptPanel() {
   });
 
   const generate = useMutation({
-    mutationFn: ({ p, sid }: { p: string; sid: string }) => {
+    mutationFn: ({
+      p,
+      sid,
+    }: {
+      p: string;
+      sid: string;
+    }): Promise<GenerateResponse> => {
       if (fixtureMode()) {
-        const chart = p.toLowerCase().includes("histogram")
+        const lower = p.toLowerCase();
+        const chart: ChartType = lower.includes("histogram")
           ? "histogram"
-          : p.toLowerCase().includes("process") && p.toLowerCase().includes("start")
+          : lower.includes("start")
             ? "events"
             : "bar";
         return Promise.resolve({
           generation_id: `gen_fixture_${Date.now()}`,
           script: fixtureScript(chart),
           chart_type: chart,
-          explanation: "Fixture replay: synthetic run for UI development without root.",
+          explanation:
+            "Fixture replay: synthetic run for UI development without root.",
           duration_s: durationS,
           warnings: ["Fixture mode: no real probe runs."],
           validation: { status: "ok" as const, attempts: 1, errors: [] },
@@ -75,7 +85,10 @@ export function PromptPanel() {
       setRunError(null);
     },
     onError: (err) => {
-      const message = err instanceof ApiError ? `${err.code}: ${err.message}` : "generation failed";
+      const message =
+        err instanceof ApiError
+          ? `${err.code}: ${err.message}`
+          : "generation failed";
       setRunError(message);
       setRunPhase("failed");
     },
@@ -101,7 +114,10 @@ export function PromptPanel() {
             aria-invalid={overCap}
             aria-describedby="prompt-count"
           />
-          <p id="prompt-count" className="mt-1 text-right text-[11px] text-muted-foreground">
+          <p
+            id="prompt-count"
+            className="mt-1 text-right text-[11px] text-muted-foreground"
+          >
             {promptLen}/{MAX_PROMPT_CHARS}
           </p>
           <div className="mt-1 flex flex-wrap gap-1.5">
@@ -121,7 +137,10 @@ export function PromptPanel() {
         <div>
           <FieldLabel htmlFor="recipe">Recipe picker</FieldLabel>
           <div className="flex items-center gap-2">
-            <BookOpen aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+            <BookOpen
+              aria-hidden
+              className="size-4 shrink-0 text-muted-foreground"
+            />
             <Input
               id="recipe"
               value={recipeQuery}
@@ -148,14 +167,14 @@ export function PromptPanel() {
             </Select>
           )}
           {recipes.isError && (
-            <p className="mt-1 text-[11px] text-muted-foreground">Recipe list unavailable.</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Recipe list unavailable.
+            </p>
           )}
         </div>
 
         <div>
-          <FieldLabel htmlFor="duration">
-            Duration: {durationS}s
-          </FieldLabel>
+          <FieldLabel htmlFor="duration">Duration: {durationS}s</FieldLabel>
           <input
             id="duration"
             type="range"
@@ -173,7 +192,11 @@ export function PromptPanel() {
           disabled={generate.isPending || prompt.trim() === "" || overCap}
           onClick={() => generate.mutate({ p: prompt, sid: sessionId })}
         >
-          {generate.isPending ? <Loader2 className="animate-spin" aria-hidden /> : <Sparkles aria-hidden />}
+          {generate.isPending ? (
+            <Loader2 className="animate-spin" aria-hidden />
+          ) : (
+            <Sparkles aria-hidden />
+          )}
           Generate probe
         </Button>
 
@@ -181,7 +204,9 @@ export function PromptPanel() {
           <div className="flex items-center gap-2 text-xs" aria-live="polite">
             <span className="text-muted-foreground">
               attempts {generation.validation.attempts}
-              {generation.based_on_recipe ? ` · based on ${generation.based_on_recipe}` : ""}
+              {generation.based_on_recipe
+                ? ` · based on ${generation.based_on_recipe}`
+                : ""}
             </span>
             {validationOk === true ? (
               <Badge tone="ok">valid</Badge>

@@ -23,7 +23,11 @@ export function BarView({ events }: { events: EventEnvelope[] }) {
     if (!latest) return [];
     return mapEntries(latest.data)
       .slice(0, topN)
-      .map(([name, value]) => ({ name: name.length > 18 ? `${name.slice(0, 17)}…` : name, full: name, value }));
+      .map(([name, value]) => ({
+        name: name.length > 18 ? `${name.slice(0, 17)}…` : name,
+        full: name,
+        value,
+      }));
   }, [latest, topN]);
 
   if (!latest) {
@@ -53,14 +57,35 @@ export function BarView({ events }: { events: EventEnvelope[] }) {
           ))}
         </Select>
       </div>
-      <div className="h-80 w-full" role="img" aria-label="Bar chart of latest map snapshot">
+      <div
+        className="h-80 w-full"
+        role="img"
+        aria-label="Bar chart of latest map snapshot"
+      >
         <ResponsiveContainer>
-          <BarChart data={rows} layout="vertical" margin={{ left: 8, right: 16 }}>
+          <BarChart
+            data={rows}
+            layout="vertical"
+            margin={{ left: 8, right: 16 }}
+          >
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
-            <XAxis type="number" tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
-            <YAxis type="category" dataKey="name" width={140} tick={{ fontSize: 11 }} stroke="hsl(var(--muted-foreground))" />
+            <XAxis
+              type="number"
+              tick={{ fontSize: 11 }}
+              stroke="hsl(var(--muted-foreground))"
+            />
+            <YAxis
+              type="category"
+              dataKey="name"
+              width={140}
+              tick={{ fontSize: 11 }}
+              stroke="hsl(var(--muted-foreground))"
+            />
             <Tooltip
-              contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))" }}
+              contentStyle={{
+                background: "hsl(var(--card))",
+                border: "1px solid hsl(var(--border))",
+              }}
               labelStyle={{ color: "hsl(var(--foreground))" }}
             />
             <Bar dataKey="value" fill="hsl(var(--primary))" />
