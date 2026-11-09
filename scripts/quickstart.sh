@@ -29,12 +29,25 @@ printf 'quickstart: waiting for services to turn healthy...\n'
 healthy=0
 for _ in $(seq 1 36); do
   healthy=0
+  bad=""
   for svc in agent api web; do
     id="$(docker compose ps -q "$svc" 2>/dev/null || true)"
-    if [ -n "$id" ] && [ "$(docker inspect --format '{{.State.Health.Status}}' "$id" 2>/dev/null || true)" = "healthy" ]; then
-      healthy=$((healthy + 1))
+    if [ -n "$id" ]; then
+      status="$(docker inspect --format '{{.State.Health.Status}}' "$id" 2>/dev/null || true)"
+      state="$(docker inspect --format '{{.State.Status}}' "$id" 2>/dev/null || true)"
+      if [ "$status" = "healthy" ]; then
+        healthy=$((healthy + 1))
+      elif [ "$status" = "unhealthy" ] || [ "$state" = "exited" ] || [ "$state" = "dead" ]; then
+        # Terminal states only: starting/created/restarting containers get
+        # the full wait below; unhealthy or dead ones fail immediately.
+        bad="$bad $svc"
+      fi
     fi
   done
+  if [ -n "$bad" ]; then
+    docker compose ps
+    fail "service(s) failed to start:$bad (failing fast instead of waiting)"
+  fi
   if [ "$healthy" -ge 3 ]; then
     break
   fi
