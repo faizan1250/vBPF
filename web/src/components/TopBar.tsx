@@ -29,7 +29,7 @@ export function TopBar() {
 
   const agent = health.data?.agent;
   const online = agent?.reachable === true;
-  const warnings = agent && agent.reachable ? agent.warnings : [];
+  const warnings = agent && agent.reachable ? (agent.warnings ?? []) : [];
   const degraded = online && warnings.length > 0 ? warnings[0]! : null;
   const offlineCode =
     agent && !agent.reachable

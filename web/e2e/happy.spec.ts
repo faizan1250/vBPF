@@ -15,6 +15,7 @@ const HEALTH = {
   ok: true,
   agent: {
     reachable: true,
+    warnings: [],
     health: {
       kernel: "6.6.0",
       bpftrace_version: "0.20.0",
