@@ -1,5 +1,11 @@
 # Decisions
 
+## R-14: Sessions and export, Option A (2026-11-10)
+
+- **Client-side history for this release; server-side sessions deferred to v0.3.** History entries persist in browser localStorage (`vbpf:history:v1`, cap 50 entries, 200 sampled events each) with re-run and JSON-download export per entry. Smallest change: already works, no new routes.
+- **No server sessions/export API.** `generations.session_id` groups rows in SQLite and the API accepts an optional `session_id` on generate, but there is no sessions store, list/get endpoint, or server export. The UI footnote and code comment already state this; README now says so too.
+- **Export verified secret-free.** `exportEntry` emits only `exported_at`, `prompt`, `script`, `chart_type`, `explanation`, `duration_s`, `warnings`, `run_id`, `exit_reason`, `events_sample` — no keys, tokens, or credentials. Probe output samples may echo observed paths by nature of tracing; fixtures stay scrubbed per R-06.
+
 ## R-13: Run summaries and GET /api/runs/:id (2026-11-10)
 
 - **Persistence point is the API WS relay.** Summary envelopes forwarded upstream→client also update the `runs` row (`state`, `ended_at`, `events_count`, `bytes`, `dropped`, `exit_reason`). Stream end covers both natural completion and timeout, since the agent ends every run with a summary event.
