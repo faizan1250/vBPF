@@ -28,6 +28,14 @@ const JSON_INSTRUCTION = [
   '"explanation" (string), "duration_s" (integer 1-60), "refusal" (string or null).',
 ].join("\n");
 
+// Short system prompt for /api/explain. Only the script text is ever sent;
+// run output (process names, paths, command lines) is never included.
+export const EXPLAIN_SYSTEM = [
+  "Explain this bpftrace script in plain English.",
+  "Reply with 1 short paragraph plus bullets. Do not suggest running anything.",
+].join("\n");
+export const EXPLAIN_MAX_CHARS = 2048;
+
 export type LiveProviderState =
   "ready" | "cooldown" | "unconfigured" | "exhausted";
 
@@ -172,6 +180,18 @@ function isConfigured(p: ProviderRuntime): boolean {
 
 type ProviderOutcome =
   | { ok: true; output: LlmOutput; model: string }
+  | { ok: false; kind: "auth"; message: string }
+  | { ok: false; kind: "rate"; message: string; cooldownMs: number }
+  | { ok: false; kind: "model" | "provider"; message: string };
+
+/** Plain-text explanation result with provider/model attribution. */
+export interface ExplainDetailedResult {
+  explanation: string;
+  model: string;
+}
+
+type ExplainOutcome =
+  | { ok: true; explanation: string; model: string }
   | { ok: false; kind: "auth"; message: string }
   | { ok: false; kind: "rate"; message: string; cooldownMs: number }
   | { ok: false; kind: "model" | "provider"; message: string };
@@ -326,6 +346,16 @@ export class LiveLlmChain implements LlmClient {
     return (await this.generateDetailed(prompt)).output;
   }
 
+  /** Plain-English explanation of one script; script text only is sent. */
+  async explainDetailed(script: string): Promise<ExplainDetailedResult> {
+    const release = await this.semaphore.acquire();
+    try {
+      return await this.attemptExplain(script);
+    } finally {
+      release();
+    }
+  }
+
   async generateDetailed(prompt: string): Promise<LlmDetailedResult> {
     const release = await this.semaphore.acquire();
     try {
@@ -430,6 +460,219 @@ export class LiveLlmChain implements LlmClient {
         return outcome;
     }
     return last;
+  }
+
+  private async attemptExplain(script: string): Promise<ExplainDetailedResult> {
+    const now = Date.now();
+    const configured = this.providers.filter(isConfigured);
+    if (configured.length === 0) {
+      throw new LlmUnavailableError(
+        "no live LLM provider is configured: set a provider key and LLM_<NAME>_MODEL",
+      );
+    }
+    let cooled = 0;
+    let last = "no provider attempted";
+    for (const p of configured) {
+      if (p.cooldownUntil > now) {
+        cooled += 1;
+        last = `${p.name} is cooling down after a rate limit`;
+        continue;
+      }
+      const outcome = await this.attemptExplainProvider(p, script);
+      if (outcome.ok) {
+        const attribution = `${p.name}/${outcome.model}`;
+        this.attribution = attribution;
+        return { explanation: outcome.explanation, model: attribution };
+      }
+      if (outcome.kind === "rate") cooled += 1;
+      last = outcome.message;
+    }
+    if (cooled >= configured.length) {
+      throw new LlmUnavailableError(
+        "all live LLM providers are cooling down after rate limits",
+      );
+    }
+    throw new LlmRequestError(`live LLM request failed: ${last}`);
+  }
+
+  // Same key semantics as generation: 401/403 rotates the key, 429 cools
+  // the whole provider instead of trying another key of the same account.
+  private async attemptExplainProvider(
+    p: ProviderRuntime,
+    script: string,
+  ): Promise<ExplainOutcome> {
+    for (;;) {
+      const keyIndex = nextEnabledIndex(p, p.active);
+      if (p.needsKey && keyIndex < 0) {
+        return {
+          ok: false,
+          kind: "model",
+          message: `${p.name}: all keys rejected, no usable key left`,
+        };
+      }
+      const key = keyIndex >= 0 ? p.keys[keyIndex] : undefined;
+      if (p.needsKey && key === undefined) {
+        return {
+          ok: false,
+          kind: "model",
+          message: `${p.name}: all keys rejected, no usable key left`,
+        };
+      }
+      const outcome = await this.attemptExplainModels(p, key, script);
+      if (outcome.ok || outcome.kind !== "auth") {
+        if (!outcome.ok && outcome.kind === "rate") {
+          p.cooldownUntil = Date.now() + outcome.cooldownMs;
+        }
+        return outcome;
+      }
+      if (keyIndex >= 0) p.disabled[keyIndex] = true;
+      p.active = keyIndex + 1;
+      if (p.needsKey && nextEnabledIndex(p, p.active) < 0) {
+        return {
+          ok: false,
+          kind: "model",
+          message: `${p.name}: all keys rejected, no usable key left`,
+        };
+      }
+    }
+  }
+
+  private async attemptExplainModels(
+    p: ProviderRuntime,
+    key: string | undefined,
+    script: string,
+  ): Promise<ExplainOutcome> {
+    let last: ExplainOutcome = {
+      ok: false,
+      kind: "provider",
+      message: `${p.name}: no model configured`,
+    };
+    for (const model of p.models) {
+      const outcome = await this.postExplain(p, key, model, script);
+      if (outcome.ok) return outcome;
+      last = outcome;
+      if (outcome.kind === "auth" || outcome.kind === "provider")
+        return outcome;
+    }
+    return last;
+  }
+
+  private async postExplain(
+    p: ProviderRuntime,
+    key: string | undefined,
+    model: string,
+    script: string,
+  ): Promise<ExplainOutcome> {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
+    let res: Response;
+    try {
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+      };
+      if (key !== undefined) headers["authorization"] = `Bearer ${key}`;
+      res = await this.fetchFn(`${p.baseUrl}/chat/completions`, {
+        method: "POST",
+        redirect: "manual",
+        signal: ctrl.signal,
+        headers,
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: "system", content: EXPLAIN_SYSTEM },
+            { role: "user", content: script.slice(0, LIVE_MAX_PROMPT_CHARS) },
+          ],
+          temperature: 0.2,
+          max_tokens: 600,
+        }),
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "request failed";
+      return {
+        ok: false,
+        kind: "provider",
+        message: `${p.name}/${model}: ${reason}`,
+      };
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (res.status === 0 || (res.status >= 300 && res.status < 400)) {
+      return {
+        ok: false,
+        kind: "provider",
+        message: `${p.name}/${model}: unexpected redirect (${res.status}), not following`,
+      };
+    }
+    if (res.status === 401 || res.status === 403) {
+      return {
+        ok: false,
+        kind: "auth",
+        message: `${p.name}: key rejected (${res.status})`,
+      };
+    }
+    if (res.status === 429) {
+      return {
+        ok: false,
+        kind: "rate",
+        message: `${p.name}/${model}: rate limited (429)`,
+        cooldownMs: parseRetryAfterMs(
+          res.headers.get("retry-after"),
+          Date.now(),
+        ),
+      };
+    }
+    if (res.status === 400 || res.status === 404 || res.status === 422) {
+      return {
+        ok: false,
+        kind: "model",
+        message: `${p.name}/${model}: rejected (${res.status})`,
+      };
+    }
+    if (res.status < 200 || res.status >= 300) {
+      return {
+        ok: false,
+        kind: "provider",
+        message: `${p.name}/${model}: provider error (${res.status})`,
+      };
+    }
+
+    let text: string;
+    try {
+      text = await readCappedText(res, this.maxBodyBytes);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "unreadable body";
+      return {
+        ok: false,
+        kind: "provider",
+        message: `${p.name}/${model}: ${reason}`,
+      };
+    }
+    try {
+      const envelope = JSON.parse(text) as {
+        choices?: Array<{ message?: { content?: unknown } }>;
+      };
+      const content = envelope.choices?.[0]?.message?.content;
+      if (typeof content !== "string" || content.trim() === "") {
+        return {
+          ok: false,
+          kind: "model",
+          message: `${p.name}/${model}: missing choices[0].message.content`,
+        };
+      }
+      return {
+        ok: true,
+        explanation: content.trim().slice(0, EXPLAIN_MAX_CHARS),
+        model,
+      };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "invalid payload";
+      return {
+        ok: false,
+        kind: "model",
+        message: `${p.name}/${model}: ${reason}`,
+      };
+    }
   }
 
   private async postChat(

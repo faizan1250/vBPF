@@ -48,6 +48,12 @@ export function migrate(db: Database.Database): void {
     CREATE VIRTUAL TABLE IF NOT EXISTS recipes_index USING fts5(
       id, title, description, tags, view
     );
+    CREATE TABLE IF NOT EXISTS explanations (
+      script_sha256 TEXT PRIMARY KEY,
+      explanation TEXT NOT NULL,
+      model TEXT NOT NULL DEFAULT '',
+      created_at INTEGER NOT NULL
+    );
   `);
   for (const ddl of [
     "ALTER TABLE generations ADD COLUMN warnings TEXT NOT NULL DEFAULT '[]'",
@@ -122,6 +128,35 @@ export function searchRecipes(
     )
     .all(match, limit) as Array<Omit<Recipe, "tags"> & { tags: string }>;
   return rows.map(toRecipe);
+}
+
+export interface ExplanationRow {
+  script_sha256: string;
+  explanation: string;
+  model: string;
+}
+
+export function getExplanation(
+  db: Database.Database,
+  scriptSha256: string,
+): ExplanationRow | undefined {
+  const row = db
+    .prepare(
+      "SELECT script_sha256, explanation, model FROM explanations WHERE script_sha256 = ?",
+    )
+    .get(scriptSha256) as ExplanationRow | undefined;
+  return row;
+}
+
+export function putExplanation(
+  db: Database.Database,
+  row: ExplanationRow,
+): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO explanations
+      (script_sha256, explanation, model, created_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(row.script_sha256, row.explanation, row.model, Date.now());
 }
 
 export interface GenerationRow {

@@ -1,5 +1,14 @@
 # Decisions
 
+## R-12: /api/explain and the Explain panel (2026-11-10)
+
+- **Shared rate-limit bucket with generate.** One fixed-window limiter (10 req/min/IP) guards both `POST /api/generate` and `POST /api/explain`; a generate consumes explain budget and vice versa. Reason: both hit paid LLM quota, and one shared budget is the smallest change that protects free-tier limits.
+- **Static failures are 422, not LLM calls.** `staticValidate` runs before cache lookup and before any provider call; blocked scripts return `422 VALIDATION_FAILED` with the error list and never reach the network (verified by test asserting zero stub-fetch calls).
+- **Cache keyed by SHA-256 in a new `explanations` table** (`script_sha256` PK, explanation, model, created_at), via `INSERT OR REPLACE`; only successful explanations are stored.
+- **Mock mode matches on trimmed body equality** (`body.trim() === script.trim()`) and returns the recipe's `description`; otherwise a fixed generic sentence. Rationale: trailing-newline differences between generated and stored bodies should not defeat the match.
+- **Live explain reuses the R-01 chain, not the generate path.** New `LiveLlmChain.explainDetailed` posts the same short system prompt with the script as the user message (no `response_format: json_object`), same key-rotation (401/403), provider-cooldown (429), fallback-model, timeout, body-cap, and semaphore semantics. Key rotation on 429 stays forbidden by design.
+- **Web keeps the generation summary and adds a walkthrough section.** `ExplainSection` posts `{ script }`, shows "Explaining…" while pending, `role="alert"` on error with a retry label, and `via <model> · cached` attribution on success. Editing the script invalidates a prior walkthrough. Fixture mode returns canned text without network.
+
 ## R-10: Docker and e2e (2026-11-10)
 
 - **"Fails fast" means abort on terminal state.** R-10 asks that
