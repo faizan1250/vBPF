@@ -118,6 +118,34 @@ func TestByteLimit(t *testing.T) {
 	require.LessOrEqual(t, s.Bytes, uint64(64*1024))
 }
 
+func TestCancel(t *testing.T) {
+	fake := fakePath(t)
+	t.Setenv("FAKE_MODE", "sleep")
+	t.Setenv("FAKE_SLEEP", "30")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var events []parser.Event
+	var runErr error
+	go func() {
+		defer close(done)
+		runErr = Run(ctx, Options{BPFtracePath: fake, Script: "profile:hz:99 {}", Duration: 10 * time.Second, RunID: "run_cancel", GracePeriod: 200 * time.Millisecond}, func(ev parser.Event) error {
+			events = append(events, ev)
+			return nil
+		})
+	}()
+	time.Sleep(time.Second)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("cancel did not stop the run")
+	}
+	require.NoError(t, runErr)
+	s := summaryOf(t, events)
+	require.Equal(t, ReasonCancelled, s.ExitReason)
+	require.Positive(t, s.DurationMs)
+}
+
 func TestValidation(t *testing.T) {
 	fake := fakePath(t)
 	_, err := run(t, Options{BPFtracePath: fake, Duration: time.Second, RunID: "r"})

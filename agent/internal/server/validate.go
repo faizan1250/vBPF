@@ -36,6 +36,27 @@ var allowedProviders = map[string]bool{
 // DryRunFunc compiles a script without attaching probes.
 type DryRunFunc func(ctx context.Context, script string) []string
 
+// classifyValidationError maps static/dry-run failures to the client-facing
+// taxonomy code. HTTP status stays 400; only the code carries the taxonomy.
+// Probe misses and over-broad wildcards are best-effort matches on compiler
+// wording, so unknown shapes fall back to VALIDATION_FAILED.
+func classifyValidationError(errs []string) string {
+	for _, e := range errs {
+		low := strings.ToLower(e)
+		if strings.Contains(low, "probe not found") ||
+			strings.Contains(low, "unknown probe") ||
+			strings.Contains(low, "no such probe") {
+			return "PROBE_NOT_FOUND"
+		}
+	}
+	for _, e := range errs {
+		if strings.Contains(strings.ToLower(e), "too many probes") {
+			return "LIMIT_EXCEEDED"
+		}
+	}
+	return "VALIDATION_FAILED"
+}
+
 // StaticValidate applies blocklist, allowlist, and size rules (no exec).
 func StaticValidate(script string, catalog *Catalog) (probes []string, errors []string) {
 	if strings.TrimSpace(script) == "" {
