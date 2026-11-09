@@ -1,0 +1,15 @@
+name: Kernel compatibility report
+description: Report recipe results on your kernel
+body:
+  - type: textarea
+    attributes:
+      label: Environment
+      description: Distro, kernel (uname -r), BTF present, bpftrace version.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Results
+      description: "One line per recipe tried, e.g. works or PROBE_NOT_FOUND with the error shown."
+    validations:
+      required: true

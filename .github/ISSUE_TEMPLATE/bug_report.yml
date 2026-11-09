@@ -1,0 +1,27 @@
+name: Bug report
+description: Something broken or unexpected
+body:
+  - type: textarea
+    attributes:
+      label: What happened
+      description: Actual vs expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Environment
+      description: OS, kernel (uname -r), BTF present, bpftrace version, commit hash.
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Reproduction steps
+      description: Minimal steps or commands to trigger it.
+    validations:
+      required: false
+  - type: textarea
+    attributes:
+      label: Logs
+      description: Relevant log lines or error output (redact secrets and tokens).
+    validations:
+      required: false

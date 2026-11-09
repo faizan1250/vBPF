@@ -463,6 +463,7 @@ Have a request? [Open an issue](https://github.com/faizan1250/vBPF/issues/new/ch
 ## Contributing
 
 Contributions are welcome, especially **new recipes** and **kernel compatibility reports**.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the issue templates.
 
 1. Open an issue to discuss larger changes.
 2. Fork, create a branch (`feat/<area>-<name>`), and make focused commits using Conventional Commits.
