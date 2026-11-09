@@ -1,5 +1,23 @@
 # Decisions
 
+## R-10: Docker and e2e (2026-11-10)
+
+- **"Fails fast" means abort on terminal state.** R-10 asks that
+  `quickstart.sh` fail fast on unhealthy services; the script previously
+  slept the full 36×5 s even when a service was already `unhealthy`. The
+  loop now exits immediately on `unhealthy`/`exited`/`dead`, while
+  `starting`/`created`/`restarting` still get the full wait (a container
+  observed mid-startup must not be mistaken for a dead one). Verified with
+  a stubbed-`docker` harness (unhealthy → exit 1 in 0 s; healthy and
+  starting→healthy → exit 0).
+- **Stop-after-timeout 404 is expected, not a bug.** The container E2E run
+  ended by its own 10 s timeout before `/stop` was called, so the API
+  correctly returned 404 `NOT_FOUND`; the streamed summary
+  (`exit_reason "timeout"`, 0 dropped) is the run's completion record.
+- **Local e2e needed no fix.** Both Playwright specs passed first run;
+  vite proxy ECONNREFUSED lines are inherent to the mocked setup, not
+  flakes.
+
 ## R-07: Real produced-output (2026-11-10)
 
 - **Recipe scripts stand in for generations.** The eval harness does not persist generated scripts, and the live report's probe-match was 26/26, so generations use the same probes as the 10 recipes. 9/10 produced events in the 5 s window; zero live LLM calls needed.

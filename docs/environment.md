@@ -135,3 +135,45 @@ No VM tooling is available on this machine, so neither VM was tested:
 Per R-09 these are recorded as "untested", not "pending", in the README
 support table. Minimum requirement stays 5.8+ with BTF; stock 22.04/24.04
 kernels and older 5.x kernels are unverified.
+
+## Docker and e2e (R-10) — 2026-11-10
+
+Run from Windows PowerShell against Docker Desktop 4.98.0 (engine 29.9.2,
+`desktop-linux` context). Base images pulled fresh; `docker compose up
+--build -d` exited 0 and all three services turned `healthy` (agent, api,
+web) via the compose `depends_on: service_healthy` chain.
+
+- Agent container: `Privileged=true`, `PidMode=host`, mounts
+  `vbpf_agent-token:/token`, `/sys/kernel/debug` and `/sys/kernel/tracing`
+  (rw). No ports published to the host (`8787/tcp` compose-internal only).
+- Agent health from inside the container (via `GET /api/health` through the
+  web proxy): kernel `6.6.87.2-microsoft-standard-WSL2` (Docker Desktop VM
+  kernel, not the WSL2 distro kernel), bpftrace v0.20.2, `btf: true`,
+  `root: true`, `tracefs: true`. `tracepoint:raw_syscalls:sys_enter` and the
+  other recipe probes resolve on this kernel (same list as R-04; the
+  Docker Desktop kernel carries the same WSL2 kernel build).
+- Web UI: `GET http://localhost:5173/` → 200, `<title>vBPF</title>` present.
+- One-recipe E2E (`syscall-counts-by-process`, mock LLM, no workload needed):
+  `POST /api/generate` → 200, `validation ok` in 1 attempt;
+  `POST /api/runs` → 201 `running`; WS `/ws/runs/<id>` streamed 1 map event
+  (769 bytes, 0 dropped); run ended by its 10 s timeout
+  (`exit_reason "timeout"`), so the follow-up `/stop` returned 404
+  `NOT_FOUND` — the run was already reaped, which is the expected API
+  behavior, not a failure. Verdict: the agent traced bpftrace events from
+  the privileged container end to end through the compose stack.
+- `scripts/quickstart.sh` now fails fast: a service reporting `unhealthy`
+  (or `exited`/`dead`) aborts the wait immediately instead of sleeping the
+  full 36×5 s. Transient `starting`/`created`/`restarting` states still get
+  the full wait (see D-R10-1). Verified with a stubbed-`docker` harness:
+  unhealthy → exit 1 in 0 s with the fail-fast message; all-healthy and
+  starting→healthy → exit 0, no false fail-fast. `bash -n` clean.
+- `docker compose down -v`: all 3 containers, `vbpf_agent-token`,
+  `vbpf_api-data`, and `vbpf_default` removed. No vbpf container, volume, or
+  network remains; the only privileged container in the stack (the agent) is
+  gone. Remaining containers/volumes are pre-existing non-vbpf infra
+  (buildkit, exited socat/jenkins).
+- Local `pnpm -C web test:e2e`: 2 passed (`smoke`, `happy`), exit 0, no
+  flakes and no changes needed. The `[vite] http proxy error ... ECONNREFUSED
+127.0.0.1:8080` lines in the server log are expected: the dev server has
+  no API backend and both specs mock every `/api/*` route (plus the WS
+  stream), so nothing real is ever proxied.
