@@ -24,6 +24,9 @@ export const GOTCHAS = [
   "Use str() for char* strings, comm/pid/tid builtins for identity, nsecs for time.",
   "Latency pattern: @start[tid] = nsecs on entry, (nsecs - @start[tid]) on exit, then delete(@start[tid]).",
   "Always delete() temporary map keys; clear() snapshot maps after print().",
+  "New processes: tracepoint:sched:sched_process_exec (not sched_process_fork).",
+  "Page faults: software:page-faults (not mm_vmscan tracepoints).",
+  "TCP retransmits: tracepoint:tcp:tcp_retransmit_skb with interval:s:1 snapshots.",
 ].join("\n");
 
 // Per-section cap for `bpftrace -vl` output inside reference data.
