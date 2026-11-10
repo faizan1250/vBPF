@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,6 +19,39 @@ import (
 	"github.com/faizan1250/vBPF/agent/internal/limits"
 	"github.com/faizan1250/vBPF/agent/internal/parser"
 )
+
+// Seams for hermetic lifecycle tests.
+var (
+	signalGroup = killGroup
+	waitCmd     = func(cmd *exec.Cmd) error { return cmd.Wait() }
+)
+
+// procGuard ensures a reaped process group is never signaled again (PID reuse).
+// mu protects reaped and serializes signalGroup against post-wait updates,
+// and is never held across cmd.Wait().
+type procGuard struct {
+	cmd    *exec.Cmd
+	pid    int
+	mu     sync.Mutex
+	reaped bool
+}
+
+func (g *procGuard) wait() error {
+	err := waitCmd(g.cmd)
+	g.mu.Lock()
+	g.reaped = true
+	g.mu.Unlock()
+	return err
+}
+
+func (g *procGuard) signal(sig os.Signal) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.reaped {
+		return nil
+	}
+	return signalGroup(g.pid, sig)
+}
 
 // Options configures one probe run. Zero values take documented defaults.
 type Options struct {
@@ -129,17 +163,15 @@ func Run(ctx context.Context, opts Options, emit func(parser.Event) error) error
 		_ = stderr.Close()
 	}()
 	logger.Info().Dur("duration", opts.Duration).Msg("bpftrace started")
-	// Group kill on every exit path; harmless if the group is already reaped.
-	defer func() {
-		_ = killGroup(cmd.Process.Pid, killSignal())
-	}()
+
+	pg := &procGuard{cmd: cmd, pid: cmd.Process.Pid}
 
 	var seq atomic.Uint64
 	nextSeq := func() uint64 { return seq.Add(1) - 1 }
 
 	if err := emit(parser.Status(opts.RunID, nextSeq(), "running")); err != nil {
-		_ = killGroup(cmd.Process.Pid, killSignal())
-		_ = cmd.Wait()
+		_ = pg.signal(killSignal())
+		_ = pg.wait()
 		return err
 	}
 
@@ -174,36 +206,48 @@ func Run(ctx context.Context, opts Options, emit func(parser.Event) error) error
 	var out parseOut
 
 	waitDone := make(chan error, 1)
-	go func() { waitDone <- cmd.Wait() }()
+	go func() { waitDone <- pg.wait() }()
 
 	select {
 	case out = <-parseCh:
-		var werr error
 		if counter.hit {
 			reason = ReasonLimit
-			werr = stopGroup(cmd.Process.Pid, opts.GracePeriod, waitDone)
-		} else {
-			werr = <-waitDone
-		}
-		if werr != nil && reason == ReasonCompleted {
+			_ = stopGroup(pg, opts.GracePeriod, waitDone)
+		} else if out.err != nil {
 			reason = ReasonFailed
-			runErr = fmt.Errorf("runner: bpftrace: %w", werr)
+			_ = stopGroup(pg, opts.GracePeriod, waitDone)
+		} else {
+			// Child closed stdout; wait for it to exit without killing fast-exiting children.
+			select {
+			case werr := <-waitDone:
+				if werr != nil {
+					reason = ReasonFailed
+					runErr = fmt.Errorf("runner: bpftrace: %w", werr)
+				}
+			case <-timer.C:
+				reason = ReasonTimeout
+				_ = stopGroup(pg, opts.GracePeriod, waitDone)
+			case <-ctx.Done():
+				reason = ReasonCancelled
+				_ = stopGroup(pg, opts.GracePeriod, waitDone)
+			}
 		}
 	case <-timer.C:
 		reason = ReasonTimeout
 		// We killed the group, so the wait error only says how it died.
-		_ = stopGroup(cmd.Process.Pid, opts.GracePeriod, waitDone)
+		_ = stopGroup(pg, opts.GracePeriod, waitDone)
 		out = <-parseCh
 	case <-ctx.Done():
 		reason = ReasonCancelled
-		_ = stopGroup(cmd.Process.Pid, opts.GracePeriod, waitDone)
+		_ = stopGroup(pg, opts.GracePeriod, waitDone)
 		out = <-parseCh
 	}
 	if out.err != nil && runErr == nil {
 		runErr = fmt.Errorf("runner: parse: %w", out.err)
 	}
 
-	for _, line := range <-stderrCh {
+	stderrLines := <-stderrCh
+	for _, line := range stderrLines {
 		if err := emit(parser.Stderr(opts.RunID, nextSeq(), line)); err != nil {
 			return err
 		}
@@ -228,13 +272,25 @@ func Run(ctx context.Context, opts Options, emit func(parser.Event) error) error
 // stopGroup sends SIGINT for a graceful bpftrace shutdown, then SIGKILLs
 // the group after grace unless the process already exited. It reports how
 // the process died; callers must not receive from waitDone again.
-func stopGroup(pid int, grace time.Duration, waitDone <-chan error) error {
-	_ = signalGroup(pid, interruptSignal())
+func stopGroup(pg *procGuard, grace time.Duration, waitDone <-chan error) error {
 	select {
 	case err := <-waitDone:
 		return err
-	case <-time.After(grace):
-		_ = killGroup(pid, killSignal())
+	default:
+	}
+	_ = pg.signal(interruptSignal())
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case err := <-waitDone:
+		return err
+	case <-timer.C:
+		select {
+		case err := <-waitDone:
+			return err
+		default:
+		}
+		_ = pg.signal(killSignal())
 		return <-waitDone
 	}
 }
