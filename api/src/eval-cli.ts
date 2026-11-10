@@ -63,7 +63,13 @@ if (!opts.live) {
     model: chain.model,
     llmFactory: () => chain,
     searchProbesFn: async () => [...FAKE_EVAL_PROBES],
-    validateAgentFn: async () => ({ ok: true, errors: [], probes: [] }),
+    validateAgentFn: async () => ({
+      ok: true,
+      errors: [],
+      probes: [],
+      warnings: [],
+      probe_count: 0,
+    }),
     // No agent on a stock runner: reuse the static fallback text.
     probeArgsFn: async () => "",
     delayMs: opts.delayMs,

@@ -406,9 +406,15 @@ describe("eval agent preflight", () => {
       root: true,
       tracefs: true,
       uptime_s: 1,
+      ready: true,
+      catalog: {
+        state: "ready",
+        probes: 11,
+        warnings: [],
+      },
     });
 
-  it("passes when reachable as root with BTF", async () => {
+  it("passes when reachable as root with BTF and ready catalog", async () => {
     const health = await checkAgentPreflight(
       "http://127.0.0.1:1",
       "tok",
@@ -418,7 +424,7 @@ describe("eval agent preflight", () => {
     expect(health.bpftrace_version).toBe("v0.20.2");
   });
 
-  it("fails when the agent is down, not root, or lacks BTF", async () => {
+  it("fails when the agent is down, not root, lacks BTF, or catalog not ready", async () => {
     await expect(
       checkAgentPreflight("http://127.0.0.1:1", "tok", async () => {
         throw new Error(" refused");
@@ -436,6 +442,18 @@ describe("eval agent preflight", () => {
         btf: false,
       })),
     ).rejects.toThrow(/btf: false/);
+    await expect(
+      checkAgentPreflight("http://127.0.0.1:1", "tok", async () => ({
+        ...(await healthy()),
+        ready: false,
+        catalog: {
+          state: "failed",
+          probes: 0,
+          last_error: "tracefs unavailable",
+          warnings: [],
+        },
+      })),
+    ).rejects.toThrow(/ready: false/);
   });
 });
 
@@ -465,6 +483,8 @@ describe("eval static vs agent layers", () => {
         ok: false,
         errors: ["fake dry-run: unknown probe"],
         probes: [],
+        warnings: [],
+        probe_count: 0,
       }),
     });
     try {
@@ -497,8 +517,14 @@ describe("eval static vs agent layers", () => {
       validateAgentFn: async () => {
         agentCalls += 1;
         return agentCalls === 1
-          ? { ok: false, errors: ["fake dry-run: retry me"], probes: [] }
-          : { ok: true, errors: [], probes: [] };
+          ? {
+              ok: false,
+              errors: ["fake dry-run: retry me"],
+              probes: [],
+              warnings: [],
+              probe_count: 0,
+            }
+          : { ok: true, errors: [], probes: [], warnings: [], probe_count: 1 };
       },
     });
     try {
@@ -533,7 +559,13 @@ describe("eval static vs agent layers", () => {
       recipesDir: RECIPES_DIR,
       model: "stub",
       llmFactory: () => stub,
-      validateAgentFn: async () => ({ ok: true, errors: [], probes: [] }),
+      validateAgentFn: async () => ({
+        ok: true,
+        errors: [],
+        probes: [],
+        warnings: [],
+        probe_count: 1,
+      }),
       agentMode: true,
       agentUrl: "http://127.0.0.1:1",
       tokenFile: "test.token",
@@ -580,7 +612,13 @@ describe("eval static vs agent layers", () => {
       recipesDir: RECIPES_DIR,
       model: "stub",
       llmFactory: () => stub,
-      validateAgentFn: async () => ({ ok: true, errors: [], probes: [] }),
+      validateAgentFn: async () => ({
+        ok: true,
+        errors: [],
+        probes: [],
+        warnings: [],
+        probe_count: 1,
+      }),
     };
     const { cases: produced, db: db1 } = await runEval(entries, {
       ...baseOpts,
@@ -673,7 +711,13 @@ describe("eval scripts persistence and live+agent rendering", () => {
       recipesDir: RECIPES_DIR,
       model: "stub",
       llmFactory: () => stub,
-      validateAgentFn: async () => ({ ok: true, errors: [], probes: [] }),
+      validateAgentFn: async () => ({
+        ok: true,
+        errors: [],
+        probes: [],
+        warnings: [],
+        probe_count: 1,
+      }),
       runScriptFn: async () => ({ events: 0 }),
     });
     try {

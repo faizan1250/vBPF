@@ -69,6 +69,43 @@ const DEFAULT_DURATION_S = 10;
 // generation is the most expensive handler; per-route limiter only.
 const GENERATE_RATE_MAX = 10;
 const GENERATE_RATE_WINDOW_MS = 60_000;
+const AGENT_NOT_READY_HINT =
+  "Agent probe catalog is not ready yet. Mount debugfs/tracefs, verify BTF support, or restart the agent.";
+
+function isCatalogUnavailableResponse(
+  status: number,
+  json: unknown,
+): { unavailable: boolean; error?: string } {
+  const rec =
+    typeof json === "object" && json !== null
+      ? (json as { code?: unknown; error?: unknown })
+      : null;
+  const unavailable = status === 503 || rec?.code === "CATALOG_UNAVAILABLE";
+  return {
+    unavailable,
+    ...(typeof rec?.error === "string" ? { error: rec.error } : {}),
+  };
+}
+
+function sendAgentNotReady(
+  reply: FastifyReply,
+  retryAfter: string | null | undefined,
+  message = "agent probe catalog not ready",
+): FastifyReply {
+  return reply
+    .code(503)
+    .header(
+      "retry-after",
+      retryAfter !== null && retryAfter !== undefined && retryAfter !== ""
+        ? retryAfter
+        : "2",
+    )
+    .send({
+      error: message,
+      code: "AGENT_NOT_READY",
+      fix_hint: AGENT_NOT_READY_HINT,
+    });
+}
 
 function agentWsUrl(agentUrl: string, path: string): string {
   const base = agentUrl.replace(/\/$/, "").replace(/^http/, "ws");
@@ -151,8 +188,19 @@ async function proxyVerbatim(
   const text = await res.text();
   try {
     const json: unknown = text === "" ? {} : JSON.parse(text);
+    const check = isCatalogUnavailableResponse(res.status, json);
+    if (check.unavailable) {
+      return sendAgentNotReady(
+        reply,
+        res.headers.get("retry-after"),
+        check.error,
+      ) as never;
+    }
     return reply.code(res.status).send(json) as never;
   } catch {
+    if (res.status === 503) {
+      return sendAgentNotReady(reply, res.headers.get("retry-after")) as never;
+    }
     return reply.code(res.status).send(text) as never;
   }
 }
@@ -256,6 +304,7 @@ export function healthWarnings(health: AgentHealth): string[] {
   const warnings: string[] = [];
   if (!health.root) warnings.push("NO_PRIVILEGE");
   if (!health.btf || !health.tracefs) warnings.push("KERNEL_UNSUPPORTED");
+  if (!health.ready) warnings.push("AGENT_NOT_READY");
   return warnings;
 }
 
@@ -493,6 +542,16 @@ export async function buildApp(
             .code(503)
             .send({ error: "agent offline", code: "AGENT_OFFLINE" });
         }
+        if (
+          err instanceof AgentProxyError &&
+          (err.status === 503 || err.code === "CATALOG_UNAVAILABLE")
+        ) {
+          return sendAgentNotReady(
+            reply,
+            err.retryAfter,
+            err.errorMessage ?? "agent probe catalog not ready",
+          );
+        }
         if (err instanceof LlmUnavailableError) {
           return sendLlmUnavailable(reply);
         }
@@ -573,9 +632,13 @@ export async function buildApp(
           .send({ error: "invalid request", code: "VALIDATION_FAILED" });
       }
       if (parsed.data.script.includes("--unsafe")) {
-        return reply
-          .code(400)
-          .send({ ok: false, errors: ["--unsafe is forbidden"], probes: [] });
+        return reply.code(400).send({
+          ok: false,
+          errors: ["--unsafe is forbidden"],
+          probes: [],
+          warnings: [],
+          probe_count: 0,
+        });
       }
       return proxyVerbatim(reply, () =>
         agentPost(opts.agentUrl, opts.tokenFile, "/v1/validate", parsed.data),
@@ -624,9 +687,22 @@ export async function buildApp(
       try {
         json = text === "" ? {} : JSON.parse(text);
       } catch {
+        if (res.status === 503) {
+          return sendAgentNotReady(reply, res.headers.get("retry-after"));
+        }
         return reply.code(res.status).send(text);
       }
-      if (!res.ok) return reply.code(res.status).send(json);
+      if (!res.ok) {
+        const check = isCatalogUnavailableResponse(res.status, json);
+        if (check.unavailable) {
+          return sendAgentNotReady(
+            reply,
+            res.headers.get("retry-after"),
+            check.error,
+          );
+        }
+        return reply.code(res.status).send(json);
+      }
       created = CreateRunResponseSchema.parse(json);
     } catch (err) {
       if (err instanceof AgentOfflineError) {

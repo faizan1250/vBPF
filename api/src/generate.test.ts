@@ -27,7 +27,7 @@ import {
   type RecipeWithBody,
 } from "./prompts.js";
 import { loadRecipes } from "./recipes.js";
-import { staticValidate } from "./validator.js";
+import { parseHeaderTargets, staticValidate } from "./validator.js";
 
 const RECIPES_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -122,15 +122,29 @@ function startFakeAgent(): Promise<{
             ok: false,
             errors: ["probe not found: bad-probe"],
             probes: [],
+            warnings: [],
+            probe_count: 0,
           });
         } else if (
           script.includes("system(") ||
           script.includes("--unsafe") ||
           script.includes("#include")
         ) {
-          send(200, { ok: false, errors: ["blocked construct"], probes: [] });
+          send(200, {
+            ok: false,
+            errors: ["blocked construct"],
+            probes: [],
+            warnings: [],
+            probe_count: 0,
+          });
         } else {
-          send(200, { ok: true, errors: [], probes: ["BEGIN"] });
+          send(200, {
+            ok: true,
+            errors: [],
+            probes: ["BEGIN"],
+            warnings: [],
+            probe_count: 1,
+          });
         }
       });
       return;
@@ -303,7 +317,13 @@ describe("probe-args injection", () => {
         tokenFile,
         llm: stub,
         searchProbesFn: async () => ["tracepoint:syscalls:sys_enter_openat"],
-        validateAgentFn: async () => ({ ok: true, errors: [], probes: [] }),
+        validateAgentFn: async () => ({
+          ok: true,
+          errors: [],
+          probes: [],
+          warnings: [],
+          probe_count: 1,
+        }),
         probeArgsFn: async () =>
           "tracepoint:syscalls:sys_enter_openat\n  const char * filename;\n",
       },
@@ -338,7 +358,13 @@ describe("probe-args injection", () => {
         tokenFile,
         llm: stub,
         searchProbesFn: async () => ["tracepoint:syscalls:sys_enter_openat"],
-        validateAgentFn: async () => ({ ok: true, errors: [], probes: [] }),
+        validateAgentFn: async () => ({
+          ok: true,
+          errors: [],
+          probes: [],
+          warnings: [],
+          probe_count: 1,
+        }),
         probeArgsFn: async () => {
           throw new Error("agent down");
         },
@@ -465,6 +491,8 @@ describe("retry loop", () => {
             ? ["probe not found: bad-probe"]
             : [],
           probes: [],
+          warnings: [],
+          probe_count: 1,
         }),
       },
     });
@@ -499,6 +527,8 @@ describe("retry loop", () => {
             ok: false,
             errors: ["probe not found: bad-probe"],
             probes: [],
+            warnings: [],
+            probe_count: 0,
           }),
         },
       });
@@ -529,7 +559,7 @@ describe("static validator rejects 25 bad scripts", () => {
     ["kprobe:* { @x = count(); }", undefined],
     ["tracepoint:*:* { @x = count(); }", undefined],
     ["* { @x = count(); }", undefined],
-    ["tracepoint:block:* { @x = count(); }", undefined],
+    ["tracepoint:*:block_rq_issue { @x = count(); }", undefined],
     ["uprobe:foo:bar { @x = count(); }", undefined],
     ["uretprobe:relative/path { @x = count(); }", undefined],
     ["tracepoint:block:block_rq_issue { @x = count(); }", ["BEGIN"]],
@@ -548,7 +578,9 @@ describe("static validator rejects 25 bad scripts", () => {
   it("rejects every bad script", () => {
     expect(bad).toHaveLength(25);
     for (const [script, knownProbes] of bad) {
-      const { errors } = staticValidate(script, knownProbes ?? known);
+      const { errors } = staticValidate(script, {
+        catalog: { mode: "enforce", known: knownProbes ?? known },
+      });
       expect(errors.length, script.slice(0, 60)).toBeGreaterThan(0);
     }
   });
@@ -558,7 +590,7 @@ describe("static validator rejects 25 bad scripts", () => {
     expect(recipes.length).toBeGreaterThanOrEqual(10);
     for (const r of recipes) {
       const body = readFileSync(join(RECIPES_DIR, `${r.id}.bt`), "utf8");
-      const { errors } = staticValidate(body);
+      const { errors } = staticValidate(body, { catalog: { mode: "skip" } });
       expect(errors, r.id).toEqual([]);
     }
   });
@@ -576,7 +608,13 @@ describe("generations persistence", () => {
         tokenFile,
         llm,
         searchProbesFn: async () => ["profile:hz:99"],
-        validateAgentFn: async () => ({ ok: true, errors: [], probes: [] }),
+        validateAgentFn: async () => ({
+          ok: true,
+          errors: [],
+          probes: [],
+          warnings: [],
+          probe_count: 1,
+        }),
       },
     });
     const row = db
@@ -730,7 +768,7 @@ describe("validator limits", () => {
     );
     const { errors } = staticValidate(
       "tracepoint:block:item* { @cnt = count(); }",
-      known,
+      { catalog: { mode: "enforce", known } },
     );
     expect(errors.join(" ")).toContain("too many");
   });
@@ -738,6 +776,7 @@ describe("validator limits", () => {
   it("warns on per-event printf from raw_syscalls", () => {
     const { errors, warnings } = staticValidate(
       'tracepoint:raw_syscalls:sys_enter { printf("%d\\n", pid); }',
+      { catalog: { mode: "skip" } },
     );
     expect(errors).toEqual([]);
     expect(warnings.join(" ")).toContain("High-frequency");
@@ -746,16 +785,20 @@ describe("validator limits", () => {
   it("rejects huge scripts before they reach the agent", () => {
     const { errors } = staticValidate(
       `BEGIN { printf("${"x".repeat(9 * 1024)}"); }`,
+      { catalog: { mode: "skip" } },
     );
     expect(errors.join(" ")).toContain("8 KB");
   });
 
   it("rejects broad provider wildcards without a catalog", () => {
     for (const script of [
-      "tracepoint:syscalls:* { @x = count(); }",
+      "tracepoint:*:foo { @x = count(); }",
       "kprobe:* { @x = count(); }",
+      "kprobe:ab* { @x = count(); }",
     ]) {
-      expect(staticValidate(script).errors.length).toBeGreaterThan(0);
+      expect(
+        staticValidate(script, { catalog: { mode: "skip" } }).errors.length,
+      ).toBeGreaterThan(0);
     }
   });
 });
@@ -872,13 +915,15 @@ describe("validator comment and continuation stripping", () => {
       ],
     ];
     for (const [name, script, pattern] of cases) {
-      const { errors } = staticValidate(script);
+      const { errors } = staticValidate(script, { catalog: { mode: "skip" } });
       expect(errors.join("; "), name).toMatch(pattern);
     }
   });
 
   it("ignores commented fake probes", () => {
-    const res = staticValidate('// BEGIN {}\ncat/*x*/("/etc/shadow")');
+    const res = staticValidate('// BEGIN {}\ncat/*x*/("/etc/shadow")', {
+      catalog: { mode: "skip" },
+    });
     expect(res.probes).toEqual([]);
     expect(res.errors.join("; ")).toMatch(/blocked call/);
     expect(res.errors.join("; ")).toMatch(/no probes found/);
@@ -896,21 +941,23 @@ describe("validator comment and continuation stripping", () => {
       "/* // inside block comment */ BEGIN { @x = count(); }",
       "/**/BEGIN { @x = count(); }",
     ]) {
-      const res = staticValidate(script, known);
+      const res = staticValidate(script, {
+        catalog: { mode: "enforce", known },
+      });
       expect(res.errors, script).toEqual([]);
       expect(res.probes, script).toEqual(["BEGIN"]);
     }
 
     const commented = staticValidate(
       "// comment mentioning BEGIN tracepoint:foo:bar\ntracepoint:block:block_rq_issue { @x = count(); }",
-      known,
+      { catalog: { mode: "enforce", known } },
     );
     expect(commented.errors).toEqual([]);
     expect(commented.probes).toEqual(["tracepoint:block:block_rq_issue"]);
 
     const slashRes = staticValidate(
       "tracepoint:block:block_rq_complete /@start[args->dev]/ { @lat = hist((nsecs - @start[args->dev]) / 1000); }",
-      known,
+      { catalog: { mode: "enforce", known } },
     );
     expect(slashRes.errors).toEqual([]);
     expect(slashRes.probes).toEqual(["tracepoint:block:block_rq_complete"]);
@@ -919,12 +966,14 @@ describe("validator comment and continuation stripping", () => {
   it("checks printf warning against cleaned script", () => {
     const commentedOut = staticValidate(
       'tracepoint:raw_syscalls:sys_enter { // printf("%d\\n", pid);\n @x = count(); }',
+      { catalog: { mode: "skip" } },
     );
     expect(commentedOut.errors).toEqual([]);
     expect(commentedOut.warnings).toEqual([]);
 
     const commentSplit = staticValidate(
       'tracepoint:raw_syscalls:sys_enter { printf/*x*/("%d\\n", pid); }',
+      { catalog: { mode: "skip" } },
     );
     expect(commentSplit.errors).toEqual([]);
     expect(commentSplit.warnings.join(" ")).toContain("High-frequency");
@@ -956,7 +1005,13 @@ describe("validator comment and continuation stripping", () => {
         searchProbesFn: async () => ["tracepoint:syscalls:sys_enter_openat"],
         validateAgentFn: async (_u, _t, script) => {
           agentSeen = script;
-          return { ok: true, errors: [], probes: [] };
+          return {
+            ok: true,
+            errors: [],
+            probes: [],
+            warnings: [],
+            probe_count: 1,
+          };
         },
       },
     });
@@ -1024,7 +1079,9 @@ describe("validator probe allowlist and header parser parity", () => {
         `BEGIN {}\n${probe} { @x = count(); }`,
         `BEGIN, ${probe} { @x = count(); }`,
       ]) {
-        const res = staticValidate(script, known);
+        const res = staticValidate(script, {
+          catalog: { mode: "enforce", known },
+        });
         expect(res.errors.join("; "), script).toContain(
           `provider not allowed: ${provider}`,
         );
@@ -1156,7 +1213,9 @@ describe("validator probe allowlist and header parser parity", () => {
     ];
 
     for (const [name, script, pattern] of cases) {
-      const res = staticValidate(script, known);
+      const res = staticValidate(script, {
+        catalog: { mode: "enforce", known },
+      });
       const joined = res.errors.join("; ");
       expect(joined, name).toMatch(pattern);
       expect(joined.toLowerCase(), name).not.toMatch(
@@ -1165,7 +1224,21 @@ describe("validator probe allowlist and header parser parity", () => {
     }
   });
 
-  it("preserves valid multi-slash uprobe paths, quoted C++ signatures, predicates, structs, and strings", () => {
+  it("preserves valid multi-slash uprobe paths, quoted C++ header parsing, predicates, structs, and strings", () => {
+    const parsedCpp = parseHeaderTargets(
+      'uprobe:/lib/libc.so.6:"Foo::bar(int, int)"',
+    );
+    expect(parsedCpp.errs).toEqual([]);
+    expect(parsedCpp.targets).toEqual([
+      'uprobe:/lib/libc.so.6:"Foo::bar(int, int)"',
+    ]);
+    const rejectedCpp = staticValidate(
+      'uprobe:/lib/libc.so.6:"Foo::bar(int, int)" { @x = count(); }',
+      { catalog: { mode: "enforce", known } },
+    );
+    expect(rejectedCpp.code).toBe("VALIDATION_FAILED");
+    expect(rejectedCpp.errors.join("; ")).toContain("invalid uprobe symbol");
+
     const valid: Array<[string, string[]]> = [
       [
         'BEGIN { printf("tracepoint:foo:bar"); $s = "kprobe:*"; $t = 1 ? 2 : 3; }',
@@ -1188,10 +1261,6 @@ describe("validator probe allowlist and header parser parity", () => {
         ["tracepoint:block:block_rq_complete"],
       ],
       [
-        'uprobe:/lib/libc.so.6:"Foo::bar(int, int)" { @x = count(); }',
-        ['uprobe:/lib/libc.so.6:"Foo::bar(int, int)"'],
-      ],
-      [
         "struct s { int x; }; enum e { A = 1 }; union u { int y; }; BEGIN { @x = count(); }",
         ["BEGIN"],
       ],
@@ -1202,14 +1271,16 @@ describe("validator probe allowlist and header parser parity", () => {
     ];
 
     for (const [script, wantProbes] of valid) {
-      const res = staticValidate(script, known);
+      const res = staticValidate(script, {
+        catalog: { mode: "enforce", known },
+      });
       expect(res.errors, script).toEqual([]);
       expect(res.probes, script).toEqual(wantProbes);
     }
 
     const stringFalseWarning = staticValidate(
       'BEGIN { printf("tracepoint:raw_syscalls:sys_enter"); }',
-      known,
+      { catalog: { mode: "enforce", known } },
     );
     expect(stringFalseWarning.errors).toEqual([]);
     expect(stringFalseWarning.warnings).toEqual([]);
@@ -1232,8 +1303,15 @@ describe("validator probe allowlist and header parser parity", () => {
         `BEGIN {}\n${provider} { @x = count(); }`,
         `BEGIN, ${provider} { @x = count(); }`,
       ]) {
-        for (const knownProbes of [[], known]) {
-          const res = staticValidate(script, knownProbes);
+        const emptyCat = staticValidate(script, {
+          catalog: { mode: "enforce", known: [] },
+        });
+        expect(emptyCat.code).toBe("CATALOG_UNAVAILABLE");
+
+        for (const res of [
+          staticValidate(script, { catalog: { mode: "skip" } }),
+          staticValidate(script, { catalog: { mode: "enforce", known } }),
+        ]) {
           const joined = res.errors.join("; ");
           expect(joined, script).toContain(
             `invalid probe header: missing target for provider ${provider}`,
@@ -1250,7 +1328,10 @@ describe("validator probe allowlist and header parser parity", () => {
       "END { @x = count(); }",
       "BEGIN, END { @x = count(); }",
     ]) {
-      expect(staticValidate(valid, known).errors, valid).toEqual([]);
+      expect(
+        staticValidate(valid, { catalog: { mode: "enforce", known } }).errors,
+        valid,
+      ).toEqual([]);
     }
   });
 });

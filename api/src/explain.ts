@@ -63,7 +63,7 @@ export async function explainScriptText(
   opts?: { signal?: AbortSignal },
 ): Promise<ExplainResponse> {
   // Static check first: obviously blocked scripts never reach the LLM.
-  const stat = staticValidate(script);
+  const stat = staticValidate(script, { catalog: { mode: "skip" } });
   if (stat.errors.length > 0) throw new ExplainValidationError(stat.errors);
 
   const sha = createHash("sha256").update(script).digest("hex");

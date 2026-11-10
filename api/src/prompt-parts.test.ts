@@ -414,7 +414,13 @@ describe("runGenerate plumbing", () => {
         tokenFile: "test-token",
         llm: stub,
         searchProbesFn: async () => ["tracepoint:syscalls:sys_enter_openat"],
-        validateAgentFn: async () => ({ ok: true, errors: [], probes: [] }),
+        validateAgentFn: async () => ({
+          ok: true,
+          errors: [],
+          probes: [],
+          warnings: [],
+          probe_count: 0,
+        }),
         probeArgsFn: async () => "line1\nline2\n",
       },
     })
