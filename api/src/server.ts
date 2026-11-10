@@ -41,6 +41,7 @@ import {
   runGenerate,
 } from "./generate.js";
 import {
+  LIVE_UNAVAILABLE_RETRY_AFTER_S,
   LiveLlmChain,
   LlmRequestError,
   LlmUnavailableError,
@@ -212,6 +213,38 @@ function stateForExitReason(reason: string): string {
   if (reason === "completed" || reason === "timeout") return "completed";
   if (reason === "cancelled") return "stopping";
   return "failed";
+}
+
+// All LLM_UNAVAILABLE 503s carry a fixed retry hint (D-24): 90 s matches
+// the default total LLM budget, so clients back off one budget window.
+function sendLlmUnavailable(reply: FastifyReply): FastifyReply {
+  return reply
+    .code(503)
+    .header("retry-after", String(LIVE_UNAVAILABLE_RETRY_AFTER_S))
+    .send({
+      error: "LLM unavailable in this environment",
+      code: "LLM_UNAVAILABLE",
+      retry_after_s: LIVE_UNAVAILABLE_RETRY_AFTER_S,
+    });
+}
+
+// Aborts the in-flight provider request when the HTTP client goes away.
+// Listens on the response: req.raw "close" fires once the (small,
+// buffered) request body is consumed, which is not a disconnect. The
+// response "close" before the body is fully sent means the client left.
+function trackClientDisconnect(reply: FastifyReply): {
+  signal: AbortSignal;
+  done: () => void;
+} {
+  const ctrl = new AbortController();
+  const onClose = (): void => {
+    if (!reply.raw.writableEnded) ctrl.abort();
+  };
+  reply.raw.on("close", onClose);
+  return {
+    signal: ctrl.signal,
+    done: () => reply.raw.removeListener("close", onClose),
+  };
 }
 
 // Derives taxonomy warning codes from agent health signals. Exported for
@@ -403,11 +436,9 @@ export async function buildApp(
           ? makeMockLlm(database, opts.recipesDir, opts.llmModel ?? "mock")
           : liveLlm;
       if (llm === null) {
-        return reply.code(503).send({
-          error: "LLM unavailable in this environment",
-          code: "LLM_UNAVAILABLE",
-        });
+        return sendLlmUnavailable(reply);
       }
+      const client = trackClientDisconnect(reply);
       try {
         const result = await runGenerate(parsed.data.prompt, {
           sessionId: parsed.data.session_id,
@@ -418,6 +449,7 @@ export async function buildApp(
             tokenFile: opts.tokenFile,
             llm,
           },
+          signal: client.signal,
         });
         return reply.send(result);
       } catch (err) {
@@ -443,10 +475,7 @@ export async function buildApp(
             .send({ error: "agent offline", code: "AGENT_OFFLINE" });
         }
         if (err instanceof LlmUnavailableError) {
-          return reply.code(503).send({
-            error: "LLM unavailable in this environment",
-            code: "LLM_UNAVAILABLE",
-          });
+          return sendLlmUnavailable(reply);
         }
         if (err instanceof LlmRequestError) {
           return reply
@@ -454,6 +483,8 @@ export async function buildApp(
             .send({ error: "LLM request failed", code: "LLM_ERROR" });
         }
         throw err;
+      } finally {
+        client.done();
       }
     },
   );
@@ -474,17 +505,19 @@ export async function buildApp(
     const mode = opts.llmMode ?? "mock";
     const llm = mode === "mock" ? null : liveLlm;
     if (mode !== "mock" && llm === null) {
-      return reply.code(503).send({
-        error: "LLM unavailable in this environment",
-        code: "LLM_UNAVAILABLE",
-      });
+      return sendLlmUnavailable(reply);
     }
+    const client = trackClientDisconnect(reply);
     try {
-      const result = await explainScriptText(parsed.data.script, {
-        db: database,
-        recipesDir: opts.recipesDir,
-        llm,
-      });
+      const result = await explainScriptText(
+        parsed.data.script,
+        {
+          db: database,
+          recipesDir: opts.recipesDir,
+          llm,
+        },
+        { signal: client.signal },
+      );
       return reply.send(ExplainResponseSchema.parse(result));
     } catch (err) {
       if (err instanceof ExplainValidationError) {
@@ -495,10 +528,7 @@ export async function buildApp(
         });
       }
       if (err instanceof LlmUnavailableError) {
-        return reply.code(503).send({
-          error: "LLM unavailable in this environment",
-          code: "LLM_UNAVAILABLE",
-        });
+        return sendLlmUnavailable(reply);
       }
       if (err instanceof LlmRequestError) {
         return reply
@@ -506,6 +536,8 @@ export async function buildApp(
           .send({ error: "LLM request failed", code: "LLM_ERROR" });
       }
       throw err;
+    } finally {
+      client.done();
     }
   });
 

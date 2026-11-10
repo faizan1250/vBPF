@@ -245,6 +245,10 @@ Configuration is via environment variables (`.env` for local development). Never
 | `LLM_MODEL`             | `claude-sonnet-5-5`     | Default model; per-provider `LLM_<NAME>_MODEL` takes precedence               |
 | `LLM_MODE`              | `mock`                  | `mock` (CI-safe, no secrets) or live (requires a provider key, never in CI)   |
 | `LLM_PROVIDER_CHAIN`    | `groq`                  | Comma-separated live providers tried in order (see below)                     |
+| `LLM_TIMEOUT_MS`        | `45000`                 | Per-request deadline, shared across headers and body                          |
+| `LLM_TOTAL_TIMEOUT_MS`  | `90000`                 | Overall budget per generate/explain call                                      |
+| `LLM_MAX_WAITERS`       | `10`                    | Queued requests allowed behind the concurrent slots                           |
+| `LLM_WAIT_TIMEOUT_MS`   | `10000`                 | How long a queued request waits for a slot                                    |
 | `AGENT_URL`             | `http://127.0.0.1:8787` | Where the API reaches the agent                                               |
 | `AGENT_TOKEN_FILE`      | `./run/agent.token`     | Bearer token file (mode `0600`), created by the agent on first start          |
 | `AGENT_ALLOWED_ORIGINS` | _(none)_                | Comma-separated WebSocket origin allowlist; empty refuses all browser origins |
@@ -269,7 +273,8 @@ Set `LLM_MODE=live` and at least one provider key (local `.env` only, never CI).
 - **Key failure.** A `401/403` disables that key for the process lifetime and moves to the next key. A `429` cools the whole provider down (honoring `Retry-After`) and moves to the next provider or model — never to another key of the same provider.
 - **Models.** Set `LLM_<NAME>_MODEL`; free model IDs change, so list current ones via the provider's models endpoint. `LLM_<NAME>_FALLBACK_MODELS` (comma-separated) retries other models of the same provider with the same key on `429` or model-specific `4xx`.
 - **Health.** `GET /api/health` reports `llm.providers` with per-provider state (`ready`, `cooldown`, `unconfigured`, `exhausted`) and key counts only — never key material.
-- **Caps.** At most 4 concurrent provider requests, 256 KB response bodies, 45 s per request.
+- **Caps.** At most 4 concurrent provider requests (up to 10 queued, 10 s wait), 256 KB response bodies, 45 s per request (`LLM_TIMEOUT_MS`), 90 s overall budget per generate/explain call (`LLM_TOTAL_TIMEOUT_MS`, each attempt uses `min(per-request, remaining)`). Budget exhaustion returns `503 LLM_UNAVAILABLE` with `retry_after_s: 90` and a `Retry-After: 90` header.
+- **Timeouts.** `LLM_TIMEOUT_MS` (default `45000`), `LLM_TOTAL_TIMEOUT_MS` (default `90000`), `LLM_MAX_WAITERS` (default `10`), `LLM_WAIT_TIMEOUT_MS` (default `10000`).
 
 ---
 

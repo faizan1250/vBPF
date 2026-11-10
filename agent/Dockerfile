@@ -12,7 +12,12 @@ RUN CGO_ENABLED=0 go build -trimpath -o /out/agent ./cmd/agent
 
 FROM ubuntu:24.04
 
-RUN apt-get update \
+RUN for i in 1 2 3 4 5; do \
+    if apt-get update; then break; fi; \
+    if [ "$i" -eq 5 ]; then exit 1; fi; \
+    echo "apt-get update failed (attempt $i/5), retrying in 10s..."; \
+    sleep 10; \
+  done \
   && apt-get install -y --no-install-recommends bpftrace ca-certificates curl \
   && rm -rf /var/lib/apt/lists/*
 

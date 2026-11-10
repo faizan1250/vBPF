@@ -15,10 +15,16 @@ import {
 
 // Caps for outbound traffic. A single request is also bounded by
 // LIVE_TIMEOUT_MS; concurrent generations share one semaphore per chain.
+// LIVE_TOTAL_TIMEOUT_MS bounds one generate/explain call across all
+// attempts; per-attempt timeout is min(per-request, remaining).
 export const LIVE_MAX_CONCURRENCY = 4;
 export const LIVE_MAX_BODY_BYTES = 256 * 1024;
 export const LIVE_MAX_PROMPT_CHARS = 24_000;
 export const LIVE_TIMEOUT_MS = 45_000;
+export const LIVE_TOTAL_TIMEOUT_MS = 90_000;
+export const LIVE_MAX_WAITERS = 10;
+export const LIVE_WAIT_TIMEOUT_MS = 10_000;
+export const LIVE_UNAVAILABLE_RETRY_AFTER_S = 90;
 export const LIVE_DEFAULT_COOLDOWN_MS = 60_000;
 export const LIVE_MAX_COOLDOWN_MS = 300_000;
 
@@ -538,7 +544,7 @@ async function requestChat(
   key: string | undefined,
   model: string,
   payload: ChatCompletionPayload,
-  opts: { timeoutMs: number; maxBodyBytes: number },
+  opts: { timeoutMs: number; maxBodyBytes: number; signal?: AbortSignal },
 ): Promise<
   | { ok: true; text: string; status: number }
   | {
@@ -552,6 +558,13 @@ async function requestChat(
 > {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs);
+  const external = opts.signal;
+  const onExternalAbort = (): void => ctrl.abort();
+  if (external !== undefined) {
+    if (external.aborted) ctrl.abort();
+    else external.addEventListener("abort", onExternalAbort, { once: true });
+  }
+  const externalAborted = (): boolean => external?.aborted === true;
   try {
     let res: Response;
     try {
@@ -567,6 +580,9 @@ async function requestChat(
         body: JSON.stringify(payload),
       });
     } catch (err) {
+      if (externalAborted()) {
+        throw new LlmUnavailableError("client disconnected");
+      }
       if (isAbortError(err)) {
         return timeoutFailure(providerName, model, opts.timeoutMs, 0, err);
       }
@@ -594,6 +610,9 @@ async function requestChat(
           await readCappedText(res, opts.maxBodyBytes, ctrl.signal)
         ).slice(0, 2000);
       } catch (err) {
+        if (externalAborted()) {
+          throw new LlmUnavailableError("client disconnected");
+        }
         if (isAbortError(err)) {
           return timeoutFailure(
             providerName,
@@ -618,6 +637,9 @@ async function requestChat(
       const text = await readCappedText(res, opts.maxBodyBytes, ctrl.signal);
       return { ok: true, text, status: res.status };
     } catch (err) {
+      if (externalAborted()) {
+        throw new LlmUnavailableError("client disconnected");
+      }
       if (isAbortError(err)) {
         return timeoutFailure(
           providerName,
@@ -644,6 +666,7 @@ async function requestChat(
     }
   } finally {
     clearTimeout(timer);
+    external?.removeEventListener("abort", onExternalAbort);
   }
 }
 
@@ -678,18 +701,37 @@ class Semaphore {
   private active = 0;
   private readonly queue: Array<() => void> = [];
 
-  constructor(private readonly max: number) {}
+  constructor(
+    private readonly max: number,
+    private readonly maxWaiters: number = LIVE_MAX_WAITERS,
+    private readonly waitTimeoutMs: number = LIVE_WAIT_TIMEOUT_MS,
+  ) {}
 
   acquire(): Promise<() => void> {
     if (this.active < this.max) {
       this.active += 1;
       return Promise.resolve(() => this.release());
     }
-    return new Promise((resolve) => {
-      this.queue.push(() => {
+    if (this.queue.length >= this.maxWaiters) {
+      return Promise.reject(
+        new LlmUnavailableError("llm busy: too many queued requests"),
+      );
+    }
+    return new Promise((resolve, reject) => {
+      const entry = (): void => {
+        clearTimeout(timer);
         this.active += 1;
         resolve(() => this.release());
-      });
+      };
+      const timer = setTimeout(() => {
+        const index = this.queue.indexOf(entry);
+        if (index >= 0) this.queue.splice(index, 1);
+        reject(
+          new LlmUnavailableError("llm busy: timed out waiting for a slot"),
+        );
+      }, this.waitTimeoutMs);
+      timer.unref?.();
+      this.queue.push(entry);
     });
   }
 
@@ -766,13 +808,42 @@ function extractJsonPayload(content: unknown): unknown {
   return JSON.parse(stripped) as unknown;
 }
 
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const parsed = Number(raw.trim());
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** Per-request deadline: `LLM_TIMEOUT_MS`, default 45 s. */
+export function discoverTimeoutMs(env: NodeJS.ProcessEnv): number {
+  return parsePositiveInt(env["LLM_TIMEOUT_MS"], LIVE_TIMEOUT_MS);
+}
+
+/** Overall budget per generate/explain call: `LLM_TOTAL_TIMEOUT_MS`. */
+export function discoverTotalTimeoutMs(env: NodeJS.ProcessEnv): number {
+  return parsePositiveInt(env["LLM_TOTAL_TIMEOUT_MS"], LIVE_TOTAL_TIMEOUT_MS);
+}
+
+/** Queued waiters beyond the concurrency slots: `LLM_MAX_WAITERS`. */
+export function discoverMaxWaiters(env: NodeJS.ProcessEnv): number {
+  return parsePositiveInt(env["LLM_MAX_WAITERS"], LIVE_MAX_WAITERS);
+}
+
+/** How long a queued request waits for a slot: `LLM_WAIT_TIMEOUT_MS`. */
+export function discoverWaitTimeoutMs(env: NodeJS.ProcessEnv): number {
+  return parsePositiveInt(env["LLM_WAIT_TIMEOUT_MS"], LIVE_WAIT_TIMEOUT_MS);
+}
+
 interface ChainOptions {
   env?: NodeJS.ProcessEnv;
   fetchFn?: typeof fetch;
   chain?: string;
   timeoutMs?: number;
+  totalTimeoutMs?: number;
   maxBodyBytes?: number;
   maxConcurrency?: number;
+  maxWaiters?: number;
+  waitTimeoutMs?: number;
   logger?: ChainLogger;
 }
 
@@ -780,6 +851,7 @@ export class LiveLlmChain implements LlmClient {
   private readonly providers: ProviderRuntime[];
   private readonly fetchFn: typeof fetch;
   private readonly timeoutMs: number;
+  private readonly totalTimeoutMs: number;
   private readonly maxBodyBytes: number;
   private readonly semaphore: Semaphore;
   private readonly logger: ChainLogger;
@@ -792,9 +864,14 @@ export class LiveLlmChain implements LlmClient {
     warnDeprecatedGenericModel(logger);
     const names = parseChain(opts.chain, env);
     this.fetchFn = opts.fetchFn ?? fetch;
-    this.timeoutMs = opts.timeoutMs ?? LIVE_TIMEOUT_MS;
+    this.timeoutMs = opts.timeoutMs ?? discoverTimeoutMs(env);
+    this.totalTimeoutMs = opts.totalTimeoutMs ?? discoverTotalTimeoutMs(env);
     this.maxBodyBytes = opts.maxBodyBytes ?? LIVE_MAX_BODY_BYTES;
-    this.semaphore = new Semaphore(opts.maxConcurrency ?? LIVE_MAX_CONCURRENCY);
+    this.semaphore = new Semaphore(
+      opts.maxConcurrency ?? LIVE_MAX_CONCURRENCY,
+      opts.maxWaiters ?? discoverMaxWaiters(env),
+      opts.waitTimeoutMs ?? discoverWaitTimeoutMs(env),
+    );
     this.providers = names.map((name) => {
       const resolved = resolveBaseUrl(name, env, logger);
       const primary = discoverModel(name, env);
@@ -880,25 +957,58 @@ export class LiveLlmChain implements LlmClient {
   }
 
   /** Plain-English explanation of one script; script text only is sent. */
-  async explainDetailed(script: string): Promise<ExplainDetailedResult> {
+  async explainDetailed(
+    script: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<ExplainDetailedResult> {
+    const deadline = Date.now() + this.totalTimeoutMs;
     const release = await this.semaphore.acquire();
     try {
-      return await this.attemptExplain(script);
+      return await this.attemptExplain(script, deadline, opts?.signal);
     } finally {
       release();
     }
   }
 
-  async generateDetailed(prompt: string): Promise<LlmDetailedResult> {
+  async generateDetailed(
+    prompt: string,
+    feedback?: unknown,
+    opts?: { signal?: AbortSignal },
+  ): Promise<LlmDetailedResult> {
+    void feedback;
+    const signal =
+      opts?.signal ??
+      (typeof feedback === "object" &&
+      feedback !== null &&
+      "signal" in feedback &&
+      (feedback as { signal?: AbortSignal }).signal instanceof AbortSignal
+        ? (feedback as { signal?: AbortSignal }).signal
+        : undefined);
+    const deadline = Date.now() + this.totalTimeoutMs;
     const release = await this.semaphore.acquire();
     try {
-      return await this.attempt(prompt);
+      return await this.attempt(prompt, deadline, signal);
     } finally {
       release();
     }
   }
 
-  private async attempt(prompt: string): Promise<LlmDetailedResult> {
+  /** Per-attempt timeout: min(per-request, remaining budget). */
+  private timeoutFor(deadline: number): number {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new LlmUnavailableError(
+        `live LLM total budget of ${this.totalTimeoutMs}ms exhausted`,
+      );
+    }
+    return Math.min(this.timeoutMs, remaining);
+  }
+
+  private async attempt(
+    prompt: string,
+    deadline: number,
+    signal?: AbortSignal,
+  ): Promise<LlmDetailedResult> {
     const now = Date.now();
     const configured = this.providers.filter(isConfigured);
     if (configured.length === 0) {
@@ -914,7 +1024,7 @@ export class LiveLlmChain implements LlmClient {
         last = `${p.name} is cooling down after a rate limit or timeout`;
         continue;
       }
-      const outcome = await this.attemptProvider(p, prompt);
+      const outcome = await this.attemptProvider(p, prompt, deadline, signal);
       if (outcome.ok) {
         const attribution = `${p.name}/${outcome.model}`;
         this.attribution = attribution;
@@ -940,6 +1050,8 @@ export class LiveLlmChain implements LlmClient {
   private async attemptProvider(
     p: ProviderRuntime,
     prompt: string,
+    deadline: number,
+    signal?: AbortSignal,
   ): Promise<ProviderOutcome> {
     for (;;) {
       const keyIndex = nextEnabledIndex(p, p.active);
@@ -958,7 +1070,14 @@ export class LiveLlmChain implements LlmClient {
           message: `${p.name}: all keys rejected, no usable key left`,
         };
       }
-      const outcome = await this.attemptModels(p, key, keyIndex, prompt);
+      const outcome = await this.attemptModels(
+        p,
+        key,
+        keyIndex,
+        prompt,
+        deadline,
+        signal,
+      );
       if (outcome.ok || outcome.kind !== "auth") {
         if (
           !outcome.ok &&
@@ -985,6 +1104,8 @@ export class LiveLlmChain implements LlmClient {
     key: string | undefined,
     keyIndex: number,
     prompt: string,
+    deadline: number,
+    signal?: AbortSignal,
   ): Promise<ProviderOutcome> {
     let last: ProviderOutcome = {
       ok: false,
@@ -992,7 +1113,15 @@ export class LiveLlmChain implements LlmClient {
       message: `${p.name}: no model configured`,
     };
     for (const model of p.models) {
-      const outcome = await this.postChat(p, key, keyIndex, model, prompt);
+      const outcome = await this.postChat(
+        p,
+        key,
+        keyIndex,
+        model,
+        prompt,
+        this.timeoutFor(deadline),
+        signal,
+      );
       if (outcome.ok) return outcome;
       last = outcome;
       // 401/403 (rotate key), 429/timeout (cool provider), and other
@@ -1008,7 +1137,11 @@ export class LiveLlmChain implements LlmClient {
     return last;
   }
 
-  private async attemptExplain(script: string): Promise<ExplainDetailedResult> {
+  private async attemptExplain(
+    script: string,
+    deadline: number,
+    signal?: AbortSignal,
+  ): Promise<ExplainDetailedResult> {
     const now = Date.now();
     const configured = this.providers.filter(isConfigured);
     if (configured.length === 0) {
@@ -1024,7 +1157,12 @@ export class LiveLlmChain implements LlmClient {
         last = `${p.name} is cooling down after a rate limit or timeout`;
         continue;
       }
-      const outcome = await this.attemptExplainProvider(p, script);
+      const outcome = await this.attemptExplainProvider(
+        p,
+        script,
+        deadline,
+        signal,
+      );
       if (outcome.ok) {
         const attribution = `${p.name}/${outcome.model}`;
         this.attribution = attribution;
@@ -1046,6 +1184,8 @@ export class LiveLlmChain implements LlmClient {
   private async attemptExplainProvider(
     p: ProviderRuntime,
     script: string,
+    deadline: number,
+    signal?: AbortSignal,
   ): Promise<ExplainOutcome> {
     for (;;) {
       const keyIndex = nextEnabledIndex(p, p.active);
@@ -1064,7 +1204,14 @@ export class LiveLlmChain implements LlmClient {
           message: `${p.name}: all keys rejected, no usable key left`,
         };
       }
-      const outcome = await this.attemptExplainModels(p, key, keyIndex, script);
+      const outcome = await this.attemptExplainModels(
+        p,
+        key,
+        keyIndex,
+        script,
+        deadline,
+        signal,
+      );
       if (outcome.ok || outcome.kind !== "auth") {
         if (
           !outcome.ok &&
@@ -1091,6 +1238,8 @@ export class LiveLlmChain implements LlmClient {
     key: string | undefined,
     keyIndex: number,
     script: string,
+    deadline: number,
+    signal?: AbortSignal,
   ): Promise<ExplainOutcome> {
     let last: ExplainOutcome = {
       ok: false,
@@ -1098,7 +1247,15 @@ export class LiveLlmChain implements LlmClient {
       message: `${p.name}: no model configured`,
     };
     for (const model of p.models) {
-      const outcome = await this.postExplain(p, key, keyIndex, model, script);
+      const outcome = await this.postExplain(
+        p,
+        key,
+        keyIndex,
+        model,
+        script,
+        this.timeoutFor(deadline),
+        signal,
+      );
       if (outcome.ok) return outcome;
       last = outcome;
       if (
@@ -1117,6 +1274,8 @@ export class LiveLlmChain implements LlmClient {
     keyIndex: number,
     model: string,
     script: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<ExplainOutcome> {
     const sent = script.slice(0, LIVE_MAX_PROMPT_CHARS);
     const started = Date.now();
@@ -1135,7 +1294,7 @@ export class LiveLlmChain implements LlmClient {
         temperature: 0.2,
         max_tokens: 600,
       },
-      { timeoutMs: this.timeoutMs, maxBodyBytes: this.maxBodyBytes },
+      { timeoutMs, maxBodyBytes: this.maxBodyBytes, signal },
     );
     const latency_ms = Date.now() - started;
     if (!result.ok) {
@@ -1267,6 +1426,8 @@ export class LiveLlmChain implements LlmClient {
     keyIndex: number,
     model: string,
     prompt: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<ProviderOutcome> {
     const first = await this.doPostChat(
       p,
@@ -1275,6 +1436,8 @@ export class LiveLlmChain implements LlmClient {
       model,
       prompt,
       p.jsonMode,
+      timeoutMs,
+      signal,
     );
     if (first.outcome.ok) return first.outcome;
     if (
@@ -1297,6 +1460,8 @@ export class LiveLlmChain implements LlmClient {
         model,
         prompt,
         "none",
+        timeoutMs,
+        signal,
       );
       return retry.outcome;
     }
@@ -1310,6 +1475,8 @@ export class LiveLlmChain implements LlmClient {
     model: string,
     prompt: string,
     mode: JsonMode,
+    timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<{ outcome: ProviderOutcome; status: number; errorBody?: string }> {
     const sent = prompt.slice(0, LIVE_MAX_PROMPT_CHARS);
     const started = Date.now();
@@ -1320,7 +1487,7 @@ export class LiveLlmChain implements LlmClient {
       key,
       model,
       this.buildChatPayload(model, sent, mode),
-      { timeoutMs: this.timeoutMs, maxBodyBytes: this.maxBodyBytes },
+      { timeoutMs, maxBodyBytes: this.maxBodyBytes, signal },
     );
     const latency_ms = Date.now() - started;
     if (!result.ok) {

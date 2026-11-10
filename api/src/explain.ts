@@ -21,7 +21,10 @@ export class ExplainValidationError extends Error {
 
 /** Live-chain capability used for explanations (script text only). */
 export interface ExplainLlm {
-  explainDetailed(script: string): Promise<ExplainDetailedResult>;
+  explainDetailed(
+    script: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<ExplainDetailedResult>;
 }
 
 export const EXPLAIN_MOCK_MODEL = "mock";
@@ -57,6 +60,7 @@ function mockExplain(
 export async function explainScriptText(
   script: string,
   deps: ExplainDeps,
+  opts?: { signal?: AbortSignal },
 ): Promise<ExplainResponse> {
   // Static check first: obviously blocked scripts never reach the LLM.
   const stat = staticValidate(script);
@@ -71,7 +75,7 @@ export async function explainScriptText(
   let explanation: string;
   let model: string;
   if (deps.llm !== null && typeof deps.llm.explainDetailed === "function") {
-    const live = await deps.llm.explainDetailed(script);
+    const live = await deps.llm.explainDetailed(script, opts);
     explanation = live.explanation;
     model = live.model;
   } else if (deps.llm === null) {
