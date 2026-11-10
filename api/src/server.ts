@@ -32,7 +32,7 @@ import {
   readAgentToken,
   type AgentHealth,
 } from "./agent-client.js";
-import { indexRecipes, migrate, openDb, searchRecipes } from "./db.js";
+import { closeDb, indexRecipes, migrate, openDb, searchRecipes } from "./db.js";
 import { ExplainValidationError, explainScriptText } from "./explain.js";
 import {
   RefusalError,
@@ -286,7 +286,7 @@ export async function buildApp(
   };
 
   app.addHook("onClose", async () => {
-    database.close();
+    closeDb(database);
   });
 
   await app.register(cors, { origin: opts.webOrigin, credentials: false });
