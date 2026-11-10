@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -52,10 +54,15 @@ var staticValidationFailedPrefixes = []string{
 	"script exceeds ",
 	"blocked ",
 	"invalid probe ",
+	"invalid uprobe ",
+	"invalid wildcard ",
 	"no probes found",
 	"provider not allowed:",
-	"uprobe must target ",
+	"uprobe must ",
+	"uprobe target not allowed:",
+	"uprobe host path invalid:",
 	"wildcard too broad:",
+	"wildcard not allowed ",
 }
 
 func classifySingleError(err string) string {
@@ -65,7 +72,7 @@ func classifySingleError(err string) string {
 	if strings.HasPrefix(err, "probe not found:") {
 		return "PROBE_NOT_FOUND"
 	}
-	if strings.HasPrefix(err, "wildcard expands to too many probes:") {
+	if strings.HasPrefix(err, "wildcard expands to too many probes:") || strings.HasPrefix(err, "too many probes:") {
 		return "LIMIT_EXCEEDED"
 	}
 	for _, prefix := range staticValidationFailedPrefixes {
@@ -548,6 +555,8 @@ func StaticValidate(script string, catalog *Catalog) ValidateResult {
 		}
 	}
 	var errors []string
+	var warnings []string
+	seenHotSym := map[string]bool{}
 	cleaned, unclosedComment := stripCommentsAndContinuations(script)
 	if unclosedComment {
 		errors = append(errors, "blocked syntax: unclosed block comment")
@@ -568,6 +577,7 @@ func StaticValidate(script string, catalog *Catalog) ValidateResult {
 		known[p] = true
 	}
 	probeCount := 0
+	exceededByWildcard := false
 	for _, pr := range probes {
 		colon := strings.IndexByte(pr, ':')
 		provider := pr
@@ -583,23 +593,43 @@ func StaticValidate(script string, catalog *Catalog) ValidateResult {
 			continue
 		}
 		if provider == "uprobe" || provider == "uretprobe" {
-			rest := strings.TrimPrefix(pr, provider+":")
-			if !strings.Contains(rest, "libc") && !strings.HasPrefix(rest, "/") {
-				errors = append(errors, "uprobe must target libc or an absolute path: "+pr)
+			if strings.ContainsAny(pr, "*?[]") {
+				errors = append(errors, "wildcard not allowed on provider "+provider+": "+pr)
+				continue
+			}
+			_, target, symbol, ok := parseUprobeProbe(pr)
+			if !ok {
+				errors = append(errors, "invalid uprobe target: missing symbol in "+pr)
+				continue
+			}
+			if !isAllowedLibcTarget(target) {
+				errors = append(errors, "uprobe must target libc or canonical libc path: "+pr)
+				continue
+			}
+			if !uprobeSymbolRe.MatchString(symbol) {
+				errors = append(errors, "invalid uprobe symbol: "+symbol+" in "+pr)
+				continue
+			}
+			if isHotLibcSymbol(symbol) && !seenHotSym[symbol] {
+				seenHotSym[symbol] = true
+				warnings = append(warnings, fmt.Sprintf("Hot libc symbol %q fires at high frequency; rely on in-kernel aggregation and agent rate caps.", symbol))
 			}
 			probeCount++
 			continue
 		}
-		if strings.Contains(pr, "*") {
-			if pr == "*" || strings.HasSuffix(pr, ":*") || pr == "tracepoint:*:*" || pr == "kprobe:*" {
-				errors = append(errors, "wildcard too broad: "+pr)
+		if strings.ContainsAny(pr, "*?[]") {
+			if werr := validateWildcardShape(pr, provider); werr != "" {
+				errors = append(errors, werr)
 				continue
 			}
 			n := expandCount(pr, known)
-			if n > limits.MaxProbes {
-				errors = append(errors, "wildcard expands to too many probes: "+pr)
-			} else if n == 0 {
-				errors = append(errors, "probe not found: "+pr)
+			if n == 0 {
+				errors = append(errors, "probe not found: "+pr+suggestProbes(pr, known))
+			} else if n > limits.MaxProbes {
+				errors = append(errors, fmt.Sprintf("wildcard expands to too many probes: %s (%d exceeds max %d)", pr, n, limits.MaxProbes))
+				exceededByWildcard = true
+			} else {
+				warnings = append(warnings, fmt.Sprintf("Wildcard probe %s expands to %d probes; capped at %d.", pr, n, limits.MaxProbes))
 			}
 			probeCount += n
 			continue
@@ -607,9 +637,12 @@ func StaticValidate(script string, catalog *Catalog) ValidateResult {
 		probeCount++
 		if provider != "profile" && provider != "interval" && provider != "software" && provider != "BEGIN" && provider != "END" {
 			if !known[pr] {
-				errors = append(errors, "probe not found: "+pr)
+				errors = append(errors, "probe not found: "+pr+suggestProbes(pr, known))
 			}
 		}
+	}
+	if probeCount > limits.MaxProbes && !exceededByWildcard {
+		errors = append(errors, fmt.Sprintf("too many probes: script attaches %d probes (limit %d)", probeCount, limits.MaxProbes))
 	}
 	code := ""
 	if len(errors) > 0 {
@@ -619,9 +652,82 @@ func StaticValidate(script string, catalog *Catalog) ValidateResult {
 		Code:       code,
 		Probes:     probesOrEmpty(probes),
 		Errors:     errorsOrEmpty(errors),
-		Warnings:   []string{},
+		Warnings:   errorsOrEmpty(warnings),
 		ProbeCount: probeCount,
 	}
+}
+
+func validateWildcardShape(pr, provider string) string {
+	if provider != "tracepoint" && provider != "kprobe" && provider != "kretprobe" {
+		return "wildcard not allowed on provider " + provider + ": " + pr
+	}
+	if strings.ContainsAny(pr, "?[]") || strings.Count(pr, "*") != 1 || !strings.HasSuffix(pr, "*") {
+		return "invalid wildcard pattern: " + pr
+	}
+	rest := strings.TrimPrefix(pr, provider+":")
+	if provider == "tracepoint" {
+		subsys, event, ok := strings.Cut(rest, ":")
+		if !ok || subsys == "" || strings.Contains(event, ":") {
+			return "invalid wildcard pattern: " + pr
+		}
+		return ""
+	}
+	prefix := strings.TrimSuffix(rest, "*")
+	if strings.Contains(prefix, ":") {
+		return "invalid wildcard pattern: " + pr
+	}
+	if len(prefix) < 3 {
+		return "wildcard too broad: " + pr
+	}
+	return ""
+}
+
+func suggestProbes(pr string, known map[string]bool) string {
+	if len(known) == 0 {
+		return ""
+	}
+	colon := strings.IndexByte(pr, ':')
+	provider := pr
+	if colon >= 0 {
+		provider = pr[:colon]
+	}
+	cleanTarget := strings.TrimSuffix(pr, "*")
+	searchPrefix := provider + ":"
+	if colon >= 0 && provider == "tracepoint" {
+		if second := strings.IndexByte(cleanTarget[colon+1:], ':'); second > 0 {
+			searchPrefix = cleanTarget[:colon+1+second+1]
+		}
+	}
+	targetStem := cleanTarget
+	if len(targetStem) > len(provider)+4 {
+		targetStem = targetStem[:len(provider)+4]
+	}
+
+	var candidates []string
+	for k := range known {
+		if provider == "tracepoint" {
+			if strings.HasPrefix(k, searchPrefix) {
+				candidates = append(candidates, k)
+			}
+		} else if strings.HasPrefix(k, provider+":") && strings.HasPrefix(k, targetStem) {
+			candidates = append(candidates, k)
+		}
+	}
+	if len(candidates) == 0 {
+		for k := range known {
+			if strings.HasPrefix(k, provider+":") {
+				candidates = append(candidates, k)
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return ""
+	}
+	sort.Strings(candidates)
+	if len(candidates) > 3 {
+		candidates = candidates[:3]
+	}
+	return fmt.Sprintf(" (did you mean: %s?)", strings.Join(candidates, ", "))
 }
 
 func probesOrEmpty(p []string) []string {

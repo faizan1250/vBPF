@@ -378,6 +378,7 @@ func TestStaticValidateHeaderSyntaxAndSpoofing(t *testing.T) {
 		{"trailing flag after probe", "BEGIN {} --flag", "invalid probe header: missing action block"},
 		{"missing action block after predicate", "BEGIN /1/", "invalid probe header: missing action block"},
 		{"unclosed quote in target", "uprobe:/bin/app:\"unclosed\n{}", "invalid probe header: unclosed quote"},
+		{"quoted C++ uprobe symbol rejected", `uprobe:/lib/libc.so.6:"Foo::bar(int, int)" { @x = count(); }`, "invalid uprobe symbol"},
 		{"spoofed BEGIN in string", `fentry:vfs_read { printf("BEGIN"); }`, "provider not allowed: fentry"},
 		{"spoofed catalog probe in string", `u:./evil:fn { $s = "tracepoint:block:block_rq_issue"; }`, "provider not allowed: u"},
 		{"unknown probe wording injection", "unknown probe {}", "invalid probe header"},
@@ -424,11 +425,6 @@ func TestStaticValidateHeaderSyntaxAndSpoofing(t *testing.T) {
 			"predicate with division in parens and slash in string",
 			`tracepoint:block:block_rq_complete /(nsecs / 1000) > 10 && comm == "a/b"/ { @x = count(); }`,
 			[]string{"tracepoint:block:block_rq_complete"},
-		},
-		{
-			"quoted C++ signature with comma and spaces",
-			`uprobe:/lib/libc.so.6:"Foo::bar(int, int)" { @x = count(); }`,
-			[]string{`uprobe:/lib/libc.so.6:"Foo::bar(int, int)"`},
 		},
 		{
 			"struct enum union before probe",
@@ -549,4 +545,10 @@ func TestStaticValidateRejectsAllowedProvidersMissingTarget(t *testing.T) {
 		res := StaticValidate(valid, cat)
 		require.Empty(t, res.Errors, valid)
 	}
+}
+
+func TestParseHeaderTargetsPreservesQuotedColon(t *testing.T) {
+	targets, errs := parseHeaderTargets(`uprobe:/lib/libc.so.6:"Foo::bar(int, int)"`)
+	require.Empty(t, errs)
+	require.Equal(t, []string{`uprobe:/lib/libc.so.6:"Foo::bar(int, int)"`}, targets)
 }

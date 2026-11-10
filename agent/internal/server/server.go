@@ -33,6 +33,7 @@ type Config struct {
 	RunFn            RunnerFunc
 	DryRun           DryRunFunc
 	ProbeArgs        ProbeArgsFunc
+	UprobeCheck      *UprobeChecker
 	Health           *HealthProvider
 	Logger           zerolog.Logger
 	StartTime        time.Time
@@ -51,6 +52,7 @@ type Server struct {
 	health           *HealthProvider
 	dryRun           DryRunFunc
 	probeArgs        ProbeArgsFunc
+	uprobeCheck      *UprobeChecker
 	logger           zerolog.Logger
 	startTime        time.Time
 	bpftracePath     string
@@ -85,6 +87,12 @@ func New(cfg Config) (*Server, error) {
 	if probeArgs == nil {
 		probeArgs = DefaultProbeArgs(cfg.BPFtracePath)
 	}
+	uprobeCheck := cfg.UprobeCheck
+	if uprobeCheck == nil {
+		uprobeCheck = NewUprobeChecker(cfg.BPFtracePath)
+	} else {
+		uprobeCheck = uprobeCheck.withDefaults()
+	}
 	if cfg.CatalogRetryBase <= 0 {
 		cfg.CatalogRetryBase = time.Second
 	}
@@ -103,6 +111,7 @@ func New(cfg Config) (*Server, error) {
 		health:           health,
 		dryRun:           dryRun,
 		probeArgs:        probeArgs,
+		uprobeCheck:      uprobeCheck,
 		logger:           cfg.Logger,
 		startTime:        cfg.StartTime,
 		bpftracePath:     cfg.BPFtracePath,
@@ -339,6 +348,16 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if uErrs := s.uprobeCheck.VerifyProbes(r.Context(), res.Probes); len(uErrs) > 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":          false,
+			"errors":      uErrs,
+			"probes":      slicesOrEmpty(res.Probes),
+			"warnings":    slicesOrEmpty(res.Warnings),
+			"probe_count": res.ProbeCount,
+		})
+		return
+	}
 	if dryErrs := s.dryRun(r.Context(), req.Script); len(dryErrs) > 0 {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":          false,
@@ -392,6 +411,10 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(res.Errors) > 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": strings.Join(res.Errors, "; "), "code": classifyValidationError(res.Errors), "errors": res.Errors})
+		return
+	}
+	if uErrs := s.uprobeCheck.VerifyProbes(r.Context(), res.Probes); len(uErrs) > 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": strings.Join(uErrs, "; "), "code": classifyValidationError(uErrs), "errors": uErrs})
 		return
 	}
 	if dryErrs := s.dryRun(r.Context(), req.Script); len(dryErrs) > 0 {
