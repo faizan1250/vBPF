@@ -4,10 +4,15 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createServer,
+  IncomingMessage,
   request,
-  type IncomingMessage,
+  ServerResponse,
+  type IncomingHttpHeaders,
+  type OutgoingHttpHeaders,
   type Server,
 } from "node:http";
+import { createConnection, Socket } from "node:net";
+import { PassThrough } from "node:stream";
 
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -172,15 +177,84 @@ function startFakeAgent(): Promise<FakeAgent> {
 }
 
 // node:http honors an explicit Host header (undici fetch does not), so Host
-// gate tests use this instead of fetch.
-function getWithHost(url: string, host: string): Promise<number> {
+// and raw header gate tests use this instead of fetch.
+function requestRaw(
+  url: string,
+  opts: {
+    method?: string;
+    headers?: OutgoingHttpHeaders;
+    body?: string;
+  } = {},
+): Promise<{ status: number; headers: IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
-    const req = request(url, { headers: { host } }, (res) => {
-      res.resume();
-      res.on("end", () => resolve(res.statusCode ?? 0));
-    });
+    const req = request(
+      url,
+      { method: opts.method ?? "GET", headers: opts.headers },
+      (res) => {
+        res.resume();
+        res.on("end", () =>
+          resolve({ status: res.statusCode ?? 0, headers: res.headers }),
+        );
+      },
+    );
     req.on("error", reject);
+    if (opts.body !== undefined) req.write(opts.body);
     req.end();
+  });
+}
+
+function getWithHost(url: string, host: string): Promise<number> {
+  return requestRaw(url, { headers: { host } }).then((r) => r.status);
+}
+
+function sendRawHttp(
+  url: string,
+  payload: string,
+): Promise<{ status: number; rawHeaders: string }> {
+  const { hostname, port } = new URL(url);
+  return new Promise((resolve, reject) => {
+    const sock = createConnection(Number(port), hostname, () => {
+      sock.write(payload);
+    });
+    let data = "";
+    sock.on("data", (chunk) => {
+      data += chunk.toString();
+    });
+    sock.on("end", () => {
+      const m = /^HTTP\/\d\.\d\s+(\d+)/.exec(data);
+      const rawHeaders = data.split("\r\n\r\n")[0] ?? "";
+      resolve({ status: m ? Number(m[1]) : 0, rawHeaders });
+    });
+    sock.on("error", reject);
+  });
+}
+
+function wsUpgradeRejected(
+  wsUrl: string,
+  headers: OutgoingHttpHeaders,
+): Promise<{ status: number; headers: IncomingHttpHeaders }> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const ws = new WebSocket(wsUrl, { headers });
+    ws.on("unexpected-response", (_req, res) => {
+      res.resume();
+      res.on("end", () => {
+        settled = true;
+        ws.terminate();
+        resolve({ status: res.statusCode ?? 0, headers: res.headers });
+      });
+    });
+    ws.on("open", () => {
+      settled = true;
+      ws.close();
+      reject(new Error("expected websocket upgrade rejection"));
+    });
+    ws.on("error", (err) => {
+      if (!settled) {
+        settled = true;
+        reject(err);
+      }
+    });
   });
 }
 
@@ -593,16 +667,209 @@ describe("health and recipes", () => {
       headers: { origin: "http://evil.example" },
     });
     expect(res.status).toBe(403);
+    expect(res.headers.get("access-control-allow-origin")).toBeNull();
   });
 
   it("rejects non-loopback host", async () => {
-    const status = await getWithHost(`${base}/api/health`, "evil.example");
-    expect(status).toBe(403);
+    const res = await requestRaw(`${base}/api/health`, {
+      headers: { host: "evil.example", origin: "http://localhost:5173" },
+    });
+    expect(res.status).toBe(403);
+    expect(res.headers["access-control-allow-origin"]).toBeUndefined();
   });
 
   it("allows loopback hosts with any port", async () => {
     for (const host of ["127.0.0.1:1", "localhost:5173", "[::1]:8080"]) {
       expect(await getWithHost(`${base}/api/health`, host), host).toBe(200);
+    }
+  });
+
+  it("rejects malformed host ports", async () => {
+    for (const host of [
+      "localhost:evil",
+      "localhost:",
+      "127.0.0.1:abc",
+      "[::1]:evil",
+      "[::1]:",
+    ]) {
+      expect(await getWithHost(`${base}/api/health`, host), host).toBe(403);
+    }
+    const emptyHost = await sendRawHttp(
+      base,
+      "GET /api/health HTTP/1.1\r\nHost:\r\nConnection: close\r\n\r\n",
+    );
+    expect(emptyHost.status).toBe(403);
+  });
+
+  it("rejects non-string array origin header", async () => {
+    const wire = await sendRawHttp(
+      base,
+      "GET /api/health HTTP/1.1\r\nHost: localhost:5173\r\nOrigin: http://localhost:5173\r\nOrigin: http://localhost:5173\r\nConnection: close\r\n\r\n",
+    );
+    expect(wire.status).toBe(403);
+    expect(wire.rawHeaders.toLowerCase()).not.toContain(
+      "access-control-allow-origin",
+    );
+
+    const sock = new Socket();
+    const req = new IncomingMessage(sock);
+    req.method = "GET";
+    req.url = "/api/health";
+    req.headers = {
+      host: "localhost:5173",
+      origin: ["http://localhost:5173"] as unknown as string,
+    };
+    const out = Object.assign(new PassThrough(), {
+      cork: () => {},
+      uncork: () => {},
+    });
+    out.resume();
+    const res = new ServerResponse(req);
+    res.assignSocket(out as unknown as Socket);
+    await new Promise<void>((resolve) => {
+      res.on("finish", resolve);
+      app.server.emit("request", req, res);
+    });
+    sock.destroy();
+    out.destroy();
+    expect(res.statusCode).toBe(403);
+    expect(res.getHeader("access-control-allow-origin")).toBeUndefined();
+  });
+
+  it("blocks Sec-Fetch-Site cross-site and allows same-origin or absent", async () => {
+    const blocked = await requestRaw(`${base}/api/health`, {
+      headers: {
+        origin: "http://localhost:5173",
+        "sec-fetch-site": "cross-site",
+      },
+    });
+    expect(blocked.status).toBe(403);
+    expect(blocked.headers["access-control-allow-origin"]).toBeUndefined();
+
+    const mixedCase = await requestRaw(`${base}/api/health`, {
+      headers: { "sec-fetch-site": "Cross-Site" },
+    });
+    expect(mixedCase.status).toBe(403);
+
+    const sameOrigin = await requestRaw(`${base}/api/health`, {
+      headers: { "sec-fetch-site": "same-origin" },
+    });
+    expect(sameOrigin.status).toBe(200);
+
+    const absent = await requestRaw(`${base}/api/health`);
+    expect(absent.status).toBe(200);
+  });
+
+  it("enforces host and origin gates on OPTIONS preflight without ACAO", async () => {
+    const badHost = await requestRaw(`${base}/api/runs`, {
+      method: "OPTIONS",
+      headers: {
+        host: "evil.example",
+        origin: "http://localhost:5173",
+        "access-control-request-method": "POST",
+      },
+    });
+    expect(badHost.status).toBe(403);
+    expect(badHost.headers["access-control-allow-origin"]).toBeUndefined();
+
+    const badOrigin = await requestRaw(`${base}/api/runs`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "http://evil.example",
+        "access-control-request-method": "POST",
+      },
+    });
+    expect(badOrigin.status).toBe(403);
+    expect(badOrigin.headers["access-control-allow-origin"]).toBeUndefined();
+
+    const allowed = await requestRaw(`${base}/api/runs`, {
+      method: "OPTIONS",
+      headers: {
+        host: "localhost:5173",
+        origin: "http://localhost:5173",
+        "access-control-request-method": "POST",
+      },
+    });
+    expect(allowed.status).toBe(204);
+    expect(allowed.headers["access-control-allow-origin"]).toBe(
+      "http://localhost:5173",
+    );
+  });
+
+  it("rejects POST /api/runs with non-loopback host or foreign origin", async () => {
+    const body = JSON.stringify({ script: "BEGIN { @x = count(); }" });
+    const badHost = await requestRaw(`${base}/api/runs`, {
+      method: "POST",
+      headers: {
+        host: "evil.example",
+        origin: "http://localhost:5173",
+        "content-type": "application/json",
+      },
+      body,
+    });
+    expect(badHost.status).toBe(403);
+    expect(badHost.headers["access-control-allow-origin"]).toBeUndefined();
+
+    const badOrigin = await requestRaw(`${base}/api/runs`, {
+      method: "POST",
+      headers: {
+        origin: "http://evil.example",
+        "content-type": "application/json",
+      },
+      body,
+    });
+    expect(badOrigin.status).toBe(403);
+    expect(badOrigin.headers["access-control-allow-origin"]).toBeUndefined();
+  });
+
+  it("enforces host and origin gates on /ws/runs/:id upgrades", async () => {
+    const wsBase = base.replace(/^http/, "ws");
+    const badHost = await wsUpgradeRejected(`${wsBase}/ws/runs/run_test`, {
+      host: "evil.example",
+      origin: "http://localhost:5173",
+    });
+    expect(badHost.status).toBe(403);
+    expect(badHost.headers["access-control-allow-origin"]).toBeUndefined();
+
+    const badOrigin = await wsUpgradeRejected(`${wsBase}/ws/runs/run_test`, {
+      origin: "http://evil.example",
+    });
+    expect(badOrigin.status).toBe(403);
+    expect(badOrigin.headers["access-control-allow-origin"]).toBeUndefined();
+
+    const crossSite = await wsUpgradeRejected(`${wsBase}/ws/runs/run_test`, {
+      origin: "http://localhost:5173",
+      "sec-fetch-site": "cross-site",
+    });
+    expect(crossSite.status).toBe(403);
+    expect(crossSite.headers["access-control-allow-origin"]).toBeUndefined();
+
+    const created = (await (
+      await fetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+      })
+    ).json()) as { run_id: string };
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const ws = new WebSocket(`${wsBase}/ws/runs/${created.run_id}`, {
+          headers: { origin: "http://localhost:5173" },
+        });
+        ws.on("message", (data) => {
+          const ev = JSON.parse(data.toString()) as { kind: string };
+          if (ev.kind === "summary") {
+            ws.close();
+            resolve();
+          }
+        });
+        ws.on("error", reject);
+        setTimeout(() => reject(new Error("ws timeout")), 10000);
+      });
+    } finally {
+      await fetch(`${base}/api/runs/${created.run_id}/stop`, {
+        method: "POST",
+      });
     }
   });
 });
