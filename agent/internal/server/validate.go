@@ -38,25 +38,56 @@ var allowedProviders = map[string]bool{
 // DryRunFunc compiles a script without attaching probes.
 type DryRunFunc func(ctx context.Context, script string) []string
 
-// classifyValidationError maps static/dry-run failures to the client-facing
-// taxonomy code. HTTP status stays 400; only the code carries the taxonomy.
-// Probe misses and over-broad wildcards are best-effort matches on compiler
-// wording, so unknown shapes fall back to VALIDATION_FAILED.
-func classifyValidationError(errs []string) string {
-	for _, e := range errs {
-		low := strings.ToLower(e)
-		if strings.Contains(low, "probe not found") ||
-			strings.Contains(low, "unknown probe") ||
-			strings.Contains(low, "no such probe") {
-			return "PROBE_NOT_FOUND"
+var staticValidationFailedPrefixes = []string{
+	"empty script",
+	"script exceeds ",
+	"blocked ",
+	"invalid probe ",
+	"no probes found",
+	"provider not allowed:",
+	"uprobe must target ",
+	"wildcard too broad:",
+}
+
+func classifySingleError(err string) string {
+	if strings.HasPrefix(err, "probe not found:") {
+		return "PROBE_NOT_FOUND"
+	}
+	if strings.HasPrefix(err, "wildcard expands to too many probes:") {
+		return "LIMIT_EXCEEDED"
+	}
+	for _, prefix := range staticValidationFailedPrefixes {
+		if strings.HasPrefix(err, prefix) {
+			return "VALIDATION_FAILED"
 		}
 	}
-	for _, e := range errs {
-		if strings.Contains(strings.ToLower(e), "too many probes") {
-			return "LIMIT_EXCEEDED"
-		}
+	low := strings.ToLower(err)
+	if strings.Contains(low, "probe not found") ||
+		strings.Contains(low, "unknown probe") ||
+		strings.Contains(low, "no such probe") {
+		return "PROBE_NOT_FOUND"
+	}
+	if strings.Contains(low, "too many probes") {
+		return "LIMIT_EXCEEDED"
 	}
 	return "VALIDATION_FAILED"
+}
+
+// classifyValidationError maps static/dry-run failures to the client-facing
+// taxonomy code. HTTP status stays 400; only the code carries the taxonomy.
+// StaticValidate errors match strictly by prefix so probe text cannot spoof
+// dry-run compiler wording; unrecognized errors fall back to best-effort matching.
+func classifyValidationError(errs []string) string {
+	code := "VALIDATION_FAILED"
+	for _, e := range errs {
+		switch classifySingleError(e) {
+		case "PROBE_NOT_FOUND":
+			return "PROBE_NOT_FOUND"
+		case "LIMIT_EXCEEDED":
+			code = "LIMIT_EXCEEDED"
+		}
+	}
+	return code
 }
 
 // stripCommentsAndContinuations removes // and /* */ comments and \\\r?\n
@@ -508,12 +539,17 @@ func StaticValidate(script string, catalog *Catalog) (probes []string, errors []
 		}
 	}
 	for _, pr := range probes {
+		colon := strings.IndexByte(pr, ':')
 		provider := pr
-		if i := strings.IndexByte(pr, ':'); i >= 0 {
-			provider = pr[:i]
+		if colon >= 0 {
+			provider = pr[:colon]
 		}
 		if !allowedProviders[provider] {
 			errors = append(errors, "provider not allowed: "+provider)
+			continue
+		}
+		if colon < 0 && provider != "BEGIN" && provider != "END" {
+			errors = append(errors, "invalid probe header: missing target for provider "+provider)
 			continue
 		}
 		if provider == "uprobe" || provider == "uretprobe" {
