@@ -1,5 +1,43 @@
 # Decisions
 
+## R-26: Release preparation v0.2.0, local only (2026-11-10)
+
+- **Version bumps: 4 `package.json` files to `0.2.0`** (root, `api`, `web`,
+  `packages/schemas`). No agent version constant exists — the agent reports
+  only the runtime bpftrace version (`health.go`), so there was nothing to
+  bump there. No other `version:` fields in the repo outside `pnpm-lock.yaml`
+  (dependency pins, untouched).
+- **`CHANGELOG.md` finalized from the R-15 draft.** `## [Unreleased]` became
+  `## [0.2.0] — 2026-11-10`; the "stays with R-26" paragraph now records the
+  local tag and the maintainer push/publish step. `RELEASE_NOTES_v0.2.0.md`
+  needed no content change (numbers already match the R-02/R-07 evidence);
+  its draft banner stays until the maintainer publishes.
+- **`SECURITY.md` deliberately untouched.** Its `0.1.x` supported line stands
+  until `v0.2.0` is _published_, not merely tagged; the CHANGELOG security
+  note now says exactly that.
+- **`docs/launch.md` is drafts only, never posted.** Five drafts (Show HN,
+  r/linux, r/devops, r/ebpf, X thread) reusing the README's own Postman/`curl`
+  analogy and the committed live-eval numbers.
+- **Release gate verified before tagging:** R-01 (#17), R-02 (#19), R-12
+  (#28), R-13 (#29), R-15 (#41), R-16 (#31), R-17 (#32), R-18 (#33), R-19
+  (#34), R-20 (#35), R-21 (#36), R-22 (#37), R-23 (#38) all merged; P1
+  (R-04–R-11) merged with untestable platforms labeled "untested" per D-9.
+  Gate run 2026-11-10: recipes-check 10/10, `go vet`/`gofmt`/`golangci-lint`
+  clean, `tsc --noEmit` clean (api, web), `shellcheck` clean, `eslint` clean,
+  `prettier --check .` clean for every tracked file, api vitest 121/121, web
+  vitest 46/46, agent `go test ./...` and `go test -race ./...` all packages
+  ok. Two environment notes, both pre-existing and unrelated to this diff:
+  (a) `prettier --check .` also flags untracked `remaining.md` (orchestrator
+  scratch, left untouched); (b) agent tests cannot execute on Windows (the
+  `.sh` fixture replay is not a Win32 executable, and AppControl blocks the
+  compiled parser test binary), so they were run in WSL from a byte-identical
+  copy (`agent/` + `scripts/fake-bpftrace.sh` + `fixtures/`), then the copy
+  was deleted. Tag `v0.2.0` created locally with `git tag -a`; nothing
+  pushed, no PR raised — branch and tag stay local per D-12.
+- **No test-sync item.** Version bumps, changelog finalization, and launch
+  drafts change no logic; verification is the green `make lint && make test`
+  gate run itself.
+
 ## R-15: README and docs truth pass (2026-11-10)
 
 - **Next release is `v0.2.0`, not `v0.1.1` (D-4 confirmed).** Changes since
