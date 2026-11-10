@@ -13,7 +13,7 @@
   cancel the stream) rather than reporting a timeout.
 - **Timeout is a cooling provider failure (D-23).** Fetch-abort and
   body-abort return a new `kind: "timeout"` failure (message `timed out
-  after <ms>`, `cooldownMs: LIVE_DEFAULT_COOLDOWN_MS`) with log outcome
+after <ms>`, `cooldownMs: LIVE_DEFAULT_COOLDOWN_MS`) with log outcome
   `timeout`. Like `rate`, it cools the provider and counts toward the
   all-cooling `LlmUnavailableError`; unlike model 4xx, it aborts the
   model loop and continues with the next provider. Explain paths mirror

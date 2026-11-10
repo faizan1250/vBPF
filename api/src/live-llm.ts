@@ -568,13 +568,7 @@ async function requestChat(
       });
     } catch (err) {
       if (isAbortError(err)) {
-        return timeoutFailure(
-          providerName,
-          model,
-          opts.timeoutMs,
-          0,
-          err,
-        );
+        return timeoutFailure(providerName, model, opts.timeoutMs, 0, err);
       }
       const reason = err instanceof Error ? err.message : "request failed";
       return {
