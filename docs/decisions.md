@@ -1,5 +1,42 @@
 # Decisions
 
+## R-15: README and docs truth pass (2026-11-10)
+
+- **Next release is `v0.2.0`, not `v0.1.1` (D-4 confirmed).** Changes since
+  the `v0.1.0` tag are new features and API additions (live generation,
+  explain, run summaries, generation binding), so semver minor applies.
+  `CHANGELOG.md` (Keep a Changelog) and draft `RELEASE_NOTES_v0.2.0.md`
+  created; version bumps, the annotated tag, and publishing stay with R-26.
+  `SECURITY.md` supported line stays `0.1.x` until `v0.2.0` ships.
+- **`loadConfig` ignored `LLM_PROVIDER_CHAIN` (fixed).** `EnvSchema`
+  declared it but `loadConfig` never passed the env value through, so any
+  configured chain silently became `groq`. One-line fix plus
+  `api/src/config.test.ts` regression test. Chosen over doc-weakening
+  because ordered fallback is core R-01 behavior.
+- **`make -C eval run-live` paced too fast (fixed).** The Makefile default
+  `--delay-ms 2000` reproduces the R-02 run-1 `429` collapse; the verified
+  run used `15000` (~8 min wall clock). Makefile default raised to `15000`
+  to match the README command and R-02 evidence.
+- **Go badge drift (fixed).** README badge and two mentions said Go 1.23;
+  `agent/go.mod`, `agent/Dockerfile`, CI, and docs all pin 1.27 since R-21.
+  README corrected to 1.27.
+- **Stale counts corrected.** Fixtures cover all 10 recipes (was "5 of
+  10"); eval adversarial row now reads 4/4 refused with 30/30
+  refusal-correct overall, matching `eval/reports/2026-11-09-live.md`.
+- **Privacy wording updated.** The old "unless you explicitly use an
+  'Explain these results' feature when it is available" predated R-12;
+  README now states the Explain button sends only script text and probe
+  output is never sent to the LLM, matching `EXPLAIN_SYSTEM` and
+  `docs/security.md`.
+- **Duration/`BPFTRACE_*` rows clarified, not re-plumbed.** Values match
+  the agent/API enforced caps, but they are compiled defaults rather than
+  live env knobs; the README footnote now says so. Making them truly
+  env-driven is a follow-up, not folded into this diff.
+- **Verified:** every README link resolves to a file in the repo, and
+  every `make` target named in the README (`setup`, `lint`, `test`,
+  `test-integration`, `api-dev`, `web-dev`, `eval`, `eval run-live`)
+  exists in `Makefile` / `eval/Makefile`.
+
 ## R-24: Demo GIF without a human (2026-11-10)
 
 - **`scripts/make-demo.sh` owns the whole pipeline.** Fixture build (`VITE_FIXTURE_MODE=1`), loopback `vite preview`, Playwright record (`web/playwright.demo.config.ts`, video on), ffmpeg palette GIF to `docs/assets/demo.gif` (640 px, 8 fps, bayer dither; 560 px/7 fps fallback), with an 8 MB hard gate. Result: 63 s, 6.2 MB.
