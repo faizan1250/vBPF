@@ -26,7 +26,7 @@ export const GOTCHAS = [
   "Always delete() temporary map keys; clear() snapshot maps after print().",
   "New processes: tracepoint:sched:sched_process_exec (not sched_process_fork).",
   "Page faults: software:page-faults (not mm_vmscan tracepoints).",
-  "TCP retransmits: tracepoint:tcp:tcp_retransmit_skb with interval:s:1 snapshots.",
+  "TCP retransmits: tracepoint:tcp:tcp_retransmit_skb with interval:s:1 snapshots; tracepoint:net:* does not exist, never invent it.",
 ].join("\n");
 
 // Per-section cap for `bpftrace -vl` output inside reference data.
