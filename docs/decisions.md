@@ -1,5 +1,27 @@
 # Decisions
 
+## R2-02 Slice 11: live client drops the last tail slice (2026-11-10)
+
+- **Last slice removed.** `doPostChat()` sent
+  `prompt.slice(0, LIVE_MAX_PROMPT_CHARS)` on the legacy no-parts path; it
+  now sends the full prompt. The explain slice went in S10, so no prompt
+  truncation remains on any client send path (remaining `slice` calls are
+  log/error-body caps, DB field caps, and output truncation). The budget is
+  enforced once in `prompts.ts` by shrinking context; the client never
+  re-truncates, so the user request and retry feedback cannot be cut off.
+- **`LIVE_MAX_PROMPT_CHARS` kept as an alias.** Still re-exported from
+  `PROMPT_BUDGET_CHARS` for compatibility; nothing in the client reads it
+  anymore.
+- **Stability already proven.** The S10 wiring test asserts the system
+  message is byte-identical across the initial call and the retry (feedback
+  lands only in `<previous_attempt>` in the user message), which keeps
+  prefix caching effective. S11 adds a regression test that an oversized
+  legacy prompt arrives intact with its tail marker.
+- **Verified:** `tsc --noEmit` clean, eslint/prettier clean, full api suite
+  181/181 (16 in `prompt-parts.test.ts`: 15 from S10 plus the new
+  no-tail-slice fallback test; every existing prompt/generate test
+  unchanged).
+
 ## R2-02 Slice 10: prompt parts plus plumbing, no live behavior change (2026-11-10)
 
 - **Parts split (D-26).** `buildGeneratePrompt()` additionally returns

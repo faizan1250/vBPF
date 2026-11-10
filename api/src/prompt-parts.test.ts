@@ -337,6 +337,18 @@ describe("chain parts wiring", () => {
     });
   });
 
+  it("never tail-slices the legacy fallback prompt", () => {
+    const captured: Captured[] = [];
+    const chain = stubChain(captured);
+    const longPrompt = `request ${"x".repeat(30_000)} tail-marker`;
+    expect(longPrompt.length).toBeGreaterThan(24_000);
+    return chain.generate(longPrompt).then(() => {
+      expect(captured).toHaveLength(1);
+      expect(captured[0]?.user).toBe(longPrompt);
+      expect(captured[0]?.user).toContain("tail-marker");
+    });
+  });
+
   it("sends the full script for explain with no tail slice", () => {
     const captured: Captured[] = [];
     const chain = stubChain(captured);
