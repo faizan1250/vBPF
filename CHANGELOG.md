@@ -4,12 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — targeting v0.2.0
+## [0.2.0] — 2026-11-10
 
 Per decision D-4, the changes since `v0.1.0` are new features and API
 additions (live AI generation, explain, run summaries), so the next release
-is `v0.2.0`, not `v0.1.1`. Version bumps, the annotated tag, and publishing
-stay with R-26; this file records the content.
+is `v0.2.0`, not `v0.1.1`. Tag `v0.2.0` is prepared locally; pushing the tag
+and publishing the release are maintainer one-time steps.
 
 ### Added
 
@@ -64,7 +64,8 @@ stay with R-26; this file records the content.
 ### Security
 
 - See `docs/security.md` (canonical) and `SECURITY.md` (reporting).
-  Supported versions remain `0.1.x` until `v0.2.0` is tagged and published.
+  Supported versions remain `0.1.x` until `v0.2.0` is published; the
+  supported-versions table then moves to `0.2.x`.
 
 ## [v0.1.0] — 2026-11-01 (tag)
 
