@@ -14,12 +14,10 @@ func interruptSignal() os.Signal { return os.Kill }
 
 func killSignal() os.Signal { return os.Kill }
 
-func signalGroup(pid int, sig os.Signal) error {
+func killGroup(pid int, sig os.Signal) error {
 	p, err := os.FindProcess(pid)
 	if err != nil {
 		return err
 	}
 	return p.Kill()
 }
-
-func killGroup(pid int, sig os.Signal) error { return signalGroup(pid, sig) }

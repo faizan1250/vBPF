@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -320,4 +321,293 @@ func main() {
 	})
 	require.EqualError(t, err, "sink closed")
 	require.Less(t, time.Since(start), 5*time.Second)
+}
+
+func buildRunnerTestHelper(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "main.go")
+	binPath := filepath.Join(dir, "runner-helper")
+	if runtime.GOOS == "windows" {
+		binPath += ".exe"
+	}
+	src := `package main
+
+import (
+	"os"
+	"time"
+)
+
+func main() {
+	switch os.Getenv("FAKE_HELPER_MODE") {
+	case "exit0":
+		_, _ = os.Stdout.WriteString("{\"type\":\"printf\",\"data\":\"ok\\n\"}\n")
+	case "exit3":
+		_, _ = os.Stdout.WriteString("{\"type\":\"printf\",\"data\":\"ok\\n\"}\n")
+		_, _ = os.Stderr.WriteString("boom\n")
+		os.Exit(3)
+	case "flood_sleep":
+		for range 40 {
+			_, _ = os.Stdout.WriteString("{\"type\":\"printf\",\"data\":\"payload-line\\n\"}\n")
+		}
+		time.Sleep(30 * time.Second)
+	case "printf_then_sleep":
+		_, _ = os.Stdout.WriteString("{\"type\":\"printf\",\"data\":\"hello\\n\"}\n")
+		_, _ = os.Stderr.WriteString("before-sleep stderr\n")
+		time.Sleep(30 * time.Second)
+	case "close_stdout_sleep":
+		_, _ = os.Stdout.WriteString("{\"type\":\"printf\",\"data\":\"early\\n\"}\n")
+		_, _ = os.Stderr.WriteString("still-alive stderr\n")
+		_ = os.Stdout.Close()
+		time.Sleep(30 * time.Second)
+	default:
+		time.Sleep(30 * time.Second)
+	}
+}
+`
+	require.NoError(t, os.WriteFile(srcPath, []byte(src), 0o600))
+	build := exec.Command("go", "build", "-o", binPath, srcPath)
+	out, err := build.CombinedOutput()
+	require.NoError(t, err, "build helper: %s", out)
+	return binPath
+}
+
+func TestSignalNotCalledAfterWait(t *testing.T) {
+	binPath := buildRunnerTestHelper(t)
+
+	origSignal := signalGroup
+	origWait := waitCmd
+	var waited atomic.Bool
+	var totalSignals atomic.Int32
+	var postReapSignals atomic.Int32
+
+	signalGroup = func(pid int, sig os.Signal) error {
+		totalSignals.Add(1)
+		if waited.Load() {
+			postReapSignals.Add(1)
+		}
+		return origSignal(pid, sig)
+	}
+	waitCmd = func(cmd *exec.Cmd) error {
+		err := origWait(cmd)
+		waited.Store(true)
+		return err
+	}
+	t.Cleanup(func() {
+		signalGroup = origSignal
+		waitCmd = origWait
+	})
+
+	reset := func() {
+		waited.Store(false)
+		totalSignals.Store(0)
+		postReapSignals.Store(0)
+	}
+
+	t.Run(ReasonCompleted, func(t *testing.T) {
+		reset()
+		t.Setenv("FAKE_HELPER_MODE", "exit0")
+		events, err := run(t, Options{BPFtracePath: binPath, Script: "BEGIN {}", Duration: 5 * time.Second, RunID: "sig_completed"})
+		require.NoError(t, err)
+		require.Equal(t, ReasonCompleted, summaryOf(t, events).ExitReason)
+		require.Zero(t, totalSignals.Load())
+		require.Zero(t, postReapSignals.Load())
+	})
+
+	t.Run(ReasonFailed, func(t *testing.T) {
+		reset()
+		t.Setenv("FAKE_HELPER_MODE", "exit3")
+		events, err := run(t, Options{BPFtracePath: binPath, Script: "BEGIN {}", Duration: 5 * time.Second, RunID: "sig_failed"})
+		require.Error(t, err)
+		require.Equal(t, ReasonFailed, summaryOf(t, events).ExitReason)
+		require.Zero(t, totalSignals.Load())
+		require.Zero(t, postReapSignals.Load())
+	})
+
+	t.Run(ReasonTimeout, func(t *testing.T) {
+		reset()
+		t.Setenv("FAKE_HELPER_MODE", "sleep")
+		events, err := run(t, Options{BPFtracePath: binPath, Script: "BEGIN {}", Duration: time.Second, GracePeriod: 200 * time.Millisecond, RunID: "sig_timeout"})
+		require.NoError(t, err)
+		require.Equal(t, ReasonTimeout, summaryOf(t, events).ExitReason)
+		require.Positive(t, totalSignals.Load())
+		require.Zero(t, postReapSignals.Load())
+	})
+
+	t.Run(ReasonCancelled, func(t *testing.T) {
+		reset()
+		t.Setenv("FAKE_HELPER_MODE", "sleep")
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			cancel()
+		}()
+		var events []parser.Event
+		err := Run(ctx, Options{BPFtracePath: binPath, Script: "BEGIN {}", Duration: 10 * time.Second, GracePeriod: 200 * time.Millisecond, RunID: "sig_cancel"}, func(ev parser.Event) error {
+			events = append(events, ev)
+			return nil
+		})
+		require.NoError(t, err)
+		require.Equal(t, ReasonCancelled, summaryOf(t, events).ExitReason)
+		require.Positive(t, totalSignals.Load())
+		require.Zero(t, postReapSignals.Load())
+	})
+
+	t.Run(ReasonLimit, func(t *testing.T) {
+		reset()
+		t.Setenv("FAKE_HELPER_MODE", "flood_sleep")
+		events, err := run(t, Options{BPFtracePath: binPath, Script: "BEGIN {}", Duration: 10 * time.Second, GracePeriod: 200 * time.Millisecond, MaxBytesPerRun: 512, RunID: "sig_limit"})
+		require.NoError(t, err)
+		require.Equal(t, ReasonLimit, summaryOf(t, events).ExitReason)
+		require.Positive(t, totalSignals.Load())
+		require.Zero(t, postReapSignals.Load())
+	})
+
+	t.Run("status_emit_error", func(t *testing.T) {
+		reset()
+		t.Setenv("FAKE_HELPER_MODE", "sleep")
+		err := Run(context.Background(), Options{BPFtracePath: binPath, Script: "BEGIN {}", Duration: 10 * time.Second, RunID: "sig_status_err"}, func(parser.Event) error {
+			return errors.New("status sink closed")
+		})
+		require.EqualError(t, err, "status sink closed")
+		require.Equal(t, int32(1), totalSignals.Load())
+		require.Zero(t, postReapSignals.Load())
+	})
+
+	t.Run("data_emit_error", func(t *testing.T) {
+		reset()
+		t.Setenv("FAKE_HELPER_MODE", "printf_then_sleep")
+		sinkErr := errors.New("data sink closed")
+		err := Run(context.Background(), Options{BPFtracePath: binPath, Script: "BEGIN {}", Duration: 10 * time.Second, GracePeriod: 200 * time.Millisecond, RunID: "sig_data_err"}, func(ev parser.Event) error {
+			if ev.Kind == parser.KindPrintf {
+				return sinkErr
+			}
+			return nil
+		})
+		require.ErrorIs(t, err, sinkErr)
+		require.Positive(t, totalSignals.Load())
+		require.Zero(t, postReapSignals.Load())
+	})
+}
+
+func TestStopGroupSkipsSignalWhenReaped(t *testing.T) {
+	origSignal := signalGroup
+	var calls atomic.Int32
+	signalGroup = func(int, os.Signal) error {
+		calls.Add(1)
+		return nil
+	}
+	t.Cleanup(func() { signalGroup = origSignal })
+
+	pg := &procGuard{pid: 99999, reaped: true}
+	waitDone := make(chan error, 1)
+	waitDone <- nil
+	require.NoError(t, stopGroup(pg, 50*time.Millisecond, waitDone))
+	require.NoError(t, pg.signal(killSignal()))
+	require.Zero(t, calls.Load())
+}
+
+func TestDataEmitErrorStopsChildAndPreservesError(t *testing.T) {
+	binPath := buildRunnerTestHelper(t)
+	t.Setenv("FAKE_HELPER_MODE", "printf_then_sleep")
+
+	sinkErr := errors.New("sink closed")
+	var events []parser.Event
+	var mu sync.Mutex
+	start := time.Now()
+	err := Run(context.Background(), Options{
+		BPFtracePath: binPath,
+		Script:       "BEGIN {}",
+		Duration:     10 * time.Second,
+		GracePeriod:  200 * time.Millisecond,
+		RunID:        "run_data_emit_err",
+	}, func(ev parser.Event) error {
+		if ev.Kind == parser.KindPrintf {
+			return sinkErr
+		}
+		mu.Lock()
+		events = append(events, ev)
+		mu.Unlock()
+		return nil
+	})
+	require.Less(t, time.Since(start), 3*time.Second)
+	require.ErrorIs(t, err, sinkErr)
+	require.NotContains(t, err.Error(), "signal: killed")
+	require.Equal(t, ReasonFailed, summaryOf(t, events).ExitReason)
+
+	var sawStderr bool
+	for _, ev := range events {
+		if ev.Kind == parser.KindStderr {
+			if text, ok := ev.Data.(map[string]string)["text"]; ok && strings.Contains(text, "before-sleep stderr") {
+				sawStderr = true
+			}
+		}
+	}
+	require.True(t, sawStderr, "stderr should still be drained")
+}
+
+func TestEarlyStdoutCloseHonorsTimeoutAndCancel(t *testing.T) {
+	binPath := buildRunnerTestHelper(t)
+	t.Setenv("FAKE_HELPER_MODE", "close_stdout_sleep")
+
+	t.Run("timeout", func(t *testing.T) {
+		start := time.Now()
+		events, err := run(t, Options{
+			BPFtracePath: binPath,
+			Script:       "BEGIN {}",
+			Duration:     time.Second,
+			GracePeriod:  200 * time.Millisecond,
+			RunID:        "run_early_stdout_timeout",
+		})
+		require.NoError(t, err)
+		require.Less(t, time.Since(start), 5*time.Second)
+		s := summaryOf(t, events)
+		require.Equal(t, ReasonTimeout, s.ExitReason)
+		require.Equal(t, uint64(1), s.Events)
+
+		var sawStderr bool
+		for _, ev := range events {
+			if ev.Kind == parser.KindStderr {
+				if text, ok := ev.Data.(map[string]string)["text"]; ok && strings.Contains(text, "still-alive stderr") {
+					sawStderr = true
+				}
+			}
+		}
+		require.True(t, sawStderr, "stderr should still be drained")
+	})
+
+	t.Run("cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			cancel()
+		}()
+		start := time.Now()
+		var events []parser.Event
+		err := Run(ctx, Options{
+			BPFtracePath: binPath,
+			Script:       "BEGIN {}",
+			Duration:     10 * time.Second,
+			GracePeriod:  200 * time.Millisecond,
+			RunID:        "run_early_stdout_cancel",
+		}, func(ev parser.Event) error {
+			events = append(events, ev)
+			return nil
+		})
+		require.NoError(t, err)
+		require.Less(t, time.Since(start), 3*time.Second)
+		s := summaryOf(t, events)
+		require.Equal(t, ReasonCancelled, s.ExitReason)
+		require.Equal(t, uint64(1), s.Events)
+
+		var sawStderr bool
+		for _, ev := range events {
+			if ev.Kind == parser.KindStderr {
+				if text, ok := ev.Data.(map[string]string)["text"]; ok && strings.Contains(text, "still-alive stderr") {
+					sawStderr = true
+				}
+			}
+		}
+		require.True(t, sawStderr, "stderr should still be drained")
+	})
 }

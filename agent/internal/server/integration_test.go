@@ -300,7 +300,7 @@ func TestIntegrationAgentRestartSweep(t *testing.T) {
 	// Next agent boot calls this once before serving (see realServe).
 	sweepCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	killed, err := runner.SweepStale(sweepCtx)
+	killed, err := runner.SweepStale(sweepCtx, "bpftrace")
 	require.NoError(t, err)
 	require.Positive(t, killed, "sweep must reap the orphan")
 	_ = cmd.Wait() // reap so the zombie leaves pgrep too

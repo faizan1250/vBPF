@@ -145,7 +145,7 @@ func realServe(args []string, _, stderr io.Writer) int {
 	}
 	log := zerolog.New(os.Stderr).With().Timestamp().Logger()
 	sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	swept, err := runner.SweepStale(sweepCtx)
+	swept, err := runner.SweepStale(sweepCtx, bin)
 	sweepCancel()
 	if err != nil {
 		log.Warn().Err(err).Msg("stale sweep failed")
