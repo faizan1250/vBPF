@@ -576,7 +576,21 @@ async function requestChat(
         errorBody = (
           await readCappedText(res, opts.maxBodyBytes, ctrl.signal)
         ).slice(0, 2000);
-      } catch {
+      } catch (err) {
+        if (isAbortError(err)) {
+          return {
+            ok: false,
+            failure: {
+              ok: false,
+              kind: "timeout",
+              message: `${providerName}/${model}: timed out after ${opts.timeoutMs}ms`,
+              cooldownMs: LIVE_DEFAULT_COOLDOWN_MS,
+            },
+            status: res.status,
+            outcome: "timeout",
+            ...(err instanceof Error ? { errorName: err.name } : {}),
+          };
+        }
         errorBody = undefined;
       }
       return {
