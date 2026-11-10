@@ -40,6 +40,99 @@ function expandCount(pattern: string, known: Set<string>): number {
   return n;
 }
 
+// Strip // and /* */ comments and \\\r?\n line continuations outside
+// double-quoted strings so regex checks match Go's StaticValidate identically.
+function stripCommentsAndContinuations(script: string): {
+  cleaned: string;
+  unclosedComment: boolean;
+} {
+  const out: string[] = [];
+  let inString = false;
+  let unclosedComment = false;
+  const n = script.length;
+
+  for (let i = 0; i < n;) {
+    const ch = script.charAt(i);
+    if (inString) {
+      if (ch === "\\") {
+        out.push(ch);
+        i += 1;
+        if (i < n && script.charAt(i) !== "\n") {
+          out.push(script.charAt(i));
+          i += 1;
+        }
+        continue;
+      }
+      out.push(ch);
+      if (ch === '"' || ch === "\n") {
+        inString = false;
+      }
+      i += 1;
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      out.push(ch);
+      i += 1;
+      continue;
+    }
+    if (ch === "\\") {
+      if (i + 1 < n && script.charAt(i + 1) === "\n") {
+        i += 2;
+        continue;
+      }
+      if (
+        i + 2 < n &&
+        script.charAt(i + 1) === "\r" &&
+        script.charAt(i + 2) === "\n"
+      ) {
+        i += 3;
+        continue;
+      }
+      out.push(ch);
+      i += 1;
+      continue;
+    }
+    if (ch === "/" && i + 1 < n && script.charAt(i + 1) === "/") {
+      i += 2;
+      while (i < n && script.charAt(i) !== "\n") {
+        i += 1;
+      }
+      out.push(" ");
+      continue;
+    }
+    if (ch === "/" && i + 1 < n && script.charAt(i + 1) === "*") {
+      i += 2;
+      out.push(" ");
+      let closed = false;
+      while (i < n) {
+        if (
+          script.charAt(i) === "*" &&
+          i + 1 < n &&
+          script.charAt(i + 1) === "/"
+        ) {
+          i += 2;
+          closed = true;
+          break;
+        }
+        if (script.charAt(i) === "\n") {
+          out.push("\n");
+        }
+        i += 1;
+      }
+      if (!closed) {
+        unclosedComment = true;
+      }
+      continue;
+    }
+    out.push(ch);
+    i += 1;
+  }
+
+  return { cleaned: out.join(""), unclosedComment };
+}
+
 export function staticValidate(
   script: string,
   knownProbes: string[] = [],
@@ -52,13 +145,17 @@ export function staticValidate(
     return { probes: [], errors: ["script exceeds 8 KB"], warnings };
   }
   if (script.includes("--unsafe")) errors.push("--unsafe is forbidden");
-  if (BLOCKED_CALLS.test(script)) {
+  const { cleaned, unclosedComment } = stripCommentsAndContinuations(script);
+  if (unclosedComment) {
+    errors.push("blocked syntax: unclosed block comment");
+  }
+  if (BLOCKED_CALLS.test(cleaned)) {
     errors.push("blocked call: system/signal/override/cat are forbidden");
   }
-  if (INCLUDE_RE.test(script)) {
+  if (INCLUDE_RE.test(cleaned)) {
     errors.push("blocked syntax: #include/#define are forbidden");
   }
-  const probes = script.match(PROBE_RE) ?? [];
+  const probes = cleaned.match(PROBE_RE) ?? [];
   if (probes.length === 0) errors.push("no probes found");
   const known = new Set(knownProbes);
   for (const pr of probes) {
@@ -109,7 +206,7 @@ export function staticValidate(
       if (!known.has(pr)) errors.push(`probe not found: ${pr}`);
     }
   }
-  if (/\bprintf\s*\(/.test(script)) {
+  if (/\bprintf\s*\(/.test(cleaned)) {
     const hot = probes.some(
       (p) => HIGH_FREQ.has(p) || p.startsWith("profile:"),
     );
