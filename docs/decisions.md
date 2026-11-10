@@ -1,5 +1,30 @@
 # Decisions
 
+## R2-03 Slice 6: deadline spans headers and body (2026-11-10)
+
+- **One timer across fetch + body in `requestChat()`.** The
+  `AbortController` and `setTimeout` are created before `fetch` and the
+  timer is cleared in the outer `finally`, so a stall after headers
+  (slow-drip body) still trips the per-request timeout. The signal is
+  passed into `readCappedText()`, whose stream reader registers an abort
+  listener that calls `reader.cancel()`; a guarded check after each
+  `read()` turns the cancelled read into an `AbortError` instead of a
+  truncated body. Over-cap bodies still throw the byte-cap error (and now
+  cancel the stream) rather than reporting a timeout.
+- **Timeout is a cooling provider failure (D-23).** Fetch-abort and
+  body-abort return a new `kind: "timeout"` failure (message `timed out
+  after <ms>`, `cooldownMs: LIVE_DEFAULT_COOLDOWN_MS`) with log outcome
+  `timeout`. Like `rate`, it cools the provider and counts toward the
+  all-cooling `LlmUnavailableError`; unlike model 4xx, it aborts the
+  model loop and continues with the next provider. Explain paths mirror
+  generation. Single-timeout error type changes from `LlmRequestError`
+  to `LlmUnavailableError` when it is the only provider; no existing
+  test pinned the old type.
+- **Verified:** `tsc --noEmit` clean, eslint/prettier clean,
+  `live-llm.test.ts` 47/47 (3 new: headers-stall timeout + cooldown +
+  slot reuse under `maxConcurrency: 1`, slow-drip abort with stream
+  cancel, over-cap early abort), full api suite 155/155.
+
 ## R2-04 Slice 5: JSON modes and one-time downgrade (2026-11-10)
 
 - **`LLM_<NAME>_JSON_MODE` (`json_object` default | `tool` | `none`).**
