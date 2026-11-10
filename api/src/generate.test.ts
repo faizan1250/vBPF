@@ -759,3 +759,213 @@ describe("validator limits", () => {
     }
   });
 });
+
+describe("validator comment and continuation stripping", () => {
+  it("rejects comment-split and continuation-split bypasses", () => {
+    const cases: Array<[string, string, RegExp]> = [
+      [
+        "cat block comment",
+        'BEGIN { cat/*x*/("/etc/shadow"); }',
+        /blocked call/,
+      ],
+      [
+        "cat line comment",
+        'BEGIN { cat//c\n("/etc/shadow"); }',
+        /blocked call/,
+      ],
+      [
+        "cat multi comment",
+        'BEGIN { cat /*a*/ /*b\nc*/ ("/etc/shadow"); }',
+        /blocked call/,
+      ],
+      ["system block comment", 'BEGIN { system/*x*/("id"); }', /blocked call/],
+      ["signal block comment", "BEGIN { signal/*x*/(9); }", /blocked call/],
+      ["override block comment", "BEGIN { override/*x*/(0); }", /blocked call/],
+      [
+        "comment before include",
+        "/*x*/#include <stdio.h>\nBEGIN {}",
+        /blocked syntax: #include\/#define/,
+      ],
+      [
+        "comment inside define",
+        "#/*x*/define FOO cat\nBEGIN {}",
+        /blocked syntax: #include\/#define/,
+      ],
+      [
+        "line continuation include",
+        "#\\\ninclude <x>\nBEGIN {}",
+        /blocked syntax: #include\/#define/,
+      ],
+      [
+        "line continuation inside cat",
+        'BEGIN { ca\\\nt("/etc/shadow"); }',
+        /blocked call/,
+      ],
+      [
+        "line continuation crlf cat",
+        'BEGIN { ca\\\r\nt("/etc/shadow"); }',
+        /blocked call/,
+      ],
+      [
+        "line continuation before paren",
+        'BEGIN { cat\\\n("/etc/shadow"); }',
+        /blocked call/,
+      ],
+      [
+        "multiline comment before define",
+        "struct s{}; /*\n*/#define X 1\nBEGIN {}",
+        /blocked syntax: #include\/#define/,
+      ],
+      [
+        "crlf line comment cat",
+        'BEGIN { cat//\r\n("/etc/shadow"); }',
+        /blocked call/,
+      ],
+      ["unclosed block comment", "BEGIN { /*", /unclosed block comment/],
+      ["unclosed slash-star-slash", "BEGIN { /*/", /unclosed block comment/],
+      ["line comment only", "// only comment", /no probes found/],
+      ["block comment only", "/* only comment */", /no probes found/],
+      [
+        "non-nested block comment",
+        '/* outer /* inner */ cat("/etc/shadow"); BEGIN {}',
+        /blocked call/,
+      ],
+      [
+        "comment backslash does not join line",
+        '// comment\\\nBEGIN { cat("/etc/shadow"); }',
+        /blocked call/,
+      ],
+      [
+        "quote in line comment ignored",
+        '// "\nBEGIN { cat/*x*/("/etc/shadow"); }',
+        /blocked call/,
+      ],
+      [
+        "quote in block comment ignored",
+        '/* " */ BEGIN { cat/*x*/("/etc/shadow"); }',
+        /blocked call/,
+      ],
+      [
+        "escaped backslash closes string",
+        'BEGIN { printf("a\\\\"); cat/*x*/("/etc/shadow"); }',
+        /blocked call/,
+      ],
+      [
+        "comment delimiter strings sandwich",
+        'BEGIN { printf("/*"); cat("/etc/shadow"); printf("*/"); }',
+        /blocked call/,
+      ],
+      [
+        "unterminated string resets at newline",
+        'BEGIN { printf("unterminated\ncat/*x*/("/etc/shadow"); }',
+        /blocked call/,
+      ],
+      [
+        "unterminated string backslash newline",
+        'BEGIN { printf("unterminated\\\ncat/*x*/("/etc/shadow"); }',
+        /blocked call/,
+      ],
+      [
+        "unterminated string backslash crlf",
+        'BEGIN { printf("unterminated\\\r\ncat/*x*/("/etc/shadow"); }',
+        /blocked call/,
+      ],
+    ];
+    for (const [name, script, pattern] of cases) {
+      const { errors } = staticValidate(script);
+      expect(errors.join("; "), name).toMatch(pattern);
+    }
+  });
+
+  it("ignores commented fake probes", () => {
+    const res = staticValidate('// BEGIN {}\ncat/*x*/("/etc/shadow")');
+    expect(res.probes).toEqual([]);
+    expect(res.errors.join("; ")).toMatch(/blocked call/);
+    expect(res.errors.join("; ")).toMatch(/no probes found/);
+  });
+
+  it("preserves strings, predicates, division, and strips comments from probes", () => {
+    const known = [
+      "tracepoint:block:block_rq_issue",
+      "tracepoint:block:block_rq_complete",
+    ];
+
+    for (const script of [
+      'BEGIN { printf("http://x /*y*/"); }',
+      "// open /* inside line comment\nBEGIN { @x = count(); }",
+      "/* // inside block comment */ BEGIN { @x = count(); }",
+      "/**/BEGIN { @x = count(); }",
+    ]) {
+      const res = staticValidate(script, known);
+      expect(res.errors, script).toEqual([]);
+      expect(res.probes, script).toEqual(["BEGIN"]);
+    }
+
+    const commented = staticValidate(
+      "// comment mentioning BEGIN tracepoint:foo:bar\ntracepoint:block:block_rq_issue { @x = count(); }",
+      known,
+    );
+    expect(commented.errors).toEqual([]);
+    expect(commented.probes).toEqual(["tracepoint:block:block_rq_issue"]);
+
+    const slashRes = staticValidate(
+      "tracepoint:block:block_rq_complete /@start[args->dev]/ { @lat = hist((nsecs - @start[args->dev]) / 1000); }",
+      known,
+    );
+    expect(slashRes.errors).toEqual([]);
+    expect(slashRes.probes).toEqual(["tracepoint:block:block_rq_complete"]);
+  });
+
+  it("checks printf warning against cleaned script", () => {
+    const commentedOut = staticValidate(
+      'tracepoint:raw_syscalls:sys_enter { // printf("%d\\n", pid);\n @x = count(); }',
+    );
+    expect(commentedOut.errors).toEqual([]);
+    expect(commentedOut.warnings).toEqual([]);
+
+    const commentSplit = staticValidate(
+      'tracepoint:raw_syscalls:sys_enter { printf/*x*/("%d\\n", pid); }',
+    );
+    expect(commentSplit.errors).toEqual([]);
+    expect(commentSplit.warnings.join(" ")).toContain("High-frequency");
+  });
+
+  it("stores raw script with comments intact on runGenerate", async () => {
+    const db = makeDb();
+    const rawScript =
+      "// header comment\ntracepoint:syscalls:sys_enter_openat { @x = count(); }\n";
+    let agentSeen = "";
+    const stub = {
+      model: "mock",
+      generate: async () =>
+        LlmOutputSchema.parse({
+          script: rawScript,
+          chart_type: "events",
+          explanation: "ok",
+          duration_s: 10,
+          refusal: null,
+        }),
+    };
+    const result = await runGenerate("who is opening files", {
+      deps: {
+        db,
+        recipesDir: RECIPES_DIR,
+        agentUrl: fake.url,
+        tokenFile,
+        llm: stub,
+        searchProbesFn: async () => ["tracepoint:syscalls:sys_enter_openat"],
+        validateAgentFn: async (_u, _t, script) => {
+          agentSeen = script;
+          return { ok: true, errors: [], probes: [] };
+        },
+      },
+    });
+    expect(agentSeen).toBe(rawScript);
+    expect(result.script).toBe(rawScript);
+    const row = db
+      .prepare("SELECT script FROM generations WHERE id = ?")
+      .get(result.generation_id) as { script: string };
+    expect(row.script).toBe(rawScript);
+    db.close();
+  });
+});

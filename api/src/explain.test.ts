@@ -140,6 +140,9 @@ describe("POST /api/explain validation", () => {
       for (const script of [
         'BEGIN { system("ls"); }',
         "BEGIN { @x = count(); } --unsafe",
+        'cat/*x*/("/etc/shadow")',
+        'BEGIN { cat/*x*/("/etc/shadow"); }',
+        "BEGIN { /*",
       ]) {
         const res = await fetch(`${url}/api/explain`, {
           method: "POST",
@@ -241,6 +244,49 @@ describe("POST /api/explain live mode", () => {
         cached: true,
       });
       expect(seen).toHaveLength(1);
+    } finally {
+      await live.close();
+    }
+  });
+
+  it("preserves raw script comments for live LLM and SHA-256 cache", async () => {
+    const seen: SeenCall[] = [];
+    const live = await buildApp({
+      agentUrl: "http://127.0.0.1:1",
+      tokenFile,
+      dbPath: ":memory:",
+      recipesDir: RECIPES_DIR,
+      webOrigin: "http://localhost:5173",
+      llmMode: "live",
+      llmChain: "groq",
+      llmEnv: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "stub-key",
+        LLM_GROQ_MODEL: "stub-model",
+      },
+      llmFetch: stubFetch(() => chatOk(), seen),
+    });
+    const addr = await live.listen({ host: "127.0.0.1", port: 0 });
+    const url = addr.replace("[::1]", "127.0.0.1");
+    try {
+      const commented = "// header comment\nBEGIN { @x = count(); }\n";
+      const uncommented = "BEGIN { @x = count(); }\n";
+      const post = (script: string): Promise<Response> =>
+        fetch(`${url}/api/explain`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ script }),
+        });
+
+      const first = await post(commented);
+      expect(first.status).toBe(200);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]?.user).toBe(commented);
+
+      const second = await post(uncommented);
+      expect(second.status).toBe(200);
+      expect(seen).toHaveLength(2);
+      expect(seen[1]?.user).toBe(uncommented);
     } finally {
       await live.close();
     }
