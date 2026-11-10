@@ -18,6 +18,7 @@ import {
   discoverKeys,
   discoverModel,
   parseChain,
+  resetDeprecatedGenericModelWarnForTests,
   validateBaseUrl,
 } from "./live-llm.js";
 import { LlmOutputSchema } from "./llm.js";
@@ -108,15 +109,72 @@ describe("chain and model discovery", () => {
     ).toEqual(["groq", "cerebras"]);
   });
 
-  it("prefers provider model over generic", () => {
+  it("uses only the provider-specific model", () => {
     expect(
       discoverModel("groq", {
         LLM_GROQ_MODEL: "specific",
         LLM_MODEL: "generic",
       }),
     ).toBe("specific");
-    expect(discoverModel("groq", { LLM_MODEL: "generic" })).toBe("generic");
+    expect(discoverModel("groq", { LLM_MODEL: "generic" })).toBeNull();
     expect(discoverModel("groq", {})).toBeNull();
+  });
+
+  it("leaves a provider without its own model unconfigured", () => {
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_MODEL: "generic",
+      },
+      fetchFn: stubFetch(() => chatOk(), []),
+    });
+    expect(chain.configured).toBe(false);
+    expect(chain.health().providers).toEqual([
+      { name: "groq", state: "unconfigured", keys: 1 },
+    ]);
+  });
+
+  it("never sends a leaked generic model and warns once", async () => {
+    const prevModel = process.env["LLM_MODEL"];
+    const prevMode = process.env["LLM_MODE"];
+    process.env["LLM_MODEL"] = "generic-leak";
+    process.env["LLM_MODE"] = "live";
+    resetDeprecatedGenericModelWarnForTests();
+    const warns: string[] = [];
+    const seen: Seen[] = [];
+    try {
+      const first = new LiveLlmChain({
+        env: {
+          LLM_PROVIDER_CHAIN: "groq",
+          GROQ_API_KEY: "k",
+          LLM_GROQ_MODEL: "m1",
+        },
+        fetchFn: stubFetch(() => chatOk(), seen),
+        logger: { warn: (msg) => warns.push(msg) },
+      });
+      await first.generate("cpu?");
+      const second = new LiveLlmChain({
+        env: {
+          LLM_PROVIDER_CHAIN: "groq",
+          GROQ_API_KEY: "k",
+          LLM_GROQ_MODEL: "m1",
+        },
+        fetchFn: stubFetch(() => chatOk(), []),
+        logger: { warn: (msg) => warns.push(msg) },
+      });
+      await second.generate("cpu?");
+      expect(warns).toEqual([
+        "LLM_MODEL is deprecated and ignored; use LLM_<NAME>_MODEL",
+      ]);
+      expect(seen.map((s) => s.model)).toEqual(["m1"]);
+    } finally {
+      if (prevModel === undefined) delete process.env["LLM_MODEL"];
+      else process.env["LLM_MODEL"] = prevModel;
+      if (prevMode === undefined) delete process.env["LLM_MODE"];
+      else process.env["LLM_MODE"] = prevMode;
+      resetDeprecatedGenericModelWarnForTests();
+    }
   });
 
   it("splits fallback models", () => {

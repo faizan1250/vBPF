@@ -1,5 +1,28 @@
 # Decisions
 
+## R2-04 Slice 3: remove generic model fallback (2026-11-10)
+
+- **`discoverModel()` reads only `LLM_<NAME>_MODEL`.** The generic
+  `LLM_MODEL` fallback is deleted, so a key without its own model leaves
+  `models` empty and the existing `isConfigured` check marks the provider
+  `unconfigured` (no network, `503 LLM_UNAVAILABLE` when nothing is
+  configured). Header and doc comments updated to match.
+- **Deprecation path.** `LLM_MODEL` stays in `config.ts` for parse
+  compatibility but defaults to `"mock"` (mock-mode label only); removed
+  from `.env.example`. `LiveLlmChain` calls
+  `warnDeprecatedGenericModel()` at construction, which reads
+  `process.env` directly and warns once per process with exactly
+  "LLM_MODEL is deprecated and ignored; use LLM_<NAME>_MODEL" when set
+  with `LLM_MODE=live`. `resetDeprecatedGenericModelWarnForTests()` is a
+  test-only reset for the once flag.
+- **Tests.** `live-llm.test.ts` model case now asserts generic is ignored
+  (`null`); new cases cover unconfigured-without-model and the
+  warn-once/leak-never-sent path; `config.test.ts` asserts the `mock`
+  default. Remaining `claude-sonnet-5-5` hits (`README.md` config row,
+  `generate.test.ts` live fixture label) stay for the R2-05 docs slice.
+- **Verified:** `tsc --noEmit` clean, eslint/prettier clean, api vitest
+  green.
+
 ## R2-04 Slice 2: base-URL validation (2026-11-10)
 
 - **Exported `validateBaseUrl()` in `api/src/live-llm.ts`.** `https:`, or

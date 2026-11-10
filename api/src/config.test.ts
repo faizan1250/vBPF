@@ -12,4 +12,8 @@ describe("loadConfig provider chain", () => {
       loadConfig({ LLM_PROVIDER_CHAIN: "cerebras,groq" }).LLM_PROVIDER_CHAIN,
     ).toBe("cerebras,groq");
   });
+
+  it("defaults the deprecated LLM_MODEL to mock", () => {
+    expect(loadConfig({}).LLM_MODEL).toBe("mock");
+  });
 });
