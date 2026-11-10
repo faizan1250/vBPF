@@ -26,30 +26,34 @@ type Config struct {
 	// websocket.Accept as OriginPatterns. Empty (the default) denies every
 	// browser origin; requests without an Origin header (server-to-server,
 	// like the API dial) and same-host origins are always allowed.
-	AllowedOrigins []string
-	CatalogFn      func(ctx context.Context) ([]string, error)
-	RunFn          RunnerFunc
-	DryRun         DryRunFunc
-	ProbeArgs      ProbeArgsFunc
-	Health         *HealthProvider
-	Logger         zerolog.Logger
-	StartTime      time.Time
+	AllowedOrigins   []string
+	CatalogFn        func(ctx context.Context) ([]string, error)
+	CatalogRetryBase time.Duration
+	CatalogRetryMax  time.Duration
+	RunFn            RunnerFunc
+	DryRun           DryRunFunc
+	ProbeArgs        ProbeArgsFunc
+	Health           *HealthProvider
+	Logger           zerolog.Logger
+	StartTime        time.Time
 }
 
 // Server is the agent HTTP and WebSocket front end.
 type Server struct {
-	addr           string
-	token          string
-	allowedOrigins []string
-	mux            *http.ServeMux
-	runs           *Registry
-	catalog        *Catalog
-	health         *HealthProvider
-	dryRun         DryRunFunc
-	probeArgs      ProbeArgsFunc
-	logger         zerolog.Logger
-	startTime      time.Time
-	bpftracePath   string
+	addr             string
+	token            string
+	allowedOrigins   []string
+	mux              *http.ServeMux
+	runs             *Registry
+	catalog          *Catalog
+	catalogRetryBase time.Duration
+	catalogRetryMax  time.Duration
+	health           *HealthProvider
+	dryRun           DryRunFunc
+	probeArgs        ProbeArgsFunc
+	logger           zerolog.Logger
+	startTime        time.Time
+	bpftracePath     string
 }
 
 // New loads or creates the bearer token and registers authenticated routes.
@@ -81,19 +85,27 @@ func New(cfg Config) (*Server, error) {
 	if probeArgs == nil {
 		probeArgs = DefaultProbeArgs(cfg.BPFtracePath)
 	}
+	if cfg.CatalogRetryBase <= 0 {
+		cfg.CatalogRetryBase = time.Second
+	}
+	if cfg.CatalogRetryMax <= 0 {
+		cfg.CatalogRetryMax = 30 * time.Second
+	}
 	s := &Server{
-		addr:           cfg.Addr,
-		token:          tok,
-		allowedOrigins: cfg.AllowedOrigins,
-		mux:            http.NewServeMux(),
-		runs:           NewRegistry(cfg.RunFn, cfg.BPFtracePath, cfg.Logger),
-		catalog:        catalog,
-		health:         health,
-		dryRun:         dryRun,
-		probeArgs:      probeArgs,
-		logger:         cfg.Logger,
-		startTime:      cfg.StartTime,
-		bpftracePath:   cfg.BPFtracePath,
+		addr:             cfg.Addr,
+		token:            tok,
+		allowedOrigins:   cfg.AllowedOrigins,
+		mux:              http.NewServeMux(),
+		runs:             NewRegistry(cfg.RunFn, cfg.BPFtracePath, cfg.Logger),
+		catalog:          catalog,
+		catalogRetryBase: cfg.CatalogRetryBase,
+		catalogRetryMax:  cfg.CatalogRetryMax,
+		health:           health,
+		dryRun:           dryRun,
+		probeArgs:        probeArgs,
+		logger:           cfg.Logger,
+		startTime:        cfg.StartTime,
+		bpftracePath:     cfg.BPFtracePath,
 	}
 	s.routes()
 	return s, nil
@@ -152,8 +164,8 @@ func bindAllowed(host string) bool {
 	return false
 }
 
-// ListenAndServe binds loopback (or the wildcard with the opt-in flag) and
-// serves until ctx ends.
+// ListenAndServe binds loopback (or the wildcard with the opt-in flag) immediately
+// and loads the probe catalog asynchronously with exponential backoff.
 func (s *Server) ListenAndServe(ctx context.Context) error {
 	host, _, err := net.SplitHostPort(s.addr)
 	if err != nil {
@@ -165,7 +177,11 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		}
 		return fmt.Errorf("server: refuses non-loopback bind %q", host)
 	}
-	_ = s.catalog.Refresh(ctx)
+	ln, err := net.Listen("tcp", s.addr)
+	if err != nil {
+		return err
+	}
+	loaderDone := s.startCatalogLoader(ctx)
 	srv := &http.Server{Addr: s.addr, Handler: s.mux}
 	go func() {
 		<-ctx.Done()
@@ -173,11 +189,57 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		defer cancel()
 		_ = srv.Shutdown(cctx)
 	}()
-	s.logger.Info().Str("addr", s.addr).Msg("agent listening")
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
+	s.logger.Info().Str("addr", ln.Addr().String()).Msg("agent listening")
+	serveErr := srv.Serve(ln)
+	<-loaderDone
+	if serveErr != nil && serveErr != http.ErrServerClosed {
+		return serveErr
 	}
 	return nil
+}
+
+const (
+	catalogRetryAfterSeconds = "2"
+	catalogWarnMinInterval   = 30 * time.Second
+)
+
+func (s *Server) startCatalogLoader(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		delay := s.catalogRetryBase
+		var lastWarn time.Time
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			if err := s.catalog.Refresh(ctx); err == nil {
+				status := s.catalog.Status()
+				ev := s.logger.Info().Int("probes", status.Probes)
+				if len(status.Warnings) > 0 {
+					ev = ev.Strs("warnings", status.Warnings)
+				}
+				ev.Msg("probe catalog ready")
+				return
+			} else if ctx.Err() == nil && (lastWarn.IsZero() || time.Since(lastWarn) >= catalogWarnMinInterval) {
+				lastWarn = time.Now()
+				s.logger.Warn().Str("error", sanitizeCatalogError(err)).Dur("retry_in", delay).Msg("probe catalog refresh failed")
+			}
+
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			delay *= 2
+			if delay > s.catalogRetryMax {
+				delay = s.catalogRetryMax
+			}
+		}
+	}()
+	return done
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -190,8 +252,16 @@ func writeError(w http.ResponseWriter, code int, errCode, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg, "code": errCode})
 }
 
+func writeCatalogUnavailable(w http.ResponseWriter) {
+	w.Header().Set("Retry-After", catalogRetryAfterSeconds)
+	writeError(w, http.StatusServiceUnavailable, "CATALOG_UNAVAILABLE", "probe catalog not ready")
+}
+
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.health.Snapshot(r.Context()))
+	snap := s.health.Snapshot(r.Context())
+	snap.Ready = s.catalog.Ready()
+	snap.Catalog = s.catalog.Status()
+	writeJSON(w, http.StatusOK, snap)
 }
 
 func (s *Server) handleProbes(w http.ResponseWriter, r *http.Request) {
@@ -250,23 +320,49 @@ func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "invalid JSON")
 		return
 	}
-	probes, errs := StaticValidate(req.Script, s.catalog)
-	if len(errs) > 0 {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "errors": errs, "probes": probesOrEmpty(probes)})
+	if !s.catalog.Ready() {
+		writeCatalogUnavailable(w)
+		return
+	}
+	res := StaticValidate(req.Script, s.catalog)
+	if res.Code == "CATALOG_UNAVAILABLE" {
+		writeCatalogUnavailable(w)
+		return
+	}
+	if len(res.Errors) > 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":          false,
+			"errors":      res.Errors,
+			"probes":      slicesOrEmpty(res.Probes),
+			"warnings":    slicesOrEmpty(res.Warnings),
+			"probe_count": res.ProbeCount,
+		})
 		return
 	}
 	if dryErrs := s.dryRun(r.Context(), req.Script); len(dryErrs) > 0 {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "errors": dryErrs, "probes": probesOrEmpty(probes)})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":          false,
+			"errors":      dryErrs,
+			"probes":      slicesOrEmpty(res.Probes),
+			"warnings":    slicesOrEmpty(res.Warnings),
+			"probe_count": res.ProbeCount,
+		})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "errors": []string{}, "probes": probesOrEmpty(probes)})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":          true,
+		"errors":      []string{},
+		"probes":      slicesOrEmpty(res.Probes),
+		"warnings":    slicesOrEmpty(res.Warnings),
+		"probe_count": res.ProbeCount,
+	})
 }
 
-func probesOrEmpty(p []string) []string {
-	if p == nil {
+func slicesOrEmpty(s []string) []string {
+	if s == nil {
 		return []string{}
 	}
-	return p
+	return s
 }
 
 type createRunRequest struct {
@@ -281,12 +377,21 @@ func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "invalid JSON")
 		return
 	}
+	if !s.catalog.Ready() {
+		writeCatalogUnavailable(w)
+		return
+	}
 	duration := limits.DefaultDuration
 	if req.DurationS != nil {
 		duration = time.Duration(*req.DurationS) * time.Second
 	}
-	if _, errs := StaticValidate(req.Script, s.catalog); len(errs) > 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": strings.Join(errs, "; "), "code": classifyValidationError(errs), "errors": errs})
+	res := StaticValidate(req.Script, s.catalog)
+	if res.Code == "CATALOG_UNAVAILABLE" {
+		writeCatalogUnavailable(w)
+		return
+	}
+	if len(res.Errors) > 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": strings.Join(res.Errors, "; "), "code": classifyValidationError(res.Errors), "errors": res.Errors})
 		return
 	}
 	if dryErrs := s.dryRun(r.Context(), req.Script); len(dryErrs) > 0 {

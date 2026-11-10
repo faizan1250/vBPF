@@ -38,6 +38,15 @@ var allowedProviders = map[string]bool{
 // DryRunFunc compiles a script without attaching probes.
 type DryRunFunc func(ctx context.Context, script string) []string
 
+// ValidateResult holds the static validation outcome and resolved counts.
+type ValidateResult struct {
+	Code       string
+	Probes     []string
+	Errors     []string
+	Warnings   []string
+	ProbeCount int
+}
+
 var staticValidationFailedPrefixes = []string{
 	"empty script",
 	"script exceeds ",
@@ -50,6 +59,9 @@ var staticValidationFailedPrefixes = []string{
 }
 
 func classifySingleError(err string) string {
+	if strings.HasPrefix(err, "catalog unavailable:") {
+		return "CATALOG_UNAVAILABLE"
+	}
 	if strings.HasPrefix(err, "probe not found:") {
 		return "PROBE_NOT_FOUND"
 	}
@@ -508,14 +520,34 @@ func extractProbes(cleaned string) (probes, errs []string) {
 	return probes, errs
 }
 
-// StaticValidate applies blocklist, allowlist, and size rules (no exec).
-func StaticValidate(script string, catalog *Catalog) (probes []string, errors []string) {
+// StaticValidate fails closed until the catalog is ready, then applies blocklist,
+// allowlist, and size rules (no exec).
+func StaticValidate(script string, catalog *Catalog) ValidateResult {
+	if catalog == nil || !catalog.Ready() {
+		return ValidateResult{
+			Code:     "CATALOG_UNAVAILABLE",
+			Probes:   []string{},
+			Errors:   []string{"catalog unavailable: probe catalog not ready"},
+			Warnings: []string{},
+		}
+	}
 	if strings.TrimSpace(script) == "" {
-		return nil, []string{"empty script"}
+		return ValidateResult{
+			Code:     "VALIDATION_FAILED",
+			Probes:   []string{},
+			Errors:   []string{"empty script"},
+			Warnings: []string{},
+		}
 	}
 	if len(script) > MaxScriptBytes {
-		return nil, []string{"script exceeds 8 KB"}
+		return ValidateResult{
+			Code:     "VALIDATION_FAILED",
+			Probes:   []string{},
+			Errors:   []string{"script exceeds 8 KB"},
+			Warnings: []string{},
+		}
 	}
+	var errors []string
 	cleaned, unclosedComment := stripCommentsAndContinuations(script)
 	if unclosedComment {
 		errors = append(errors, "blocked syntax: unclosed block comment")
@@ -526,18 +558,16 @@ func StaticValidate(script string, catalog *Catalog) (probes []string, errors []
 	if includeRe.MatchString(cleaned) {
 		errors = append(errors, "blocked syntax: #include/#define are forbidden")
 	}
-	var parseErrs []string
-	probes, parseErrs = extractProbes(cleaned)
+	probes, parseErrs := extractProbes(cleaned)
 	errors = append(errors, parseErrs...)
 	if len(probes) == 0 && len(parseErrs) == 0 {
 		errors = append(errors, "no probes found")
 	}
 	known := map[string]bool{}
-	if catalog != nil {
-		for _, p := range catalog.Snapshot() {
-			known[p] = true
-		}
+	for _, p := range catalog.Snapshot() {
+		known[p] = true
 	}
+	probeCount := 0
 	for _, pr := range probes {
 		colon := strings.IndexByte(pr, ':')
 		provider := pr
@@ -557,29 +587,55 @@ func StaticValidate(script string, catalog *Catalog) (probes []string, errors []
 			if !strings.Contains(rest, "libc") && !strings.HasPrefix(rest, "/") {
 				errors = append(errors, "uprobe must target libc or an absolute path: "+pr)
 			}
+			probeCount++
+			continue
 		}
 		if strings.Contains(pr, "*") {
 			if pr == "*" || strings.HasSuffix(pr, ":*") || pr == "tracepoint:*:*" || pr == "kprobe:*" {
 				errors = append(errors, "wildcard too broad: "+pr)
 				continue
 			}
-			if len(known) > 0 {
-				n := expandCount(pr, known)
-				if n > limits.MaxProbes {
-					errors = append(errors, "wildcard expands to too many probes: "+pr)
-				} else if n == 0 {
-					errors = append(errors, "probe not found: "+pr)
-				}
+			n := expandCount(pr, known)
+			if n > limits.MaxProbes {
+				errors = append(errors, "wildcard expands to too many probes: "+pr)
+			} else if n == 0 {
+				errors = append(errors, "probe not found: "+pr)
 			}
+			probeCount += n
 			continue
 		}
-		if len(known) > 0 && (provider != "profile" && provider != "interval" && provider != "software" && provider != "BEGIN" && provider != "END") {
+		probeCount++
+		if provider != "profile" && provider != "interval" && provider != "software" && provider != "BEGIN" && provider != "END" {
 			if !known[pr] {
 				errors = append(errors, "probe not found: "+pr)
 			}
 		}
 	}
-	return probes, errors
+	code := ""
+	if len(errors) > 0 {
+		code = classifyValidationError(errors)
+	}
+	return ValidateResult{
+		Code:       code,
+		Probes:     probesOrEmpty(probes),
+		Errors:     errorsOrEmpty(errors),
+		Warnings:   []string{},
+		ProbeCount: probeCount,
+	}
+}
+
+func probesOrEmpty(p []string) []string {
+	if p == nil {
+		return []string{}
+	}
+	return p
+}
+
+func errorsOrEmpty(e []string) []string {
+	if e == nil {
+		return []string{}
+	}
+	return e
 }
 
 func expandCount(pattern string, known map[string]bool) int {

@@ -33,6 +33,36 @@ func testServer(t *testing.T, cfg Config) *Server {
 	if cfg.DryRun == nil {
 		cfg.DryRun = func(ctx context.Context, script string) []string { return nil }
 	}
+	defaultCatalog := cfg.CatalogFn == nil
+	if defaultCatalog {
+		cfg.CatalogFn = func(ctx context.Context) ([]string, error) {
+			return []string{
+				"BEGIN",
+				"END",
+				"tracepoint:block:block_rq_issue",
+				"tracepoint:syscalls:sys_enter_openat",
+				"tracepoint:raw_syscalls:sys_enter",
+			}, nil
+		}
+	}
+	s, err := New(cfg)
+	require.NoError(t, err)
+	if defaultCatalog {
+		require.NoError(t, s.catalog.Refresh(context.Background()))
+	}
+	return s
+}
+
+func unreadyTestServer(t *testing.T, cfg Config) *Server {
+	t.Helper()
+	cfg.Logger = testLogger()
+	cfg.StartTime = time.Now()
+	if cfg.TokenFile == "" {
+		cfg.TokenFile = filepath.Join(t.TempDir(), "agent.token")
+	}
+	if cfg.DryRun == nil {
+		cfg.DryRun = func(ctx context.Context, script string) []string { return nil }
+	}
 	if cfg.CatalogFn == nil {
 		cfg.CatalogFn = func(ctx context.Context) ([]string, error) { return []string{}, nil }
 	}
@@ -90,10 +120,14 @@ func TestHealthShape(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code)
 	var h map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &h))
-	for _, k := range []string{"kernel", "bpftrace_version", "btf", "root", "tracefs", "uptime_s"} {
+	for _, k := range []string{"kernel", "bpftrace_version", "btf", "root", "tracefs", "uptime_s", "ready", "catalog"} {
 		require.Contains(t, h, k, "missing %s", k)
 	}
 	require.Equal(t, "6.8-test", h["kernel"])
+	require.Equal(t, true, h["ready"])
+	catMap, ok := h["catalog"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, CatalogStateReady, catMap["state"])
 	require.GreaterOrEqual(t, h["uptime_s"].(float64), float64(89))
 }
 
