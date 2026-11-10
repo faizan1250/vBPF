@@ -41,21 +41,22 @@ type Config struct {
 
 // Server is the agent HTTP and WebSocket front end.
 type Server struct {
-	addr             string
-	token            string
-	allowedOrigins   []string
-	mux              *http.ServeMux
-	runs             *Registry
-	catalog          *Catalog
-	catalogRetryBase time.Duration
-	catalogRetryMax  time.Duration
-	health           *HealthProvider
-	dryRun           DryRunFunc
-	probeArgs        ProbeArgsFunc
-	uprobeCheck      *UprobeChecker
-	logger           zerolog.Logger
-	startTime        time.Time
-	bpftracePath     string
+	addr              string
+	token             string
+	allowedOrigins    []string
+	mux               *http.ServeMux
+	runs              *Registry
+	catalog           *Catalog
+	catalogRetryBase  time.Duration
+	catalogRetryMax   time.Duration
+	readHeaderTimeout time.Duration
+	health            *HealthProvider
+	dryRun            DryRunFunc
+	probeArgs         ProbeArgsFunc
+	uprobeCheck       *UprobeChecker
+	logger            zerolog.Logger
+	startTime         time.Time
+	bpftracePath      string
 }
 
 // New loads or creates the bearer token and registers authenticated routes.
@@ -100,21 +101,22 @@ func New(cfg Config) (*Server, error) {
 		cfg.CatalogRetryMax = 30 * time.Second
 	}
 	s := &Server{
-		addr:             cfg.Addr,
-		token:            tok,
-		allowedOrigins:   cfg.AllowedOrigins,
-		mux:              http.NewServeMux(),
-		runs:             NewRegistry(cfg.RunFn, cfg.BPFtracePath, cfg.Logger),
-		catalog:          catalog,
-		catalogRetryBase: cfg.CatalogRetryBase,
-		catalogRetryMax:  cfg.CatalogRetryMax,
-		health:           health,
-		dryRun:           dryRun,
-		probeArgs:        probeArgs,
-		uprobeCheck:      uprobeCheck,
-		logger:           cfg.Logger,
-		startTime:        cfg.StartTime,
-		bpftracePath:     cfg.BPFtracePath,
+		addr:              cfg.Addr,
+		token:             tok,
+		allowedOrigins:    cfg.AllowedOrigins,
+		mux:               http.NewServeMux(),
+		runs:              NewRegistry(cfg.RunFn, cfg.BPFtracePath, cfg.Logger),
+		catalog:           catalog,
+		catalogRetryBase:  cfg.CatalogRetryBase,
+		catalogRetryMax:   cfg.CatalogRetryMax,
+		readHeaderTimeout: defaultReadHeaderTimeout,
+		health:            health,
+		dryRun:            dryRun,
+		probeArgs:         probeArgs,
+		uprobeCheck:       uprobeCheck,
+		logger:            cfg.Logger,
+		startTime:         cfg.StartTime,
+		bpftracePath:      cfg.BPFtracePath,
 	}
 	s.routes()
 	return s, nil
@@ -173,6 +175,28 @@ func bindAllowed(host string) bool {
 	return false
 }
 
+const (
+	defaultReadHeaderTimeout = 5 * time.Second
+	defaultIdleTimeout       = 60 * time.Second
+	defaultMaxHeaderBytes    = 64 << 10 // 64 KB
+)
+
+// newHTTPServer builds the HTTP server with Slowloris and header bounds while
+// leaving WriteTimeout unset so 60s probe streams are not terminated mid-run.
+func (s *Server) newHTTPServer() *http.Server {
+	rht := s.readHeaderTimeout
+	if rht <= 0 {
+		rht = defaultReadHeaderTimeout
+	}
+	return &http.Server{
+		Addr:              s.addr,
+		Handler:           s.mux,
+		ReadHeaderTimeout: rht,
+		IdleTimeout:       defaultIdleTimeout,
+		MaxHeaderBytes:    defaultMaxHeaderBytes,
+	}
+}
+
 // ListenAndServe binds loopback (or the wildcard with the opt-in flag) immediately
 // and loads the probe catalog asynchronously with exponential backoff.
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -191,7 +215,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 		return err
 	}
 	loaderDone := s.startCatalogLoader(ctx)
-	srv := &http.Server{Addr: s.addr, Handler: s.mux}
+	srv := s.newHTTPServer()
 	go func() {
 		<-ctx.Done()
 		cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

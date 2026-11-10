@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -375,5 +377,88 @@ func TestTokenFile0600(t *testing.T) {
 		require.Equal(t, os.FileMode(0o600), fi.Mode().Perm())
 	} else {
 		require.NotZero(t, fi.Size())
+	}
+}
+
+func TestNewHTTPServerConfig(t *testing.T) {
+	s := testServer(t, Config{Addr: "127.0.0.1:0"})
+	srv := s.newHTTPServer()
+	require.Equal(t, "127.0.0.1:0", srv.Addr)
+	require.Equal(t, s.mux, srv.Handler)
+	require.Equal(t, 5*time.Second, srv.ReadHeaderTimeout)
+	require.Equal(t, 60*time.Second, srv.IdleTimeout)
+	require.Equal(t, 64<<10, srv.MaxHeaderBytes)
+	require.Zero(t, srv.WriteTimeout, "global WriteTimeout must stay unset for long-lived streams")
+}
+
+func TestServerHeaderLimit431AndSlowHeaderTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+
+	s := testServer(t, Config{Addr: addr})
+	s.readHeaderTimeout = 80 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- s.ListenAndServe(ctx)
+	}()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	require.Eventually(t, func() bool {
+		req, err := http.NewRequest("GET", "http://"+addr+"/health", nil)
+		if err != nil {
+			return false
+		}
+		req.Header.Set("Authorization", "Bearer "+s.Token())
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 2*time.Second, 10*time.Millisecond)
+
+	t.Run("oversized headers return 431", func(t *testing.T) {
+		req, err := http.NewRequest("GET", "http://"+addr+"/health", nil)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+s.Token())
+		// Exceed 64 KB + Go net/http's 4 KB slop while staying well below the 1 MB default.
+		req.Header.Set("X-Oversized", strings.Repeat("a", (64<<10)+8192))
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+		require.Equal(t, http.StatusRequestHeaderFieldsTooLarge, resp.StatusCode)
+	})
+
+	t.Run("slow headers time out after ReadHeaderTimeout", func(t *testing.T) {
+		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+		require.NoError(t, err)
+		defer func() { _ = conn.Close() }()
+
+		_, err = io.WriteString(conn, "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+		require.NoError(t, err)
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+		raw, rerr := io.ReadAll(conn)
+		if rerr != nil {
+			if ne, ok := rerr.(net.Error); ok {
+				require.False(t, ne.Timeout(), "server did not drop slow-header connection before client deadline: %v", rerr)
+			}
+		}
+		if len(raw) > 0 {
+			require.Contains(t, string(raw), "408 Request Timeout")
+		}
+	})
+
+	cancel()
+	select {
+	case err := <-serveDone:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("ListenAndServe did not stop cleanly")
 	}
 }
