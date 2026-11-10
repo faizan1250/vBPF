@@ -20,7 +20,12 @@ import {
   type LlmOutput,
   type LlmUsage,
 } from "./llm.js";
-import { buildGeneratePrompt, type RecipeWithBody } from "./prompts.js";
+import {
+  buildGeneratePrompt,
+  ARG_SECTION_CAP,
+  type PromptParts,
+  type RecipeWithBody,
+} from "./prompts.js";
 import { extractKeywords } from "./retrieval.js";
 import { staticValidate, truncateErrors } from "./validator.js";
 
@@ -40,7 +45,7 @@ type PossiblyDetailedLlm = LlmClient & {
   generateDetailed?: (
     prompt: string,
     feedback?: LlmFeedback,
-    opts?: { signal?: AbortSignal },
+    opts?: { signal?: AbortSignal; parts?: PromptParts },
   ) => Promise<LlmDetailedResult>;
 };
 
@@ -48,7 +53,7 @@ async function generateWithAttribution(
   llm: LlmClient,
   prompt: string,
   feedback?: LlmFeedback,
-  signal?: AbortSignal,
+  opts?: { signal?: AbortSignal; parts?: PromptParts },
 ): Promise<{ out: LlmOutput; model: string; usage?: LlmUsage }> {
   const detailed = (llm as PossiblyDetailedLlm).generateDetailed;
   if (typeof detailed === "function") {
@@ -56,7 +61,12 @@ async function generateWithAttribution(
       llm,
       prompt,
       feedback,
-      signal === undefined ? undefined : { signal },
+      opts?.signal === undefined && opts?.parts === undefined
+        ? undefined
+        : {
+            ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+            ...(opts?.parts !== undefined ? { parts: opts.parts } : {}),
+          },
     );
     return {
       out: result.output,
@@ -64,7 +74,10 @@ async function generateWithAttribution(
       ...(result.usage !== undefined ? { usage: result.usage } : {}),
     };
   }
-  return { out: await llm.generate(prompt, feedback), model: llm.model };
+  return {
+    out: await llm.generate(prompt, feedback, opts?.parts),
+    model: llm.model,
+  };
 }
 
 export class RefusalError extends Error {
@@ -130,7 +143,7 @@ export function makeMockLlm(
 // ==ARG_FORMATS==. Recipe bodies come first (they drive the few-shot),
 // then catalog probes from search.
 export const MAX_ARG_PROBES = 3;
-export const ARG_OUTPUT_CAP = 2000;
+export const ARG_OUTPUT_CAP = ARG_SECTION_CAP;
 
 const TRACEPOINT_RE = /\btracepoint:[A-Za-z0-9_]+:[A-Za-z0-9_]+/g;
 const TRACEPOINT_EXACT_RE = /^tracepoint:[A-Za-z0-9_]+:[A-Za-z0-9_]+$/;
@@ -215,6 +228,7 @@ export async function runGenerate(
   const probeArgsFn = opts.deps.probeArgsFn ?? fetchProbeArgs;
   let argFormats: string | undefined;
   const candidates = selectTracepointProbes(withBodies, probes);
+  const argSections: Array<{ probe: string; output: string }> = [];
   if (candidates.length > 0) {
     const sections: Array<{ probe: string; output: string }> = [];
     for (const probe of candidates) {
@@ -225,14 +239,20 @@ export async function runGenerate(
         continue;
       }
     }
-    if (sections.length > 0) argFormats = formatProbeArgs(sections);
+    if (sections.length > 0) {
+      argSections.push(...sections);
+      argFormats = formatProbeArgs(sections);
+    }
   }
 
-  const { text: assembled } = buildGeneratePrompt(
+  const assembled = buildGeneratePrompt(
     prompt,
     withBodies,
     probes,
     argFormats,
+    {
+      ...(argSections.length > 0 ? { argSections } : {}),
+    },
   );
 
   let attempts = 0;
@@ -246,12 +266,12 @@ export async function runGenerate(
     const generated = await generateWithAttribution(
       llm,
       attempt === 1
-        ? assembled
-        : `${assembled}\n\n==FEEDBACK==\nPrevious script:\n${previousScript}\nErrors:\n${truncateErrors(lastErrors).join("\n")}\nFix the script and return full JSON again.`,
+        ? assembled.text
+        : `${assembled.text}\n\n==FEEDBACK==\nPrevious script:\n${previousScript}\nErrors:\n${truncateErrors(lastErrors).join("\n")}\nFix the script and return full JSON again.`,
       attempt === 1
         ? undefined
         : { previousScript, errors: truncateErrors(lastErrors) },
-      opts.signal,
+      { signal: opts.signal, parts: assembled.parts },
     );
     const out = generated.out;
     modelUsed = generated.model;

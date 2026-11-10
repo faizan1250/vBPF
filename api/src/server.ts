@@ -46,6 +46,7 @@ import {
   LlmRequestError,
   LlmUnavailableError,
 } from "./live-llm.js";
+import { PromptBudgetError } from "./llm.js";
 import { loadRecipes } from "./recipes.js";
 
 export interface AppOptions {
@@ -477,7 +478,10 @@ export async function buildApp(
         if (err instanceof LlmUnavailableError) {
           return sendLlmUnavailable(reply);
         }
-        if (err instanceof LlmRequestError) {
+        if (
+          err instanceof LlmRequestError ||
+          err instanceof PromptBudgetError
+        ) {
           return reply
             .code(502)
             .send({ error: "LLM request failed", code: "LLM_ERROR" });

@@ -2,7 +2,17 @@ import { z } from "zod";
 
 import { ChartTypeSchema, DurationSchema } from "@vbpf/schemas";
 
-import type { RecipeWithBody } from "./prompts.js";
+import type { PromptParts, RecipeWithBody } from "./prompts.js";
+
+/** Char budget for system + context + user of one generate call. */
+export const PROMPT_BUDGET_CHARS = 24_000;
+
+/**
+ * Context alone cannot fit the budget after shrinking (probes to 15, arg
+ * formats dropped, recipes to 1). The system message, user request, and
+ * feedback are never truncated, so this is surfaced as 502 LLM_ERROR.
+ */
+export class PromptBudgetError extends Error {}
 
 export const LlmOutputSchema = z
   .object({
@@ -23,7 +33,11 @@ export interface LlmFeedback {
 
 export interface LlmClient {
   readonly model: string;
-  generate(prompt: string, feedback?: LlmFeedback): Promise<LlmOutput>;
+  generate(
+    prompt: string,
+    feedback?: LlmFeedback,
+    parts?: PromptParts,
+  ): Promise<LlmOutput>;
 }
 
 /** Token counts reported by the provider, when present. No prompt or text. */
@@ -73,6 +87,7 @@ export class MockLlm implements LlmClient {
     this.resolveTop = resolveTop;
   }
 
+  // Ignores feedback and parts: the mock answers from the marker text.
   async generate(prompt: string): Promise<LlmOutput> {
     const user = prompt.split("==USER==").at(-1)?.trim() ?? prompt;
     if (isRefusalPrompt(user)) {
