@@ -52,13 +52,55 @@ executed without human confirmation.
 
 - CI is mock-only and reads no secrets: `LLM_MODE=mock`, provider keys stay
   in local `.env` (gitignored), never in Actions secrets.
-- Before opening a PR, run the manual supply-chain checks (kept out of CI so
-  CI stays hermetic):
+- CI runs `govulncheck ./...` (the `vuln` job, via `make vuln`) and
+  `go test -race ./...` (in `test-unit`) on every push/PR. Run them locally
+  with the same commands before opening a PR, plus the manual JS check:
 
   ```bash
-  pnpm audit --audit-level=high
+  pnpm audit --audit-level=low
   govulncheck ./...
   ```
+
+### R-21 dependency audit (2026-11-10, base `232091a`)
+
+`pnpm audit` found 17 findings (3 critical, 2 high, 11 moderate, 1 low),
+all in dev-only transitive paths except one production dependency:
+
+- `vitest@2.1.9` (dev, api + web) pulled vulnerable `tinypool`,
+  `@vitest/mocker`, `vite`, and `esbuild` copies, including the 3 criticals
+  (GHSA-5xrq-8626-4rwp, GHSA-5gmw-xhrv-c9v3, GHSA-85c8-ppgw-ccpr).
+  Fixed by bumping `vitest` to `^4.1.12` in `api` and `web`.
+- `zod@3.25.76` (production, via `@vbpf/schemas`): GHSA-mrhx-c7xc-m3w5
+  (high, memory exhaustion on oversized constrained collections). Fixed by
+  bumping `zod` to `^4.6.6` in `api` and `packages/schemas`; all schemas use
+  basic builders fully compatible with the v4 API (verified by typecheck +
+  unit tests). Residual risk is further capped by the 64 KB request body
+  limit enforced before validation.
+- `vite@5.4.21` (dev, web) and its nested copies: dev-server FS/request
+  advisories. Fixed by bumping `vite` to `^6.4.4`, which also satisfies the
+  vitest 4 peer range (`^6 || ^7 || ^8`).
+- `esbuild<=0.24.2` (transitive, GHSA-67mh-4wv8-2f99) and
+  `minimatch@10.2.6` (transitive via `typescript-eslint`, moderate DoS):
+  pinned with `pnpm.overrides` in the root `package.json`
+  (`esbuild ^0.25.0`, `minimatch@^10.0.0` to `^11.0.1`; the `minimatch@3`
+  copies used by eslint itself are outside the affected range and untouched).
+
+Post-fix `pnpm audit --audit-level=low` reports **no known vulnerabilities**.
+
+`govulncheck ./...` reports **no vulnerabilities**.
+
+Two findings came up during the audit and were fixed, not waived:
+
+- GO-2026-5024 (integer overflow in `NewNTUnicodeString`,
+  `golang.org/x/sys/windows`, fixed upstream in `v0.44.0`): fixed by bumping
+  `golang.org/x/sys` `v0.29.0` → `v0.44.0`. It was package-level only
+  (Windows-only syscall helper, never called; the agent is Linux-only), but
+  the fix was cheap once the baseline below allowed it.
+- 31 standard-library findings when scanning with the old pinned toolchain:
+  fixed by moving the Go baseline 1.23 → 1.27 (`agent/go.mod`,
+  `agent/Dockerfile`, CI `setup-go`, `docs/ci.md`, `docs/environment.md`).
+  `govulncheck@v1.9.0` itself requires Go >= 1.26, so the old pin could not
+  even run the current scanner without a toolchain switch.
 
 ## Logging and redaction
 

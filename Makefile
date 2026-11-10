@@ -5,7 +5,7 @@
 
 SHELL := /bin/sh
 .SHELLFLAGS := -eu -c
-.PHONY: setup lint test agent-build api-dev web-dev eval test-integration recipes-check
+.PHONY: setup lint test agent-build api-dev web-dev eval test-integration recipes-check vuln
 
 GO ?= go
 PNPM ?= pnpm
@@ -57,3 +57,9 @@ test-integration:
 
 recipes-check:
 	@scripts/validate-recipes.sh
+
+# Dependency vulnerability scan (Go). No root needed; skips when agent/ is
+# absent or govulncheck is not installed. CI runs this on every push/PR.
+vuln:
+	@if [ -d agent ]; then cd agent && { command -v govulncheck >/dev/null || { echo "SKIP: govulncheck not installed (go install golang.org/x/vuln/cmd/govulncheck@v1.9.0)"; exit 0; }; govulncheck ./...; }; \
+		else echo "SKIP: no agent/ yet"; fi
