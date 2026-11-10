@@ -2,6 +2,9 @@ import { defineConfig } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./e2e",
+  // demo.spec.ts records the R-24 GIF (own config + fixture build); it never
+  // runs in the default suite or CI.
+  testIgnore: ["demo.spec.ts"],
   use: { baseURL: "http://127.0.0.1:5173" },
   webServer: {
     command: "pnpm run dev",

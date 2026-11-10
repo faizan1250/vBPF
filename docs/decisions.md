@@ -1,5 +1,12 @@
 # Decisions
 
+## R-24: Demo GIF without a human (2026-11-10)
+
+- **`scripts/make-demo.sh` owns the whole pipeline.** Fixture build (`VITE_FIXTURE_MODE=1`), loopback `vite preview`, Playwright record (`web/playwright.demo.config.ts`, video on), ffmpeg palette GIF to `docs/assets/demo.gif` (640 px, 8 fps, bayer dither; 560 px/7 fps fallback), with an 8 MB hard gate. Result: 63 s, 6.2 MB.
+- **`web/e2e/demo.spec.ts` is excluded from the default suite** (`testIgnore`), so CI `test:e2e` stays mock-only. Prompts map to fixture chart kinds by keyword (`histogram`→hist, `start`→events, else bar); backend health/recipes are route-stubbed so the tape shows "agent online" with no API running.
+- **Fixture bug fixed, not worked around.** Switching chart type between generations re-ran `useRunStream` with the stale runId and phantom-started the old run (`setRunPhase("running")` unconditionally). The effect now attaches only when a run is in flight (`starting`/`running`/`stopping`); regression test in `useRunStream.test.tsx`. No reload hacks in the demo.
+- **Recording runs where the toolchain is.** WSL has no node, so the committed GIF was recorded on Windows with the same commands the script runs; `shellcheck` is clean. Fixture data is synthetic (`bash`/`curl` pids, in-kernel aggregates), so no paths, usernames, or keys appear.
+
 ## R-23: Security and community files (2026-11-10)
 
 - **Root `SECURITY.md` is a thin pointer, `docs/security.md` stays canonical.** The root file holds only the supported-versions table (latest minor line, `0.1.x`, only), the GitHub private vulnerability reporting link ("Security" tab, "Report a vulnerability"), and the 3-business-day acknowledgement target. No email contact anywhere, per D-6.
