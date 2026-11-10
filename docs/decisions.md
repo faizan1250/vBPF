@@ -529,3 +529,9 @@ after <ms>`, `cooldownMs: LIVE_DEFAULT_COOLDOWN_MS`) with log outcome
 - **Verified:** in-repo `go build`, `go vet`, `gofmt -l` (clean),
   `go test -race -count=1` (all 5 packages ok), and `govulncheck` (clean)
   under `GOTOOLCHAIN=go1.26.10`; `ci.yml` parses as valid YAML.
+
+## R2-05 Slice 17: 0.3.0 release re-prep, local only (2026-11-10)
+
+- **New 0.3.0 instead of folding into 0.2.0 (D-45).** remaining-2.md said fold into v0.2.0 while the tag was unpushed, but the local v0.2.0 tag already points at 4791f58 and main has since gained the full R2 stack (single request path, base-URL validation, LLM_MODEL removal, per-call logs, usage, JSON modes, total budget, prompt parts, live+agent eval, docs truth, Go 1.26 floor). A new 0.3.0 section keeps the shipped 0.2.0 notes immutable and gives the R2 work its own version line; root/api/web/schemas all bump to 0.3.0 locally. Slice instruction overrides remaining-2.md D-22 on this point.
+- **Static-compile purge (D-46).** docs/launch.md gate now names the live+agent report as the launch evidence and every draft quotes dry-run numbers only (20/26 first-try, 23/26 retries, 20/23 produced, 30/30 refusal-correct); no draft says static-only output 'compiles'. RELEASE_NOTES_v0.2.0.md untouched; new RELEASE_NOTES_v0.3.0.md carries the R2 summary plus the LLM_MODEL breaking-change note.
+- **Tag discipline (D-47).** Remote v0.3.0 verified empty via git ls-remote before tagging; local annotated tag v0.3.0 created with -f and never pushed. Branch and tag stay local: no push, no PR, no publish from this slice.
