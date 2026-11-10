@@ -462,3 +462,79 @@ func TestServerHeaderLimit431AndSlowHeaderTimeout(t *testing.T) {
 		t.Fatal("ListenAndServe did not stop cleanly")
 	}
 }
+
+func TestStrictJSONDecoding(t *testing.T) {
+	oversizedField := fmt.Sprintf(`{"script":%q}`, strings.Repeat("x", maxRequestBodyBytes+100))
+	oversizedTrailing := `{"script":"BEGIN {}"}` + strings.Repeat(" ", maxRequestBodyBytes+100)
+
+	rejectCases := []struct {
+		name string
+		body string
+		nilB bool
+	}{
+		{name: "unknown field", body: `{"script":"BEGIN {}","extra":true}`},
+		{name: "trailing json object", body: `{"script":"BEGIN {}"} {}`},
+		{name: "trailing scalar", body: `{"script":"BEGIN {}"} 123`},
+		{name: "trailing garbage", body: `{"script":"BEGIN {}"} garbage`},
+		{name: "empty body", body: ""},
+		{name: "whitespace body", body: "   \n\t "},
+		{name: "nil body", nilB: true},
+		{name: "syntax error", body: `{"script":`},
+		{name: "oversized body in field", body: oversizedField},
+		{name: "oversized trailing whitespace", body: oversizedTrailing},
+	}
+
+	s := testServer(t, Config{RunFn: fakeRunner(0, time.Millisecond)})
+	for _, endpoint := range []string{"/v1/validate", "/v1/runs"} {
+		for _, tc := range rejectCases {
+			t.Run(endpoint+"_"+tc.name, func(t *testing.T) {
+				var req *http.Request
+				if tc.nilB {
+					req, _ = http.NewRequest("POST", endpoint, nil)
+					req.Header.Set("Authorization", "Bearer "+s.Token())
+				} else {
+					req = httptest.NewRequest("POST", endpoint, strings.NewReader(tc.body))
+					req.Header.Set("Authorization", "Bearer "+s.Token())
+				}
+				w := httptest.NewRecorder()
+				s.Handler().ServeHTTP(w, req)
+				require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+				var errBody map[string]string
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errBody))
+				require.Equal(t, "VALIDATION_FAILED", errBody["code"])
+			})
+		}
+	}
+
+	t.Run("valid minimal bodies pass", func(t *testing.T) {
+		for _, body := range []string{`{"script":"BEGIN {}"}`, "{\"script\":\"BEGIN {}\"}\n  "} {
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, authReq(t, s, "POST", "/v1/validate", body))
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			var out struct {
+				OK bool `json:"ok"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+			require.True(t, out.OK)
+		}
+
+		// Run endpoint accepts minimal valid body and optional duration_s.
+		for _, body := range []string{`{"script":"BEGIN {}"}`, `{"script":"BEGIN {}","duration_s":5}`} {
+			done := make(chan struct{})
+			srv := testServer(t, Config{RunFn: func(ctx context.Context, opts runner.Options, emit func(parser.Event) error) error {
+				defer close(done)
+				_ = emit(parser.Status(opts.RunID, 0, "running"))
+				_ = emit(parser.Summarize(opts.RunID, 1, parser.Summary{ExitReason: runner.ReasonCompleted}))
+				return nil
+			}})
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, authReq(t, srv, "POST", "/v1/runs", body))
+			require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("run did not finish")
+			}
+		}
+	})
+}

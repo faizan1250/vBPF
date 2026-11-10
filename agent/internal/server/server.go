@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -179,6 +181,7 @@ const (
 	defaultReadHeaderTimeout = 5 * time.Second
 	defaultIdleTimeout       = 60 * time.Second
 	defaultMaxHeaderBytes    = 64 << 10 // 64 KB
+	maxRequestBodyBytes      = 64 << 10 // 64 KB
 )
 
 // newHTTPServer builds the HTTP server with Slowloris and header bounds while
@@ -285,6 +288,35 @@ func writeError(w http.ResponseWriter, code int, errCode, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg, "code": errCode})
 }
 
+func decodeStrictJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, dst any) error {
+	if r.Body == nil {
+		return errors.New("empty request body")
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	var extra json.RawMessage
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("unexpected trailing JSON data")
+		}
+		return err
+	}
+	return nil
+}
+
+func writeDecodeError(w http.ResponseWriter, err error) {
+	var maxErr *http.MaxBytesError
+	if errors.As(err, &maxErr) {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "request body too large")
+		return
+	}
+	writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "invalid JSON")
+}
+
 func writeCatalogUnavailable(w http.ResponseWriter) {
 	w.Header().Set("Retry-After", catalogRetryAfterSeconds)
 	writeError(w, http.StatusServiceUnavailable, "CATALOG_UNAVAILABLE", "probe catalog not ready")
@@ -347,10 +379,9 @@ type validateRequest struct {
 }
 
 func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 	var req validateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "invalid JSON")
+	if err := decodeStrictJSON(w, r, maxRequestBodyBytes, &req); err != nil {
+		writeDecodeError(w, err)
 		return
 	}
 	if !s.catalog.Ready() {
@@ -414,10 +445,9 @@ type createRunRequest struct {
 }
 
 func (s *Server) handleCreateRun(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 64*1024)
 	var req createRunRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED", "invalid JSON")
+	if err := decodeStrictJSON(w, r, maxRequestBodyBytes, &req); err != nil {
+		writeDecodeError(w, err)
 		return
 	}
 	if !s.catalog.Ready() {
