@@ -512,6 +512,12 @@ export function staticValidate(
       errors.push(`provider not allowed: ${provider}`);
       continue;
     }
+    if (colon < 0 && provider !== "BEGIN" && provider !== "END") {
+      errors.push(
+        `invalid probe header: missing target for provider ${provider}`,
+      );
+      continue;
+    }
     if (provider === "uprobe" || provider === "uretprobe") {
       const rest = pr.slice(provider.length + 1);
       if (!rest.includes("libc") && !rest.startsWith("/")) {
