@@ -119,6 +119,14 @@ response body nor captured log output contains key material.
 - The agent never logs its bearer token. Captured child stderr is bounded
   (64 KB) and surfaced as events, not logs.
 - Temp script files are created `0600` and removed after the run.
+- **Scrubbed child process environment:** every `exec.Command` invocation inside `agent/` (`runner.Run`, `DefaultDryRun`, `Catalog.Refresh`, exact `uprobe` checks, `probe-args`, health `--version`, and startup `pgrep` sweep) constructs an explicit minimal allowlisted environment containing only `PATH` (plus deterministic sorted `BPFTRACE_MAX_PROBES=50`, `BPFTRACE_MAP_KEYS_MAX=4096`, `BPFTRACE_STRLEN=64` for both dry-run compile and real execution). `os.Environ()` is never inherited, preventing `LD_LIBRARY_PATH` / `LD_PRELOAD` injection; `FAKE_*` test variables are forwarded only when running inside Go test binaries (`testing.Testing()`).
+
+## Validation, uprobe allowlist, and fail-closed catalog
+
+- **`uprobe` / `uretprobe` allowlist (`libc`-only):** both API static validation and agent re-validation restrict user-space probes to the bare alias `libc` or a canonical POSIX absolute path under `/lib`, `/lib64`, `/usr/lib`, or `/usr/lib64` (with at most one multiarch subdirectory matching `^[a-z0-9_]+-linux-[a-z0-9]+$`) and a shared-object basename matching `^libc\.so(\.[0-9]+)*$` or `^libc-[0-9]+(\.[0-9]+)*\.so$` (no `.`, `..`, `//`, whitespace, or trailing `/`). Symbols must be plain identifiers (`^[A-Za-z_][A-Za-z0-9_]*$`, rejecting wildcards, `+offset`, hex addresses, quotes, or extra segments); `usdt` remains rejected. On the host, the agent verifies `EvalSymlinks` stays within the rootfs and still satisfies the allowed directory/libc basename rules, confirms a regular root-owned (`uid == 0`) non-group/world-writable (`mode & 0o022 == 0`) binary, and runs a bounded `bpftrace -l 'uprobe:<target>:<symbol>'` existence check (`3s` timeout, `8 KB` cap; falling back across allowed libc directories for `libc`).
+- **Uprobe user-space visibility & hot-symbol warnings:** even when scoped to `libc`, uprobes can read user-space arguments across any process on the host (for example `getaddrinfo` hostnames or `malloc` sizes). Human confirmation and validator warnings for hot symbols (`malloc`, `free`, `memcpy`, `memset`, `strlen`, `read`, `write`) remain required before execution.
+- **Strict wildcard grammar & probe-count cap:** at most one `*` is permitted and only as the last character of the final segment (`tracepoint:<subsys>:*`, `tracepoint:<subsys>:<prefix>*`, `kprobe:<prefix>*`, `kretprobe:<prefix>*` with at least 3 prefix characters for `kprobe`/`kretprobe`; wildcards are rejected on `uprobe`, `uretprobe`, `profile`, `interval`, `software`, `BEGIN`, `END`, as are `?`, `[`, `]`). Total probe **occurrences** (counting duplicate blocks/targets and each wildcard's expanded catalog match count) are capped at `BPFTRACE_MAX_PROBES` (`50`), enforced in static validation, agent re-validation, dry-run compile, and runtime env.
+- **Fail-closed non-blocking catalog readiness:** the agent binds HTTP immediately without blocking startup and loads `bpftrace -l` asynchronously with exponential backoff (`1s`..`30s`). Readiness requires at least one non-empty refresh; failed/empty refreshes preserve the previous immutable snapshot atomically while recording `stale_since` and `last_error`. While unready, `/health` reports `200` with `ready: false` while `/v1/validate` and `/v1/runs` fail closed (`503 CATALOG_UNAVAILABLE` + `Retry-After`) for every script including `BEGIN {}`, and the API maps upstream `503`/`CATALOG_UNAVAILABLE` to `503 AGENT_NOT_READY` + `fix_hint` across `/api/validate`, `/api/runs`, and `/api/generate`.
 
 ## What the LLM sees
 
@@ -129,29 +137,27 @@ leaves the machine.
 
 ## Error taxonomy
 
-| Code                 | Signal                                                    | Surfaced where                               |
-| -------------------- | --------------------------------------------------------- | -------------------------------------------- |
-| `AGENT_OFFLINE`      | Agent unreachable / token unreadable                      | `/api/health`, proxies (`503`)               |
-| `NO_PRIVILEGE`       | Agent health `root: false`                                | `/api/health` warnings, TopBar hint          |
-| `KERNEL_UNSUPPORTED` | Health `btf: false` or `tracefs: false`                   | `/api/health` warnings, TopBar hint          |
-| `PROBE_NOT_FOUND`    | Probe missing from kernel catalog / dry-run compiler miss | `POST /v1/runs` code                         |
-| `VALIDATION_FAILED`  | Blocklist, allowlist, size, or other compile errors       | `POST /v1/runs`, `POST /v1/validate` errors  |
-| `LIMIT_EXCEEDED`     | Concurrent run (`409`) or wildcard past probe cap (`400`) | `POST /v1/runs` code                         |
-| `RATE_LIMITED`       | Generate budget spent                                     | `POST /api/generate` (`429` + `Retry-After`) |
-| `REFUSAL`            | Unsafe prompt refused by the LLM gate                     | `POST /api/generate` (`422`)                 |
-| `LLM_UNAVAILABLE`    | Live mode without a provider key                          | `POST /api/generate` (`503`)                 |
-| `FORBIDDEN`          | Foreign `Origin` / non-loopback `Host`                    | Any API route (`403`)                        |
+| Code                 | Signal                                                   | Surfaced where                                                  |
+| -------------------- | -------------------------------------------------------- | --------------------------------------------------------------- |
+| `AGENT_OFFLINE`      | Agent unreachable / token unreadable                     | `/api/health`, proxies (`503`)                                  |
+| `AGENT_NOT_READY`    | Agent catalog still loading or refresh failed            | `/api/health` readiness, proxies (`503` + `Retry-After` + hint) |
+| `NO_PRIVILEGE`       | Agent health `root: false`                               | `/api/health` warnings, TopBar hint                             |
+| `KERNEL_UNSUPPORTED` | Health `btf: false` or `tracefs: false`                  | `/api/health` warnings, TopBar hint                             |
+| `PROBE_NOT_FOUND`    | Probe / wildcard / uprobe symbol missing on host         | `POST /v1/validate`, `POST /v1/runs`                            |
+| `VALIDATION_FAILED`  | Blocklist, allowlist, host libc FS check, or compile err | `POST /v1/validate`, `POST /v1/runs`                            |
+| `LIMIT_EXCEEDED`     | Concurrent run (`409`) or total probes > 50 (`400`)      | `POST /v1/validate`, `POST /v1/runs`                            |
+| `RATE_LIMITED`       | Generate budget spent                                    | `POST /api/generate` (`429` + `Retry-After`)                    |
+| `REFUSAL`            | Unsafe prompt refused by the LLM gate                    | `POST /api/generate` (`422`)                                    |
+| `LLM_UNAVAILABLE`    | Live mode without a provider key                         | `POST /api/generate` (`503`)                                    |
+| `FORBIDDEN`          | Foreign `Origin` / non-loopback `Host`                   | Any API route (`403`)                                           |
 
-Known gaps (documented, not silently unhandled):
+Known design trade-offs (documented, not silently unhandled):
 
 - Runs are **not** preflight-gated on `root`/`btf`: a non-root or BTF-less
-  host reports warnings in `/api/health`, but a run is still accepted and
-  fails at exec/dry-run time (surfaced as a failed run and stderr events).
-  Rationale: health can change between check and run, and the single-run
-  registry has no queue for deferred admission.
-- `POST /v1/validate` returns an `{ok, errors, probes}` envelope with **no**
-  code field; probe misses appear as error strings, not `PROBE_NOT_FOUND`.
-  Only `POST /v1/runs` carries taxonomy codes.
+  host reports warnings in `/api/health`, but a run is still accepted once the
+  catalog is ready and fails at exec/dry-run time (surfaced as a failed run and
+  stderr events). By contrast, catalog unready states (`ready: false`) fail
+  closed across validation, generation, and run creation (`503 AGENT_NOT_READY`).
 
 ## Reporting a vulnerability
 

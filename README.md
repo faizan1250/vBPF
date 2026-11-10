@@ -116,14 +116,14 @@ Generation rules live in [`api/prompts/system.md`](api/prompts/system.md). CI pi
 
 You are asking a language model to write code that runs in your kernel with root privileges. The design assumes the model will sometimes be wrong and treats every layer as untrusted by the next.
 
-| Layer                   | Protection                                                                                                                                                                                                                               |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Prompting               | Tells the model what is forbidden; prefers in-kernel aggregation                                                                                                                                                                         |
-| Static validation (API) | Blocks `system`, `signal`, `override`, `cat`, `#include`, `#define`; allows only `tracepoint`, `kprobe`, `kretprobe`, `uprobe`/`uretprobe` (libc or absolute paths), `profile`, `interval`, `software`, `BEGIN`, `END`; size cap of 8 KB |
-| Agent re-validation     | Repeats the checks independently and dry-run compiles against your actual kernel. The agent never trusts the API                                                                                                                         |
-| Kernel verifier         | Rejects unsafe BPF programs                                                                                                                                                                                                              |
-| Runtime guards          | Duration, output rate, output size, map keys, probe count, concurrency (defaults below)                                                                                                                                                  |
-| Human confirmation      | You see the exact script. The API stores its SHA-256 and whether it differs from the generated version, and the agent independently re-validates every script before it runs.                                                            |
+| Layer                   | Protection                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Prompting               | Tells the model what is forbidden; prefers in-kernel aggregation                                                                                                                                                                                                                                                                              |
+| Static validation (API) | Blocks `system`, `signal`, `override`, `cat`, `#include`, `#define`; allows only `tracepoint`, `kprobe`, `kretprobe`, `uprobe`/`uretprobe` (`libc` or canonical system `libc.so*` path + plain identifier symbol), `profile`, `interval`, `software`, `BEGIN`, `END`; suffix wildcards capped at 50 total probe occurrences; size cap of 8 KB |
+| Agent re-validation     | Repeats checks independently, verifies root-owned non-writable `libc` files and `bpftrace -l` existence for uprobes, enforces the 50-probe total occurrence cap, fails closed (`503 CATALOG_UNAVAILABLE`) before catalog readiness, scrubs child `os.Environ()`, and dry-run compiles with `BPFTRACE_*` caps. The agent never trusts the API  |
+| Kernel verifier         | Rejects unsafe BPF programs                                                                                                                                                                                                                                                                                                                   |
+| Runtime guards          | Duration, output rate, output size, map keys, probe count, concurrency (defaults below)                                                                                                                                                                                                                                                       |
+| Human confirmation      | You see the exact script and warnings (including hot libc symbol warnings: `uprobe`/`uretprobe` can inspect user-space arguments across processes). The API stores the script's SHA-256 and whether it differs from the generated version, and the agent independently re-validates every script before it runs.                              |
 
 **Privileged execution flags are never passed to bpftrace.** Probes cannot execute commands, send signals, or override return values.
 
@@ -434,19 +434,20 @@ CI ([`ci.yml`](.github/workflows/ci.yml)) runs the same checks mock-only on ever
 
 ## Troubleshooting
 
-| Symptom                            | Likely cause                         | Fix                                                                             |
-| ---------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------- |
-| `AGENT_OFFLINE` banner             | Agent not running or wrong token     | Start the agent; check `AGENT_URL` and `AGENT_TOKEN_FILE`                       |
-| `NO_PRIVILEGE`                     | Agent is not root                    | Run with `sudo` or `wsl -u root`                                                |
-| `KERNEL_UNSUPPORTED` / BTF missing | Kernel lacks `CONFIG_DEBUG_INFO_BTF` | Use a newer kernel, an Ubuntu VM, or a custom WSL kernel                        |
-| `PROBE_NOT_FOUND`                  | Tracepoint absent on this kernel     | `bpftrace -l '<pattern>'`; try another recipe or the suggestion shown           |
-| `bpftrace: command not found`      | Not installed                        | `sudo apt install bpftrace`                                                     |
-| Validation fails after edit        | Compile error or blocked construct   | Read the inline error; remove blocked calls such as `system()`                  |
-| `LIMIT_EXCEEDED`                   | Output or duration cap reached       | Aggregate in-kernel (`count()`, `hist()`), narrow the filter, or lower the rate |
-| `LLM_UNAVAILABLE`                  | Missing key or provider down         | Set a provider key and `LLM_MODE=live`, or use recipe-only mode                 |
-| `LLM_ERROR`                        | Provider answered unusably           | Retry later; check provider status; fallback chain engages automatically        |
-| UI not reachable from Windows      | WSL localhost forwarding             | Use `http://localhost:<port>`; try `networkingMode=mirrored` in `.wslconfig`    |
-| Leftover process after a crash     | Interrupted run                      | `pgrep -a bpftrace`; restart the agent (it sweeps stale children on startup)    |
+| Symptom                            | Likely cause                         | Fix                                                                                      |
+| ---------------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `AGENT_OFFLINE`                    | Agent not running or wrong token     | Start the agent; check `AGENT_URL` and `AGENT_TOKEN_FILE`                                |
+| `AGENT_NOT_READY`                  | Probe catalog still loading/failed   | Wait for exponential startup retries (1s–30s); mount debugfs/tracefs or check agent logs |
+| `NO_PRIVILEGE`                     | Agent is not root                    | Run with `sudo` or `wsl -u root`                                                         |
+| `KERNEL_UNSUPPORTED` / BTF missing | Kernel lacks `CONFIG_DEBUG_INFO_BTF` | Use a newer kernel, an Ubuntu VM, or a custom WSL kernel                                 |
+| `PROBE_NOT_FOUND`                  | Tracepoint absent on this kernel     | `bpftrace -l '<pattern>'`; try another recipe or the suggestion shown                    |
+| `bpftrace: command not found`      | Not installed                        | `sudo apt install bpftrace`                                                              |
+| Validation fails after edit        | Compile error or blocked construct   | Read the inline error; remove blocked calls such as `system()`                           |
+| `LIMIT_EXCEEDED`                   | Output or duration cap reached       | Aggregate in-kernel (`count()`, `hist()`), narrow the filter, or lower the rate          |
+| `LLM_UNAVAILABLE`                  | Missing key or provider down         | Set a provider key and `LLM_MODE=live`, or use recipe-only mode                          |
+| `LLM_ERROR`                        | Provider answered unusably           | Retry later; check provider status; fallback chain engages automatically                 |
+| UI not reachable from Windows      | WSL localhost forwarding             | Use `http://localhost:<port>`; try `networkingMode=mirrored` in `.wslconfig`             |
+| Leftover process after a crash     | Interrupted run                      | `pgrep -a bpftrace`; restart the agent (it sweeps stale children on startup)             |
 
 More detail: [`docs/environment.md`](docs/environment.md).
 
