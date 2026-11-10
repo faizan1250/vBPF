@@ -3,6 +3,7 @@ import {
   type LlmClient,
   type LlmDetailedResult,
   type LlmOutput,
+  type LlmUsage,
 } from "./llm.js";
 
 // Live OpenAI-compatible LLM client with ordered provider fallback.
@@ -122,11 +123,92 @@ export function validateBaseUrl(
   };
 }
 
-interface ChainLogger {
+export interface ChainLogger {
   warn: (message: string) => void;
+  info?: (obj: Record<string, unknown>, msg?: string) => void;
 }
 
-const NOOP_LOGGER: ChainLogger = { warn: () => {} };
+const NOOP_LOGGER: ChainLogger = {
+  warn: () => {},
+  info: () => {},
+};
+
+/** Per-call outcome taxonomy for logs (finer than the fallback kinds). */
+export type LlmCallOutcome =
+  | "ok"
+  | "rate_limited"
+  | "auth"
+  | "bad_request"
+  | "server"
+  | "timeout"
+  | "too_large"
+  | "redirect"
+  | "output_invalid";
+
+/** Fields for the one-info-per-call log line. No prompt/response/keys. */
+export interface LlmCallLog {
+  provider: string;
+  model: string;
+  key_index: number;
+  status: number;
+  outcome: LlmCallOutcome;
+  latency_ms: number;
+  prompt_chars: number;
+  usage?: LlmUsage;
+  error_name?: string;
+  error?: string;
+}
+
+function outcomeForStatus(status: number): LlmCallOutcome {
+  if (status === 429) return "rate_limited";
+  if (status === 401 || status === 403) return "auth";
+  if (status === 0 || (status >= 300 && status < 400)) return "redirect";
+  if (status === 400 || status === 404 || status === 422) return "bad_request";
+  if (status >= 500 && status < 600) return "server";
+  if (status >= 200 && status < 300) return "ok";
+  return "server";
+}
+
+// Single-line, capped message safe for logs (no prompt/response content;
+// callers only pass provider/model-prefixed failure strings).
+function sanitizeErrorMessage(message: string): string {
+  return message
+    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[^ -~]/g, "")
+    .slice(0, 200);
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
+}
+
+/** Numeric usage only; ignores missing or non-numeric provider payloads. */
+export function parseUsage(envelope: unknown): LlmUsage | undefined {
+  if (typeof envelope !== "object" || envelope === null) return undefined;
+  const raw = (envelope as { usage?: unknown }).usage;
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const record = raw as Record<string, unknown>;
+  const out: LlmUsage = {};
+  const promptTokens = record["prompt_tokens"];
+  const completionTokens = record["completion_tokens"];
+  if (
+    typeof promptTokens === "number" &&
+    Number.isFinite(promptTokens) &&
+    promptTokens >= 0
+  ) {
+    out.prompt_tokens = Math.floor(promptTokens);
+  }
+  if (
+    typeof completionTokens === "number" &&
+    Number.isFinite(completionTokens) &&
+    completionTokens >= 0
+  ) {
+    out.completion_tokens = Math.floor(completionTokens);
+  }
+  return out.prompt_tokens !== undefined || out.completion_tokens !== undefined
+    ? out
+    : undefined;
+}
 
 const PRESETS: Record<string, ProviderPreset> = {
   groq: { baseUrl: "https://api.groq.com/openai/v1", needsKey: true },
@@ -280,7 +362,7 @@ function isConfigured(p: ProviderRuntime): boolean {
 }
 
 type ProviderOutcome =
-  | { ok: true; output: LlmOutput; model: string }
+  | { ok: true; output: LlmOutput; model: string; usage?: LlmUsage }
   | { ok: false; kind: "auth"; message: string }
   | { ok: false; kind: "rate"; message: string; cooldownMs: number }
   | { ok: false; kind: "model" | "provider"; message: string };
@@ -353,6 +435,8 @@ function classifyResponse(
 /**
  * Single request path shared by generation and explain: POST the payload,
  * classify the status, then read the capped body. Callers only parse `text`.
+ * Returns the HTTP status (0 when no response) and a log-ready outcome so
+ * callers emit one info line without touching prompt/response/keys.
  */
 async function requestChat(
   fetchFn: typeof fetch,
@@ -363,7 +447,14 @@ async function requestChat(
   payload: ChatCompletionPayload,
   opts: { timeoutMs: number; maxBodyBytes: number },
 ): Promise<
-  { ok: true; text: string } | { ok: false; failure: TransportFailure }
+  | { ok: true; text: string; status: number }
+  | {
+      ok: false;
+      failure: TransportFailure;
+      status: number;
+      outcome: LlmCallOutcome;
+      errorName?: string;
+    }
 > {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs);
@@ -382,6 +473,7 @@ async function requestChat(
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : "request failed";
+    const outcome: LlmCallOutcome = isAbortError(err) ? "timeout" : "server";
     return {
       ok: false,
       failure: {
@@ -389,19 +481,35 @@ async function requestChat(
         kind: "provider",
         message: `${providerName}/${model}: ${reason}`,
       },
+      status: 0,
+      outcome,
+      ...(err instanceof Error ? { errorName: err.name } : {}),
     };
   } finally {
     clearTimeout(timer);
   }
 
   const failure = classifyResponse(providerName, model, res, Date.now());
-  if (failure !== null) return { ok: false, failure };
+  if (failure !== null) {
+    return {
+      ok: false,
+      failure,
+      status: res.status,
+      outcome: outcomeForStatus(res.status),
+    };
+  }
 
   try {
     const text = await readCappedText(res, opts.maxBodyBytes);
-    return { ok: true, text };
+    return { ok: true, text, status: res.status };
   } catch (err) {
     const reason = err instanceof Error ? err.message : "unreadable body";
+    const capped = reason.includes("byte cap");
+    const outcome: LlmCallOutcome = isAbortError(err)
+      ? "timeout"
+      : capped
+        ? "too_large"
+        : "server";
     return {
       ok: false,
       failure: {
@@ -409,6 +517,9 @@ async function requestChat(
         kind: "provider",
         message: `${providerName}/${model}: ${reason}`,
       },
+      status: res.status,
+      outcome,
+      ...(err instanceof Error ? { errorName: err.name } : {}),
     };
   }
 }
@@ -516,11 +627,13 @@ export class LiveLlmChain implements LlmClient {
   private readonly timeoutMs: number;
   private readonly maxBodyBytes: number;
   private readonly semaphore: Semaphore;
+  private readonly logger: ChainLogger;
   private attribution: string;
 
   constructor(opts: ChainOptions = {}) {
     const env = opts.env ?? process.env;
     const logger = opts.logger ?? NOOP_LOGGER;
+    this.logger = logger;
     warnDeprecatedGenericModel(logger);
     const names = parseChain(opts.chain, env);
     this.fetchFn = opts.fetchFn ?? fetch;
@@ -551,6 +664,31 @@ export class LiveLlmChain implements LlmClient {
       first === undefined
         ? "live/unconfigured"
         : `${first.name}/${first.models[0] ?? ""}`;
+    this.logger.info?.(
+      {
+        mode: "live",
+        providers: this.providers.map((p) => ({
+          name: p.name,
+          models: [...p.models],
+          keys: p.keys.length,
+        })),
+      },
+      "live llm chain ready",
+    );
+  }
+
+  /** One info line per provider call; never prompt/response/headers/keys. */
+  private logCall(fields: LlmCallLog): void {
+    const { usage, error_name, error, ...rest } = fields;
+    this.logger.info?.(
+      {
+        ...rest,
+        ...(usage !== undefined ? { usage } : {}),
+        ...(error_name !== undefined ? { error_name } : {}),
+        ...(error !== undefined ? { error } : {}),
+      },
+      "live llm call",
+    );
   }
 
   get model(): string {
@@ -623,7 +761,11 @@ export class LiveLlmChain implements LlmClient {
       if (outcome.ok) {
         const attribution = `${p.name}/${outcome.model}`;
         this.attribution = attribution;
-        return { output: outcome.output, model: attribution };
+        return {
+          output: outcome.output,
+          model: attribution,
+          ...(outcome.usage !== undefined ? { usage: outcome.usage } : {}),
+        };
       }
       if (outcome.kind === "rate") cooled += 1;
       last = outcome.message;
@@ -659,7 +801,7 @@ export class LiveLlmChain implements LlmClient {
           message: `${p.name}: all keys rejected, no usable key left`,
         };
       }
-      const outcome = await this.attemptModels(p, key, prompt);
+      const outcome = await this.attemptModels(p, key, keyIndex, prompt);
       if (outcome.ok || outcome.kind !== "auth") {
         if (!outcome.ok && outcome.kind === "rate") {
           p.cooldownUntil = Date.now() + outcome.cooldownMs;
@@ -681,6 +823,7 @@ export class LiveLlmChain implements LlmClient {
   private async attemptModels(
     p: ProviderRuntime,
     key: string | undefined,
+    keyIndex: number,
     prompt: string,
   ): Promise<ProviderOutcome> {
     let last: ProviderOutcome = {
@@ -689,7 +832,7 @@ export class LiveLlmChain implements LlmClient {
       message: `${p.name}: no model configured`,
     };
     for (const model of p.models) {
-      const outcome = await this.postChat(p, key, model, prompt);
+      const outcome = await this.postChat(p, key, keyIndex, model, prompt);
       if (outcome.ok) return outcome;
       last = outcome;
       // 401/403 (rotate key) and 429 (cool provider) are decided by the
@@ -756,7 +899,7 @@ export class LiveLlmChain implements LlmClient {
           message: `${p.name}: all keys rejected, no usable key left`,
         };
       }
-      const outcome = await this.attemptExplainModels(p, key, script);
+      const outcome = await this.attemptExplainModels(p, key, keyIndex, script);
       if (outcome.ok || outcome.kind !== "auth") {
         if (!outcome.ok && outcome.kind === "rate") {
           p.cooldownUntil = Date.now() + outcome.cooldownMs;
@@ -778,6 +921,7 @@ export class LiveLlmChain implements LlmClient {
   private async attemptExplainModels(
     p: ProviderRuntime,
     key: string | undefined,
+    keyIndex: number,
     script: string,
   ): Promise<ExplainOutcome> {
     let last: ExplainOutcome = {
@@ -786,7 +930,7 @@ export class LiveLlmChain implements LlmClient {
       message: `${p.name}: no model configured`,
     };
     for (const model of p.models) {
-      const outcome = await this.postExplain(p, key, model, script);
+      const outcome = await this.postExplain(p, key, keyIndex, model, script);
       if (outcome.ok) return outcome;
       last = outcome;
       if (outcome.kind === "auth" || outcome.kind === "provider")
@@ -798,9 +942,12 @@ export class LiveLlmChain implements LlmClient {
   private async postExplain(
     p: ProviderRuntime,
     key: string | undefined,
+    keyIndex: number,
     model: string,
     script: string,
   ): Promise<ExplainOutcome> {
+    const sent = script.slice(0, LIVE_MAX_PROMPT_CHARS);
+    const started = Date.now();
     const result = await requestChat(
       this.fetchFn,
       p.name,
@@ -811,27 +958,68 @@ export class LiveLlmChain implements LlmClient {
         model,
         messages: [
           { role: "system", content: EXPLAIN_SYSTEM },
-          { role: "user", content: script.slice(0, LIVE_MAX_PROMPT_CHARS) },
+          { role: "user", content: sent },
         ],
         temperature: 0.2,
         max_tokens: 600,
       },
       { timeoutMs: this.timeoutMs, maxBodyBytes: this.maxBodyBytes },
     );
-    if (!result.ok) return result.failure;
+    const latency_ms = Date.now() - started;
+    if (!result.ok) {
+      this.logCall({
+        provider: p.name,
+        model,
+        key_index: keyIndex,
+        status: result.status,
+        outcome: result.outcome,
+        latency_ms,
+        prompt_chars: sent.length,
+        ...(result.errorName !== undefined
+          ? { error_name: result.errorName }
+          : {}),
+        error: sanitizeErrorMessage(result.failure.message),
+      });
+      return result.failure;
+    }
 
     try {
       const envelope = JSON.parse(result.text) as {
         choices?: Array<{ message?: { content?: unknown } }>;
+        usage?: unknown;
       };
+      const usage = parseUsage(envelope);
       const content = envelope.choices?.[0]?.message?.content;
       if (typeof content !== "string" || content.trim() === "") {
+        this.logCall({
+          provider: p.name,
+          model,
+          key_index: keyIndex,
+          status: result.status,
+          outcome: "output_invalid",
+          latency_ms,
+          prompt_chars: sent.length,
+          ...(usage !== undefined ? { usage } : {}),
+          error: sanitizeErrorMessage(
+            `${p.name}/${model}: missing choices[0].message.content`,
+          ),
+        });
         return {
           ok: false,
           kind: "model",
           message: `${p.name}/${model}: missing choices[0].message.content`,
         };
       }
+      this.logCall({
+        provider: p.name,
+        model,
+        key_index: keyIndex,
+        status: result.status,
+        outcome: "ok",
+        latency_ms,
+        prompt_chars: sent.length,
+        ...(usage !== undefined ? { usage } : {}),
+      });
       return {
         ok: true,
         explanation: content.trim().slice(0, EXPLAIN_MAX_CHARS),
@@ -839,6 +1027,17 @@ export class LiveLlmChain implements LlmClient {
       };
     } catch (err) {
       const reason = err instanceof Error ? err.message : "invalid payload";
+      this.logCall({
+        provider: p.name,
+        model,
+        key_index: keyIndex,
+        status: result.status,
+        outcome: "output_invalid",
+        latency_ms,
+        prompt_chars: sent.length,
+        ...(err instanceof Error ? { error_name: err.name } : {}),
+        error: sanitizeErrorMessage(`${p.name}/${model}: ${reason}`),
+      });
       return {
         ok: false,
         kind: "model",
@@ -850,9 +1049,12 @@ export class LiveLlmChain implements LlmClient {
   private async postChat(
     p: ProviderRuntime,
     key: string | undefined,
+    keyIndex: number,
     model: string,
     prompt: string,
   ): Promise<ProviderOutcome> {
+    const sent = prompt.slice(0, LIVE_MAX_PROMPT_CHARS);
+    const started = Date.now();
     const result = await requestChat(
       this.fetchFn,
       p.name,
@@ -865,7 +1067,7 @@ export class LiveLlmChain implements LlmClient {
           { role: "system", content: JSON_INSTRUCTION },
           {
             role: "user",
-            content: prompt.slice(0, LIVE_MAX_PROMPT_CHARS),
+            content: sent,
           },
         ],
         response_format: { type: "json_object" },
@@ -874,15 +1076,46 @@ export class LiveLlmChain implements LlmClient {
       },
       { timeoutMs: this.timeoutMs, maxBodyBytes: this.maxBodyBytes },
     );
-    if (!result.ok) return result.failure;
+    const latency_ms = Date.now() - started;
+    if (!result.ok) {
+      this.logCall({
+        provider: p.name,
+        model,
+        key_index: keyIndex,
+        status: result.status,
+        outcome: result.outcome,
+        latency_ms,
+        prompt_chars: sent.length,
+        ...(result.errorName !== undefined
+          ? { error_name: result.errorName }
+          : {}),
+        error: sanitizeErrorMessage(result.failure.message),
+      });
+      return result.failure;
+    }
 
     let content: unknown;
     try {
       const envelope = JSON.parse(result.text) as {
         choices?: Array<{ message?: { content?: unknown } }>;
+        usage?: unknown;
       };
+      const usage = parseUsage(envelope);
       content = envelope.choices?.[0]?.message?.content;
       if (content === undefined) {
+        this.logCall({
+          provider: p.name,
+          model,
+          key_index: keyIndex,
+          status: result.status,
+          outcome: "output_invalid",
+          latency_ms,
+          prompt_chars: sent.length,
+          ...(usage !== undefined ? { usage } : {}),
+          error: sanitizeErrorMessage(
+            `${p.name}/${model}: missing choices[0].message.content`,
+          ),
+        });
         return {
           ok: false,
           kind: "provider",
@@ -890,9 +1123,35 @@ export class LiveLlmChain implements LlmClient {
         };
       }
       const parsed = LlmOutputSchema.parse(extractJsonPayload(content));
-      return { ok: true, output: parsed, model };
+      this.logCall({
+        provider: p.name,
+        model,
+        key_index: keyIndex,
+        status: result.status,
+        outcome: "ok",
+        latency_ms,
+        prompt_chars: sent.length,
+        ...(usage !== undefined ? { usage } : {}),
+      });
+      return {
+        ok: true,
+        output: parsed,
+        model,
+        ...(usage !== undefined ? { usage } : {}),
+      };
     } catch (err) {
       const reason = err instanceof Error ? err.message : "invalid payload";
+      this.logCall({
+        provider: p.name,
+        model,
+        key_index: keyIndex,
+        status: result.status,
+        outcome: "output_invalid",
+        latency_ms,
+        prompt_chars: sent.length,
+        ...(err instanceof Error ? { error_name: err.name } : {}),
+        error: sanitizeErrorMessage(`${p.name}/${model}: ${reason}`),
+      });
       return {
         ok: false,
         kind: "model",

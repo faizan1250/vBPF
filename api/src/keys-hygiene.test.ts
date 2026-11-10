@@ -150,3 +150,61 @@ describe("keys hygiene", () => {
     expect(captured).not.toContain(cred);
   });
 });
+
+describe("live-llm log hygiene", () => {
+  it("per-call logs carry fields but no key, prompt, or response text", async () => {
+    const promptSentinel = `PROMPT-SENTINEL-${"p".repeat(8)}`;
+    const responseSentinel = `RESPONSE-SENTINEL-${"r".repeat(8)}`;
+    const content = JSON.stringify({
+      script: "BEGIN { @x = count(); }\n",
+      chart_type: "events",
+      explanation: `minimal probe ${responseSentinel}`,
+      duration_s: 10,
+      refusal: null,
+    });
+    const stubFetch = (async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content } }],
+          usage: { prompt_tokens: 11, completion_tokens: 22 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as typeof fetch;
+    const stubbed = await buildApp({
+      agentUrl: fakeUrl,
+      tokenFile,
+      dbPath: ":memory:",
+      recipesDir,
+      webOrigin: "http://localhost:5173",
+      llmMode: "live",
+      llmChain: "groq",
+      llmEnv: {
+        LLM_PROVIDER_CHAIN: "groq",
+        LLM_GROQ_MODEL: "fake-model",
+        GROQ_API_KEY: FAKE_GROQ_KEY,
+      } as NodeJS.ProcessEnv,
+      llmFetch: stubFetch,
+    });
+    const addr = await stubbed.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      await fetch(`${addr.replace("[::1]", "127.0.0.1")}/api/generate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          prompt: `Which processes open files? ${promptSentinel}`,
+        }),
+      });
+    } finally {
+      await stubbed.close();
+    }
+    await new Promise((r) => setTimeout(r, 250));
+    expect(captured).toContain("live llm chain ready");
+    expect(captured).toContain("live llm call");
+    expect(captured).toContain('"outcome":"ok"');
+    expect(captured).toContain('"prompt_tokens":11');
+    for (const secret of [...SECRETS, promptSentinel, responseSentinel]) {
+      expect(captured).not.toContain(secret);
+      expect(captured).not.toContain(secret.slice(0, 16));
+    }
+  });
+});

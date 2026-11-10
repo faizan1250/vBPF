@@ -301,15 +301,20 @@ export async function buildApp(
   );
 
   // Live chain is built once and shared: key-disable and cooldown state
-  // persist across requests for the process lifetime.
+  // persist across requests for the process lifetime. Logs go through a
+  // request-independent child so per-call lines carry the component field.
   const llmMode = opts.llmMode ?? "mock";
+  const liveLogger = app.log.child({ component: "live-llm" });
   const liveChain =
     llmMode === "live"
       ? new LiveLlmChain({
           env: opts.llmEnv ?? process.env,
           fetchFn: opts.llmFetch,
           chain: opts.llmChain,
-          logger: { warn: (msg) => app.log.warn(msg) },
+          logger: {
+            warn: (msg) => liveLogger.warn(msg),
+            info: (obj, msg) => liveLogger.info(obj, msg ?? "live llm call"),
+          },
         })
       : null;
   const liveLlm = liveChain !== null && liveChain.configured ? liveChain : null;

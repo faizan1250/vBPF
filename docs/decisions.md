@@ -1,5 +1,40 @@
 # Decisions
 
+## R2-04 Slice 4: per-call logs and token usage (2026-11-10)
+
+- **Optional logger ctor param, pino child in `server.ts`.**
+  `LiveLlmChain` accepts `ChainLogger { warn; info? }` (default no-op, so
+  tests stay quiet). `server.ts` builds `app.log.child({ component:
+"live-llm" })` once and adapts it (`warn`/`info` forward to the child),
+  so startup and per-call lines go through pino with the component field
+  instead of a bare `{ warn }` wrapper.
+- **One info line per provider call.** `postChat`/`postExplain` log via
+  `logCall` with exactly `provider`, `model`, `key_index` (number, `-1`
+  when keyless, never the key), `status` (HTTP code, `0` with no
+  response), `outcome` (`ok`, `rate_limited`, `auth`, `bad_request`,
+  `server`, `timeout`, `too_large`, `redirect`, `output_invalid`),
+  `latency_ms`, `prompt_chars` (sent length), `usage` (when reported),
+  plus `error` (provider/model-prefixed message, single-line, capped at
+  200 chars) and `error_name` on failures. Never prompt/response text,
+  headers, keys, or raw error objects. Fallback behavior (`auth` rotates
+  the key, `429` cools the provider, `4xx` tries the next model) is
+  unchanged; the log taxonomy is finer than the returned kinds.
+- **Startup info line.** One `info` at construction: `mode: "live"` plus
+  per-provider `name`, `models`, and key count only.
+- **Usage parsing.** `parseUsage()` reads numeric `usage.prompt_tokens` /
+  `usage.completion_tokens` (floor, ignore garbage) and exposes them as
+  optional `LlmDetailedResult.usage`. `runGenerate` forwards each
+  attempt's usage through an optional `onUsage` callback (no signature
+  change for `server.ts`); the eval sums it across retries into
+  `EvalCaseResult.usage` and `EvalSummary.tokens_real_total`, rendering
+  `| tokens real total |` when nonzero while keeping the approx total
+  labelled "approx". No DB migration (D-18); storage stays logs + eval
+  report only.
+- **Verified:** `tsc --noEmit` clean, eslint/prettier clean, full api
+  suite 144/144 (10 new: usage parse, per-call fields, key-index
+  rotation, 8-outcome mapping, startup line, eval real/summed/approx
+  paths, pino-capture hygiene in `keys-hygiene.test.ts`).
+
 ## R2-04 Slice 3: remove generic model fallback (2026-11-10)
 
 - **`discoverModel()` reads only `LLM_<NAME>_MODEL`.** The generic

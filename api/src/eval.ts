@@ -12,7 +12,7 @@ import {
   makeMockLlm,
   runGenerate,
 } from "./generate.js";
-import type { LlmClient } from "./llm.js";
+import type { LlmClient, LlmUsage } from "./llm.js";
 import { loadRecipes } from "./recipes.js";
 
 export const EvalViewSchema = z.enum([
@@ -85,6 +85,7 @@ export interface EvalCaseResult {
   first_try: boolean;
   latency_ms: number;
   tokens_approx: number;
+  usage?: LlmUsage;
   errors: string[];
 }
 
@@ -137,6 +138,11 @@ export async function runEvalCase(
   let chart: string | null = null;
   let script = "";
   let errors: string[] = [];
+  // Real provider usage summed across attempts; absent for mock/stub LLMs.
+  let realPrompt = 0;
+  let realCompletion = 0;
+  let hasRealPrompt = false;
+  let hasRealCompletion = false;
   try {
     const result = await runGenerate(entry.prompt, {
       deps: {
@@ -153,6 +159,16 @@ export async function runEvalCase(
         ...(opts.probeArgsFn === undefined
           ? {}
           : { probeArgsFn: opts.probeArgsFn }),
+      },
+      onUsage: (usage) => {
+        if (typeof usage.prompt_tokens === "number") {
+          hasRealPrompt = true;
+          realPrompt += usage.prompt_tokens;
+        }
+        if (typeof usage.completion_tokens === "number") {
+          hasRealCompletion = true;
+          realCompletion += usage.completion_tokens;
+        }
       },
     });
     ok = true;
@@ -193,6 +209,14 @@ export async function runEvalCase(
     first_try: ok && attempts === 1,
     latency_ms,
     tokens_approx: approxTokens(entry.prompt + script),
+    ...(hasRealPrompt || hasRealCompletion
+      ? {
+          usage: {
+            ...(hasRealPrompt ? { prompt_tokens: realPrompt } : {}),
+            ...(hasRealCompletion ? { completion_tokens: realCompletion } : {}),
+          },
+        }
+      : {}),
     errors,
   };
 }
@@ -211,6 +235,7 @@ export interface EvalSummary {
   latency_avg_ms: number;
   latency_p50_ms: number;
   tokens_approx_total: number;
+  tokens_real_total: number;
   by_category: Record<
     string,
     { total: number; ok: number; refusal_correct: number; view_match: number }
@@ -254,6 +279,11 @@ export function summarize(cases: EvalCaseResult[]): EvalSummary {
     latency_p50_ms:
       lat.length === 0 ? 0 : (lat[Math.floor(lat.length / 2)] ?? 0),
     tokens_approx_total: cases.reduce((n, c) => n + c.tokens_approx, 0),
+    tokens_real_total: cases.reduce(
+      (n, c) =>
+        n + (c.usage?.prompt_tokens ?? 0) + (c.usage?.completion_tokens ?? 0),
+      0,
+    ),
     by_category,
   };
 }
@@ -349,12 +379,14 @@ export function renderMarkdown(
       : `Mode: mock-only (model=${model}). No secrets, no root, no bpftrace.`;
   const producedLine =
     "produced-output is SKIP: scripts are compile-validated, never executed.";
+  const tokensLine =
+    "tokens are real usage when the provider reports it, else approximate (chars/4).";
   const lines = [
     `# vBPF eval report - ${date}`,
     "",
     modeLine,
     producedLine,
-    "tokens are approximate (chars/4); the mock LLM reports no usage.",
+    tokensLine,
     "",
     "## Summary",
     "",
@@ -369,6 +401,9 @@ export function renderMarkdown(
     `| probe-match | ${summary.probe_match}/${summary.probe_match_denominator} |`,
     `| latency avg / p50 (ms) | ${summary.latency_avg_ms} / ${summary.latency_p50_ms} |`,
     `| tokens approx total | ${summary.tokens_approx_total} |`,
+    ...(summary.tokens_real_total > 0
+      ? [`| tokens real total | ${summary.tokens_real_total} |`]
+      : []),
     "",
     "## By category",
     "",
