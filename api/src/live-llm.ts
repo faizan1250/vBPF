@@ -8,9 +8,9 @@ import {
 // Live OpenAI-compatible LLM client with ordered provider fallback.
 //
 // Model identifiers are never hardcoded here: the primary model comes from
-// LLM_<NAME>_MODEL (or the generic LLM_MODEL), fallbacks from
-// LLM_<NAME>_FALLBACK_MODELS. Keys are discovered from the environment and
-// never logged; the health snapshot exposes only counts.
+// LLM_<NAME>_MODEL only (generic LLM_MODEL is deprecated and ignored),
+// fallbacks from LLM_<NAME>_FALLBACK_MODELS. Keys are discovered from the
+// environment and never logged; the health snapshot exposes only counts.
 
 // Caps for outbound traffic. A single request is also bounded by
 // LIVE_TIMEOUT_MS; concurrent generations share one semaphore per chain.
@@ -221,15 +221,31 @@ export function discoverFallbackModels(
     .filter((s) => s !== "");
 }
 
-/** Primary model: LLM_<NAME>_MODEL, else the generic LLM_MODEL. */
+let deprecatedGenericModelWarned = false;
+
+/** Warn once per process when the deprecated generic LLM_MODEL is set in live mode. */
+export function warnDeprecatedGenericModel(logger: ChainLogger): void {
+  if (deprecatedGenericModelWarned) return;
+  const generic = process.env["LLM_MODEL"]?.trim() ?? "";
+  const mode = process.env["LLM_MODE"]?.trim() ?? "";
+  if (generic !== "" && mode === "live") {
+    deprecatedGenericModelWarned = true;
+    logger.warn("LLM_MODEL is deprecated and ignored; use LLM_<NAME>_MODEL");
+  }
+}
+
+/** Test-only reset for the once-per-process deprecation warning. */
+export function resetDeprecatedGenericModelWarnForTests(): void {
+  deprecatedGenericModelWarned = false;
+}
+
+/** Primary model: LLM_<NAME>_MODEL only; without it the provider is unconfigured. */
 export function discoverModel(
   provider: string,
   env: NodeJS.ProcessEnv,
 ): string | null {
   const specific = env[`LLM_${provider.toUpperCase()}_MODEL`]?.trim();
-  if (specific !== undefined && specific !== "") return specific;
-  const generic = env["LLM_MODEL"]?.trim();
-  return generic === undefined || generic === "" ? null : generic;
+  return specific === undefined || specific === "" ? null : specific;
 }
 
 interface ProviderRuntime {
@@ -505,6 +521,7 @@ export class LiveLlmChain implements LlmClient {
   constructor(opts: ChainOptions = {}) {
     const env = opts.env ?? process.env;
     const logger = opts.logger ?? NOOP_LOGGER;
+    warnDeprecatedGenericModel(logger);
     const names = parseChain(opts.chain, env);
     this.fetchFn = opts.fetchFn ?? fetch;
     this.timeoutMs = opts.timeoutMs ?? LIVE_TIMEOUT_MS;

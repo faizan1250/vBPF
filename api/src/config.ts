@@ -9,7 +9,8 @@ const EnvSchema = z
     WEB_ORIGIN: z.string().min(1).default("http://localhost:5173"),
     DATABASE_PATH: z.string().min(1).default("./run/api.sqlite3"),
     RECIPES_DIR: z.string().min(1).default("./recipes"),
-    LLM_MODEL: z.string().min(1).default("claude-sonnet-5-5"),
+    // Deprecated: mock-mode label only, ignored by the live chain.
+    LLM_MODEL: z.string().min(1).default("mock"),
     LLM_MODE: z.enum(["mock", "live"]).default("mock"),
     LLM_PROVIDER_CHAIN: z.string().min(1).default("groq"),
   })
