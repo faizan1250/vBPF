@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -52,6 +53,7 @@ type Server struct {
 	catalogRetryBase  time.Duration
 	catalogRetryMax   time.Duration
 	readHeaderTimeout time.Duration
+	idleTimeout       time.Duration
 	health            *HealthProvider
 	dryRun            DryRunFunc
 	probeArgs         ProbeArgsFunc
@@ -112,6 +114,7 @@ func New(cfg Config) (*Server, error) {
 		catalogRetryBase:  cfg.CatalogRetryBase,
 		catalogRetryMax:   cfg.CatalogRetryMax,
 		readHeaderTimeout: defaultReadHeaderTimeout,
+		idleTimeout:       defaultIdleTimeout,
 		health:            health,
 		dryRun:            dryRun,
 		probeArgs:         probeArgs,
@@ -191,11 +194,15 @@ func (s *Server) newHTTPServer() *http.Server {
 	if rht <= 0 {
 		rht = defaultReadHeaderTimeout
 	}
+	it := s.idleTimeout
+	if it <= 0 {
+		it = defaultIdleTimeout
+	}
 	return &http.Server{
 		Addr:              s.addr,
 		Handler:           s.mux,
 		ReadHeaderTimeout: rht,
-		IdleTimeout:       defaultIdleTimeout,
+		IdleTimeout:       it,
 		MaxHeaderBytes:    defaultMaxHeaderBytes,
 	}
 }
@@ -295,8 +302,8 @@ func decodeStrictJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, ds
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
 	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil {
+	var raw json.RawMessage
+	if err := dec.Decode(&raw); err != nil {
 		return err
 	}
 	var extra json.RawMessage
@@ -306,7 +313,13 @@ func decodeStrictJSON(w http.ResponseWriter, r *http.Request, maxBytes int64, ds
 		}
 		return err
 	}
-	return nil
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return errors.New("request body must be a JSON object")
+	}
+	inner := json.NewDecoder(bytes.NewReader(trimmed))
+	inner.DisallowUnknownFields()
+	return inner.Decode(dst)
 }
 
 func writeDecodeError(w http.ResponseWriter, err error) {

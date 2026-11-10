@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -464,6 +465,68 @@ func TestServerHeaderLimit431AndSlowHeaderTimeout(t *testing.T) {
 	}
 }
 
+func TestServerIdleKeepAliveTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+
+	s := testServer(t, Config{Addr: addr})
+	// Keep ReadHeaderTimeout at 5s so only IdleTimeout can expire the idle keep-alive socket.
+	s.idleTimeout = 80 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- s.ListenAndServe(ctx)
+	}()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	require.Eventually(t, func() bool {
+		req, err := http.NewRequest("GET", "http://"+addr+"/health", nil)
+		if err != nil {
+			return false
+		}
+		req.Header.Set("Authorization", "Bearer "+s.Token())
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 2*time.Second, 10*time.Millisecond)
+
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	_, err = io.WriteString(conn, "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer "+s.Token()+"\r\n\r\n")
+	require.NoError(t, err)
+
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	require.NoError(t, err)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, rerr := br.ReadByte()
+	require.Error(t, rerr)
+	if ne, ok := rerr.(net.Error); ok {
+		require.False(t, ne.Timeout(), "server did not close idle keep-alive connection before client deadline: %v", rerr)
+	}
+
+	cancel()
+	select {
+	case err := <-serveDone:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("ListenAndServe did not stop cleanly")
+	}
+}
+
 func TestStrictJSONDecoding(t *testing.T) {
 	oversizedField := fmt.Sprintf(`{"script":%q}`, strings.Repeat("x", maxRequestBodyBytes+100))
 	oversizedTrailing := `{"script":"BEGIN {}"}` + strings.Repeat(" ", maxRequestBodyBytes+100)
@@ -480,6 +543,12 @@ func TestStrictJSONDecoding(t *testing.T) {
 		{name: "empty body", body: ""},
 		{name: "whitespace body", body: "   \n\t "},
 		{name: "nil body", nilB: true},
+		{name: "bare null", body: "null"},
+		{name: "padded null", body: "  null\n"},
+		{name: "json array", body: "[]"},
+		{name: "json number", body: "123"},
+		{name: "json bool", body: "true"},
+		{name: "json string", body: `"BEGIN {}"`},
 		{name: "syntax error", body: `{"script":`},
 		{name: "oversized body in field", body: oversizedField},
 		{name: "oversized trailing whitespace", body: oversizedTrailing},
