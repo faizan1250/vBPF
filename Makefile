@@ -61,5 +61,5 @@ recipes-check:
 # Dependency vulnerability scan (Go). No root needed; skips when agent/ is
 # absent or govulncheck is not installed. CI runs this on every push/PR.
 vuln:
-	@if [ -d agent ]; then cd agent && { command -v govulncheck >/dev/null || { echo "SKIP: govulncheck not installed (go install golang.org/x/vuln/cmd/govulncheck@latest)"; exit 0; }; govulncheck ./...; }; \
+	@if [ -d agent ]; then cd agent && { command -v govulncheck >/dev/null || { echo "SKIP: govulncheck not installed (go install golang.org/x/vuln/cmd/govulncheck@v1.9.0)"; exit 0; }; govulncheck ./...; }; \
 		else echo "SKIP: no agent/ yet"; fi
