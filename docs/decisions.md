@@ -1,5 +1,24 @@
 # Decisions
 
+## R2-04 Slice 1: shared live-LLM transport (2026-11-10)
+
+- **One request path.** `postChat()` and `postExplain()` duplicated fetch,
+  redirect/status handling, and body-cap reads. Extracted `requestChat()` +
+  `classifyResponse()` in `api/src/live-llm.ts`, used by both; the two
+  callers now only build their payload and parse `text`. Error strings,
+  status mapping, key-rotation/cooldown behavior, timeouts, and caps are
+  byte-identical to before.
+- **Timer lifecycle untouched.** `clearTimeout` still runs when `fetch`
+  resolves (headers received). Spanning headers + body and the total
+  deadline belong to R2-03; this slice intentionally changes no timing.
+- **Public surface stable.** `parseChain`, `discoverKeys`,
+  `discoverFallbackModels`, `discoverModel`, `cooldownMsForRetryAfter`,
+  constants, error classes, and `LiveLlmChain` shape unchanged; no version
+  bump (target stays 0.3.0). New `TransportFailure` / payload types are
+  module-private.
+- **Verified:** `tsc --noEmit` clean, prettier/eslint clean,
+  `live-llm.test.ts` 19/19 unchanged, full api suite 121/121.
+
 ## R-26: Release preparation v0.2.0, local only (2026-11-10)
 
 - **Version bumps: 4 `package.json` files to `0.2.0`** (root, `api`, `web`,
