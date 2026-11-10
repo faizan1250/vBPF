@@ -1,5 +1,12 @@
 # Decisions
 
+## R-18: Bind runs to confirmed generations (2026-11-10)
+
+- **Unknown `generation_id` rejected before the agent call (404 `NOT_FOUND`).** Failing fast avoids occupying the agent's single-run slot on bad input. The agent still independently re-validates every script on run creation; the binding never bypasses it (covered by a `bad-probe` proxy test).
+- **`edited` is exact string inequality** (`script !== generation.script`). No normalization: any byte difference counts as edited. `script_sha256` is stored but never returned by `GET /api/runs/:id` (per the R-13 exclusion); `generation_id`/`edited` are metadata and are returned.
+- **Migration reuses the existing try/catch `ALTER` pattern** (`generation_id`, `script_sha256`, `edited`), so pre-R-18 database files upgrade in place; fresh databases get `edited` in `CREATE TABLE`. Idempotent, verified by `db.test.ts` against an old-schema file.
+- **UI wiring deferred.** `createRun` still posts script-only; passing the confirmed `generation_id` from the confirm modal is a follow-up, not part of this diff.
+
 ## R-16: Agent WebSocket origin allowlist (2026-11-10)
 
 - **Default deny, explicit allowlist.** `handleStream` passes `Config.AllowedOrigins` to `websocket.Accept` as `OriginPatterns`; empty (the default) refuses every browser `Origin` with 403. Requests without an `Origin` header (server-to-server, like the API relay dial) and same-host origins are always accepted by the library, so the API path keeps working with no change.

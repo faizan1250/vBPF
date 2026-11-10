@@ -30,7 +30,11 @@ export const ExplainResponseSchema = z
   .strict();
 
 export const CreateRunRequestSchema = z
-  .object({ script: ScriptSchema, duration_s: DurationSchema.optional() })
+  .object({
+    script: ScriptSchema,
+    duration_s: DurationSchema.optional(),
+    generation_id: z.string().min(1).max(128).optional(),
+  })
   .strict();
 
 export const CreateRunResponseSchema = z
@@ -62,7 +66,8 @@ export const RunSummarySchema = z
   .strict();
 
 // GET /api/runs/:id: metadata plus the persisted summary. script_text and
-// script_sha256 are deliberately excluded.
+// script_sha256 are deliberately excluded; generation_id/edited expose the
+// R-18 generation binding without leaking script bytes.
 export const GetRunResponseSchema = z
   .object({
     run_id: z.string().min(1),
@@ -70,6 +75,8 @@ export const GetRunResponseSchema = z
     duration_s: DurationSchema,
     started_at: z.number().int().nonnegative(),
     ended_at: z.number().int().nonnegative().nullable(),
+    generation_id: z.string().min(1).max(128).nullable(),
+    edited: z.boolean(),
     summary: RunSummarySchema.nullable(),
   })
   .strict();

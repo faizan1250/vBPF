@@ -535,6 +535,22 @@ export async function buildApp(
         .code(400)
         .send({ error: "--unsafe is forbidden", code: "VALIDATION_FAILED" });
     }
+    // Generation binding resolves before the agent call: an unknown id must
+    // not occupy the agent's single-run slot. The agent still re-validates
+    // the script itself on run creation.
+    const generationId = parsed.data.generation_id ?? null;
+    let edited = false;
+    if (generationId !== null) {
+      const gen = database
+        .prepare("SELECT script FROM generations WHERE id = ?")
+        .get(generationId) as { script: string } | undefined;
+      if (gen === undefined) {
+        return reply
+          .code(404)
+          .send({ error: "unknown generation", code: "NOT_FOUND" });
+      }
+      edited = script !== gen.script;
+    }
     const duration = durationS ?? DEFAULT_DURATION_S;
     let created: { run_id: string; state: string };
     try {
@@ -562,12 +578,14 @@ export async function buildApp(
     try {
       database
         .prepare(
-          "INSERT INTO runs (id, script_sha256, script_text, duration_s, state, started_at) VALUES (?, ?, ?, ?, ?, ?)",
+          "INSERT INTO runs (id, generation_id, script_sha256, script_text, edited, duration_s, state, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .run(
           created.run_id,
+          generationId,
           createHash("sha256").update(script).digest("hex"),
           script,
+          edited ? 1 : 0,
           duration,
           created.state,
           Date.now(),
@@ -623,11 +641,13 @@ export async function buildApp(
     }
     const row = database
       .prepare(
-        "SELECT id, duration_s, state, started_at, ended_at, events_count, bytes, dropped, exit_reason FROM runs WHERE id = ?",
+        "SELECT id, generation_id, edited, duration_s, state, started_at, ended_at, events_count, bytes, dropped, exit_reason FROM runs WHERE id = ?",
       )
       .get(id) as
       | {
           id: string;
+          generation_id: string | null;
+          edited: number;
           duration_s: number;
           state: string;
           started_at: number;
@@ -649,6 +669,8 @@ export async function buildApp(
         duration_s: row.duration_s,
         started_at: row.started_at,
         ended_at: row.ended_at,
+        generation_id: row.generation_id,
+        edited: row.edited === 1,
         summary:
           row.exit_reason === null
             ? null
