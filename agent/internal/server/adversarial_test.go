@@ -18,14 +18,40 @@ import (
 
 func TestClassifyValidationError(t *testing.T) {
 	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{"probe not found: tracepoint:foo:bar"}))
+	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{"probe not found: tracepoint:too many probes:bar"}))
 	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{"ERROR: unknown probe foo"}))
+	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{"ERROR: No such probe: foo"}))
+	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{"stdin:1:1: ERROR: probe not found: foo"}))
 	require.Equal(t, "LIMIT_EXCEEDED", classifyValidationError([]string{"wildcard expands to too many probes: tracepoint:block:item*"}))
+	require.Equal(t, "LIMIT_EXCEEDED", classifyValidationError([]string{"wildcard expands to too many probes: tracepoint:unknown probe:*"}))
+	require.Equal(t, "LIMIT_EXCEEDED", classifyValidationError([]string{"ERROR: too many probes"}))
 	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{"blocked call: system/signal/override/cat are forbidden"}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{`uprobe must target libc or an absolute path: uprobe:rel/"unknown probe":fn`}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{`uprobe must target libc or an absolute path: uprobe:rel/"too many probes":fn`}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{`wildcard too broad: tracepoint:block:"unknown probe":*`}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{`wildcard too broad: tracepoint:block:"too many probes":*`}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{`provider not allowed: "no such probe"`}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{"invalid probe header: missing target for provider profile"}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{"empty script"}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{"script exceeds 8 KB"}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{"no probes found"}))
 	require.Equal(t, "VALIDATION_FAILED", classifyValidationError(nil))
-	// Probe misses win over limit errors when both are present.
+	// Probe misses win over limit errors regardless of order.
 	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{
 		"wildcard expands to too many probes: tracepoint:block:item*",
 		"probe not found: tracepoint:foo:bar",
+	}))
+	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{
+		"probe not found: tracepoint:foo:bar",
+		"wildcard expands to too many probes: tracepoint:block:item*",
+	}))
+	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{
+		"wildcard expands to too many probes: tracepoint:unknown probe:*",
+		"ERROR: unknown probe foo",
+	}))
+	require.Equal(t, "LIMIT_EXCEEDED", classifyValidationError([]string{
+		`uprobe must target libc or an absolute path: uprobe:rel/"unknown probe":fn`,
+		"wildcard expands to too many probes: tracepoint:unknown probe:*",
 	}))
 }
 
@@ -230,4 +256,296 @@ func TestCommentBypassRunsRejectedAndValidRawScriptPreserved(t *testing.T) {
 	gotRun = append([]string(nil), runScripts...)
 	mu.Unlock()
 	require.Equal(t, []string{valid}, gotRun)
+}
+
+func TestStaticValidateRejectsUnlistedProbesAndAliases(t *testing.T) {
+	cat := NewCatalog("", func(ctx context.Context) ([]string, error) {
+		return []string{
+			"BEGIN",
+			"END",
+			"tracepoint:block:block_rq_issue",
+			"kprobe:do_sys_open",
+		}, nil
+	})
+	require.NoError(t, cat.Refresh(context.Background()))
+
+	unlisted := []struct {
+		probe    string
+		provider string
+	}{
+		{"fentry:tcp_connect", "fentry"},
+		{"fexit:tcp_connect", "fexit"},
+		{"kfunc:tcp_connect", "kfunc"},
+		{"kretfunc:tcp_connect", "kretfunc"},
+		{"rawtracepoint:sched_switch", "rawtracepoint"},
+		{"watchpoint:0x1000:4:w", "watchpoint"},
+		{"asyncwatchpoint:0x1000:4:w", "asyncwatchpoint"},
+		{"hardware:cache-misses:1000", "hardware"},
+		{"usdt:/bin/sh:*", "usdt"},
+		{"iter:task", "iter"},
+		{"k:tcp_v4_connect", "k"},
+		{"kr:tcp_v4_connect", "kr"},
+		{"t:syscalls:sys_enter_openat", "t"},
+		{"u:/lib/x86_64-linux-gnu/libc.so.6:malloc", "u"},
+		{"ur:/lib/x86_64-linux-gnu/libc.so.6:malloc", "ur"},
+		{"U:/bin/app:p", "U"},
+		{"p:hz:99", "p"},
+		{"i:s:1", "i"},
+		{"s:cpu-clock:100", "s"},
+		{"h:cache-misses:1000", "h"},
+		{"rt:sched_switch", "rt"},
+		{"f:tcp_connect", "f"},
+		{"fr:tcp_connect", "fr"},
+		{"w:0x1000:4:w", "w"},
+		{"aw:0x1000:4:w", "aw"},
+		{"B", "B"},
+		{"E", "E"},
+		{"B:1", "B"},
+		{"E:1", "E"},
+		{"begin", "begin"},
+		{"end", "end"},
+	}
+
+	for _, tc := range unlisted {
+		t.Run("standalone_"+tc.probe, func(t *testing.T) {
+			_, errs := StaticValidate(tc.probe+" { @x = count(); }", cat)
+			require.NotEmpty(t, errs)
+			require.Contains(t, strings.Join(errs, "; "), "provider not allowed: "+tc.provider)
+			require.Equal(t, "VALIDATION_FAILED", classifyValidationError(errs))
+		})
+		t.Run("piggybacked_block_"+tc.probe, func(t *testing.T) {
+			_, errs := StaticValidate("BEGIN {}\n"+tc.probe+" { @x = count(); }", cat)
+			require.NotEmpty(t, errs)
+			require.Contains(t, strings.Join(errs, "; "), "provider not allowed: "+tc.provider)
+			require.Equal(t, "VALIDATION_FAILED", classifyValidationError(errs))
+		})
+		t.Run("piggybacked_comma_"+tc.probe, func(t *testing.T) {
+			_, errs := StaticValidate("BEGIN, "+tc.probe+" { @x = count(); }", cat)
+			require.NotEmpty(t, errs)
+			require.Contains(t, strings.Join(errs, "; "), "provider not allowed: "+tc.provider)
+			require.Equal(t, "VALIDATION_FAILED", classifyValidationError(errs))
+		})
+	}
+}
+
+func TestStaticValidateHeaderSyntaxAndSpoofing(t *testing.T) {
+	cat := NewCatalog("", func(ctx context.Context) ([]string, error) {
+		return []string{
+			"BEGIN",
+			"END",
+			"tracepoint:block:block_rq_issue",
+			"tracepoint:block:block_rq_complete",
+			"tracepoint:raw_syscalls:sys_enter",
+			"kprobe:do_sys_open",
+			"kretprobe:do_sys_open",
+			"uprobe:/lib/x86_64-linux-gnu/libc.so.6:getaddrinfo",
+			`uprobe:/lib/libc.so.6:"Foo::bar(int, int)"`,
+		}, nil
+	})
+	require.NoError(t, cat.Refresh(context.Background()))
+
+	rejectCases := []struct {
+		name   string
+		script string
+		want   string
+	}{
+		{"config block with spaces", "config = { max_probes = 999; }", "invalid probe header"},
+		{"config block compact", "config={max_probes=999;}", "provider not allowed: config="},
+		{"config block before BEGIN", "config = { max_probes = 999; }\nBEGIN {}", "invalid probe header"},
+		{"macro definition", "macro m() { @x = count(); }", "invalid probe header"},
+		{"macro before BEGIN", "macro m() { @x = count(); }\nBEGIN { m(); }", "invalid probe header"},
+		{"multiline comma mixed", "kprobe:do_sys_open,\nu:./evil:fn { @x = count(); }", "provider not allowed: u"},
+		{"BEGIN with target", "BEGIN:evil {}", "invalid probe header: BEGIN/END cannot have target"},
+		{"END with target", "END:evil {}", "invalid probe header: BEGIN/END cannot have target"},
+		{"leading colon", ":foo {}", "invalid probe header: invalid colon"},
+		{"trailing colon", "kprobe: {}", "invalid probe header: invalid colon"},
+		{"empty comma target", "BEGIN, {}", "invalid probe header: empty probe target"},
+		{"empty header", "{ @x = count(); }", "invalid probe header: empty probe header"},
+		{"second empty header", "BEGIN {} { @x = count(); }", "invalid probe header: empty probe header"},
+		{"struct mixed comma", "struct s, fentry:evil {}", "invalid probe header"},
+		{"struct with predicate", "struct s /1/ {}", "invalid probe header"},
+		{"unclosed action block", "BEGIN { @x = count();", "invalid probe syntax: unclosed action block"},
+		{"unexpected closing brace", "BEGIN {} }", "invalid probe syntax: unexpected closing brace"},
+		{"lone closing brace", "}", "invalid probe syntax: unexpected closing brace"},
+		{"unclosed predicate", "BEGIN /pid == 1 { @x = count(); }", "invalid probe syntax: unclosed predicate"},
+		{"unclosed paren in predicate", "BEGIN /(pid == 1/ {}", "invalid probe syntax: unclosed predicate"},
+		{"unexpected token after predicate", "BEGIN /1/ extra {}", "invalid probe header: unexpected token after predicate"},
+		{"missing action block after probe", "BEGIN {} fentry:evil", "invalid probe header: missing action block"},
+		{"trailing flag after probe", "BEGIN {} --flag", "invalid probe header: missing action block"},
+		{"missing action block after predicate", "BEGIN /1/", "invalid probe header: missing action block"},
+		{"unclosed quote in target", "uprobe:/bin/app:\"unclosed\n{}", "invalid probe header: unclosed quote"},
+		{"spoofed BEGIN in string", `fentry:vfs_read { printf("BEGIN"); }`, "provider not allowed: fentry"},
+		{"spoofed catalog probe in string", `u:./evil:fn { $s = "tracepoint:block:block_rq_issue"; }`, "provider not allowed: u"},
+		{"unknown probe wording injection", "unknown probe {}", "invalid probe header"},
+		{"quoted unknown probe wording injection", `"unknown probe":foo {}`, "invalid probe header"},
+		{"quoted unknown probe bare injection", `"unknown probe" {}`, "invalid probe header"},
+		{"too many probes wording injection", "too many probes {}", "invalid probe header"},
+	}
+
+	for _, tc := range rejectCases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, errs := StaticValidate(tc.script, cat)
+			require.NotEmpty(t, errs)
+			require.Contains(t, strings.Join(errs, "; "), tc.want)
+			require.Equal(t, "VALIDATION_FAILED", classifyValidationError(errs))
+		})
+	}
+
+	validCases := []struct {
+		name       string
+		script     string
+		wantProbes []string
+	}{
+		{
+			"string literals and ternary inside body ignored",
+			`BEGIN { printf("tracepoint:foo:bar"); $s = "kprobe:*"; $t = 1 ? 2 : 3; }`,
+			[]string{"BEGIN"},
+		},
+		{
+			"three-slash uprobe path",
+			`uprobe:/lib/x86_64-linux-gnu/libc.so.6:getaddrinfo { printf("%s\n", str(arg0)); }`,
+			[]string{"uprobe:/lib/x86_64-linux-gnu/libc.so.6:getaddrinfo"},
+		},
+		{
+			"zero whitespace probe headers",
+			`tracepoint:raw_syscalls:sys_enter{@x=count();}END{clear(@x);}`,
+			[]string{"tracepoint:raw_syscalls:sys_enter", "END"},
+		},
+		{
+			"multiline predicate",
+			"tracepoint:block:block_rq_complete\n/@start[args->dev, args->sector]/\n{ @x = count(); }",
+			[]string{"tracepoint:block:block_rq_complete"},
+		},
+		{
+			"predicate with division in parens and slash in string",
+			`tracepoint:block:block_rq_complete /(nsecs / 1000) > 10 && comm == "a/b"/ { @x = count(); }`,
+			[]string{"tracepoint:block:block_rq_complete"},
+		},
+		{
+			"quoted C++ signature with comma and spaces",
+			`uprobe:/lib/libc.so.6:"Foo::bar(int, int)" { @x = count(); }`,
+			[]string{`uprobe:/lib/libc.so.6:"Foo::bar(int, int)"`},
+		},
+		{
+			"struct enum union before probe",
+			"struct s { int x; }; enum e { A = 1 }; union u { int y; }; BEGIN { @x = count(); }",
+			[]string{"BEGIN"},
+		},
+		{
+			"multiline comma valid header",
+			"kprobe:do_sys_open,\nkretprobe:do_sys_open { @x = count(); }",
+			[]string{"kprobe:do_sys_open", "kretprobe:do_sys_open"},
+		},
+	}
+
+	for _, tc := range validCases {
+		t.Run(tc.name, func(t *testing.T) {
+			probes, errs := StaticValidate(tc.script, cat)
+			require.Empty(t, errs)
+			require.Equal(t, tc.wantProbes, probes)
+		})
+	}
+
+	t.Run("create run classifies unlisted probe as VALIDATION_FAILED even with catalog", func(t *testing.T) {
+		s := knownCatalogServer(t, []string{"BEGIN", "tracepoint:block:block_rq_issue"})
+		status, code := postRunCode(t, s, `BEGIN {} fentry:tcp_connect { @x = count(); }`)
+		require.Equal(t, http.StatusBadRequest, status)
+		require.Equal(t, "VALIDATION_FAILED", code)
+	})
+}
+
+func TestCreateRunErrorClassificationImmunity(t *testing.T) {
+	emptySrv := testServer(t, Config{})
+	for _, script := range []string{
+		`tracepoint:block:"unknown probe":* {}`,
+		`tracepoint:block:"too many probes":* {}`,
+		`uprobe:rel/"unknown probe":fn {}`,
+		`uprobe:rel/"too many probes":fn {}`,
+	} {
+		t.Run("empty_catalog_"+script, func(t *testing.T) {
+			status, code := postRunCode(t, emptySrv, script)
+			require.Equal(t, http.StatusBadRequest, status)
+			require.Equal(t, "VALIDATION_FAILED", code)
+		})
+	}
+
+	known := []string{"BEGIN", "tracepoint:block:block_rq_issue"}
+	for i := 0; i < 60; i++ {
+		known = append(known, fmt.Sprintf("tracepoint:block:item%d", i))
+		known = append(known, fmt.Sprintf(`tracepoint:"unknown probe":item%d`, i))
+	}
+	catSrv := knownCatalogServer(t, known)
+
+	for _, tc := range []struct {
+		name   string
+		script string
+		want   string
+	}{
+		{"quoted unknown probe broad wildcard", `tracepoint:block:"unknown probe":* {}`, "VALIDATION_FAILED"},
+		{"quoted too many probes broad wildcard", `tracepoint:block:"too many probes":* {}`, "VALIDATION_FAILED"},
+		{"wildcard limit containing unknown probe text", `tracepoint:"unknown probe":item* { @x = count(); }`, "LIMIT_EXCEEDED"},
+		{"probe miss beats limit exceeded", `tracepoint:block:item*, tracepoint:foo:bar { @x = count(); }`, "PROBE_NOT_FOUND"},
+		{"probe miss first beats limit exceeded", `tracepoint:foo:bar, tracepoint:block:item* { @x = count(); }`, "PROBE_NOT_FOUND"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, code := postRunCode(t, catSrv, tc.script)
+			require.Equal(t, http.StatusBadRequest, status)
+			require.Equal(t, tc.want, code)
+		})
+	}
+}
+
+func TestStaticValidateRejectsAllowedProvidersMissingTarget(t *testing.T) {
+	cat := NewCatalog("", func(ctx context.Context) ([]string, error) {
+		return []string{"BEGIN", "END", "tracepoint:block:block_rq_issue", "profile:hz:99", "software:page-faults"}, nil
+	})
+	require.NoError(t, cat.Refresh(context.Background()))
+
+	providers := []string{"tracepoint", "kprobe", "kretprobe", "uprobe", "uretprobe", "profile", "interval", "software"}
+	for _, provider := range providers {
+		for _, tc := range []struct {
+			name   string
+			script string
+		}{
+			{"standalone", provider + " { @x = count(); }"},
+			{"block_piggybacked", "BEGIN {}\n" + provider + " { @x = count(); }"},
+			{"comma_piggybacked", "BEGIN, " + provider + " { @x = count(); }"},
+		} {
+			for _, c := range []struct {
+				label   string
+				catalog *Catalog
+			}{
+				{"nil_catalog", nil},
+				{"with_catalog", cat},
+			} {
+				t.Run(provider+"_"+tc.name+"_"+c.label, func(t *testing.T) {
+					_, errs := StaticValidate(tc.script, c.catalog)
+					require.NotEmpty(t, errs)
+					joined := strings.Join(errs, "; ")
+					require.Contains(t, joined, "invalid probe header: missing target for provider "+provider)
+					low := strings.ToLower(joined)
+					require.NotContains(t, low, "probe not found")
+					require.NotContains(t, low, "unknown probe")
+					require.NotContains(t, low, "no such probe")
+					require.NotContains(t, low, "too many probes")
+					require.Equal(t, "VALIDATION_FAILED", classifyValidationError(errs))
+				})
+			}
+		}
+	}
+
+	emptySrv := testServer(t, Config{})
+	catSrv := knownCatalogServer(t, []string{"BEGIN", "END", "tracepoint:block:block_rq_issue"})
+	for _, script := range []string{"profile { @x = count(); }", "kprobe { @x = count(); }"} {
+		for _, srv := range []*Server{emptySrv, catSrv} {
+			status, code := postRunCode(t, srv, script)
+			require.Equal(t, http.StatusBadRequest, status)
+			require.Equal(t, "VALIDATION_FAILED", code)
+		}
+	}
+
+	for _, valid := range []string{"BEGIN { @x = count(); }", "END { @x = count(); }", "BEGIN, END { @x = count(); }"} {
+		_, errs := StaticValidate(valid, cat)
+		require.Empty(t, errs, valid)
+	}
 }

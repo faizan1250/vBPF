@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/faizan1250/vBPF/agent/internal/limits"
 )
@@ -17,7 +19,7 @@ const MaxScriptBytes = 8 * 1024
 var (
 	blockedCalls = regexp.MustCompile(`\b(system|signal|override|cat)\s*\(`)
 	includeRe    = regexp.MustCompile(`(?m)^\s*#\s*(include|define)\b`)
-	probeRe      = regexp.MustCompile(`\b(tracepoint|kprobe|kretprobe|uprobe|uretprobe|profile|interval|software):[^\s{;,)]+|\bBEGIN\b|\bEND\b`)
+	cDeclRe      = regexp.MustCompile(`^(struct|enum|union)(\s+[A-Za-z_][A-Za-z0-9_]*)?$`)
 )
 
 var allowedProviders = map[string]bool{
@@ -36,25 +38,56 @@ var allowedProviders = map[string]bool{
 // DryRunFunc compiles a script without attaching probes.
 type DryRunFunc func(ctx context.Context, script string) []string
 
-// classifyValidationError maps static/dry-run failures to the client-facing
-// taxonomy code. HTTP status stays 400; only the code carries the taxonomy.
-// Probe misses and over-broad wildcards are best-effort matches on compiler
-// wording, so unknown shapes fall back to VALIDATION_FAILED.
-func classifyValidationError(errs []string) string {
-	for _, e := range errs {
-		low := strings.ToLower(e)
-		if strings.Contains(low, "probe not found") ||
-			strings.Contains(low, "unknown probe") ||
-			strings.Contains(low, "no such probe") {
-			return "PROBE_NOT_FOUND"
+var staticValidationFailedPrefixes = []string{
+	"empty script",
+	"script exceeds ",
+	"blocked ",
+	"invalid probe ",
+	"no probes found",
+	"provider not allowed:",
+	"uprobe must target ",
+	"wildcard too broad:",
+}
+
+func classifySingleError(err string) string {
+	if strings.HasPrefix(err, "probe not found:") {
+		return "PROBE_NOT_FOUND"
+	}
+	if strings.HasPrefix(err, "wildcard expands to too many probes:") {
+		return "LIMIT_EXCEEDED"
+	}
+	for _, prefix := range staticValidationFailedPrefixes {
+		if strings.HasPrefix(err, prefix) {
+			return "VALIDATION_FAILED"
 		}
 	}
-	for _, e := range errs {
-		if strings.Contains(strings.ToLower(e), "too many probes") {
-			return "LIMIT_EXCEEDED"
-		}
+	low := strings.ToLower(err)
+	if strings.Contains(low, "probe not found") ||
+		strings.Contains(low, "unknown probe") ||
+		strings.Contains(low, "no such probe") {
+		return "PROBE_NOT_FOUND"
+	}
+	if strings.Contains(low, "too many probes") {
+		return "LIMIT_EXCEEDED"
 	}
 	return "VALIDATION_FAILED"
+}
+
+// classifyValidationError maps static/dry-run failures to the client-facing
+// taxonomy code. HTTP status stays 400; only the code carries the taxonomy.
+// StaticValidate errors match strictly by prefix so probe text cannot spoof
+// dry-run compiler wording; unrecognized errors fall back to best-effort matching.
+func classifyValidationError(errs []string) string {
+	code := "VALIDATION_FAILED"
+	for _, e := range errs {
+		switch classifySingleError(e) {
+		case "PROBE_NOT_FOUND":
+			return "PROBE_NOT_FOUND"
+		case "LIMIT_EXCEEDED":
+			code = "LIMIT_EXCEEDED"
+		}
+	}
+	return code
 }
 
 // stripCommentsAndContinuations removes // and /* */ comments and \\\r?\n
@@ -139,6 +172,342 @@ func stripCommentsAndContinuations(script string) (string, bool) {
 	return out.String(), unclosedComment
 }
 
+func advanceInString(s string, i int) (int, bool) {
+	if s[i] == '\\' {
+		i++
+		if i < len(s) && s[i] != '\n' {
+			i++
+		}
+		return i, true
+	}
+	return i + 1, s[i] != '"' && s[i] != '\n'
+}
+
+func skipSpaces(s string, i int) int {
+	for i < len(s) {
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if !unicode.IsSpace(r) {
+			break
+		}
+		i += size
+	}
+	return i
+}
+
+// Path-bearing providers accept slashes in target paths unless separated by whitespace/comma.
+func startsPredicate(cleaned string, headerStart, segmentStart, idx int) bool {
+	if idx == headerStart {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(cleaned[:idx])
+	if unicode.IsSpace(r) || r == ',' {
+		return true
+	}
+	tok := strings.TrimLeftFunc(cleaned[segmentStart:idx], unicode.IsSpace)
+	for _, prefix := range []string{"uprobe:", "uretprobe:", "usdt:", "u:", "ur:", "U:"} {
+		if strings.HasPrefix(tok, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+func scanPredicate(cleaned string, i int) (int, bool) {
+	i++ // consume opening '/'
+	inString := false
+	parenDepth := 0
+	bracketDepth := 0
+	for i < len(cleaned) {
+		c := cleaned[i]
+		if inString {
+			i, inString = advanceInString(cleaned, i)
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '(':
+			parenDepth++
+		case ')':
+			if parenDepth > 0 {
+				parenDepth--
+			}
+		case '[':
+			bracketDepth++
+		case ']':
+			if bracketDepth > 0 {
+				bracketDepth--
+			}
+		case '/':
+			if parenDepth == 0 && bracketDepth == 0 {
+				return i + 1, true
+			}
+		}
+		i++
+	}
+	return i, false
+}
+
+func scanActionBlock(cleaned string, i int) (int, bool) {
+	i++ // consume opening '{'
+	depth := 1
+	inString := false
+	for i < len(cleaned) && depth > 0 {
+		c := cleaned[i]
+		if inString {
+			i, inString = advanceInString(cleaned, i)
+			continue
+		}
+		switch c {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+		}
+		i++
+	}
+	return i, depth == 0
+}
+
+func resyncToActionBlock(cleaned string, i int) (next int, foundOpen, foundClose bool) {
+	inString := false
+	for i < len(cleaned) {
+		c := cleaned[i]
+		if inString {
+			i, inString = advanceInString(cleaned, i)
+			continue
+		}
+		if c == '"' {
+			inString = true
+			i++
+			continue
+		}
+		if c == '{' {
+			return i, true, false
+		}
+		if c == '}' {
+			return i, false, true
+		}
+		i++
+	}
+	return i, false, false
+}
+
+func splitHeaderSegments(header string) []string {
+	var segments []string
+	start := 0
+	inString := false
+	for i := 0; i < len(header); {
+		c := header[i]
+		if inString {
+			i, inString = advanceInString(header, i)
+			continue
+		}
+		if c == '"' {
+			inString = true
+			i++
+			continue
+		}
+		if c == ',' {
+			segments = append(segments, header[start:i])
+			i++
+			start = i
+			continue
+		}
+		i++
+	}
+	return append(segments, header[start:])
+}
+
+func inspectHeaderSegment(seg string) (hasUnquotedSpace, hasUnclosedQuote bool) {
+	inString := false
+	for i := 0; i < len(seg); {
+		if inString {
+			if seg[i] == '\n' {
+				hasUnclosedQuote = true
+			}
+			i, inString = advanceInString(seg, i)
+			continue
+		}
+		if seg[i] == '"' {
+			inString = true
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(seg[i:])
+		if unicode.IsSpace(r) {
+			hasUnquotedSpace = true
+		}
+		i += size
+	}
+	if inString {
+		hasUnclosedQuote = true
+	}
+	return hasUnquotedSpace, hasUnclosedQuote
+}
+
+func parseHeaderTargets(header string) (targets, errs []string) {
+	for _, raw := range splitHeaderSegments(header) {
+		seg := strings.TrimSpace(raw)
+		if seg == "" {
+			errs = append(errs, "invalid probe header: empty probe target")
+			continue
+		}
+		hasSpace, unclosedQuote := inspectHeaderSegment(seg)
+		if unclosedQuote {
+			errs = append(errs, "invalid probe header: unclosed quote in probe target")
+			continue
+		}
+		if hasSpace {
+			errs = append(errs, "invalid probe header: unexpected whitespace in probe target")
+			continue
+		}
+		if strings.HasPrefix(seg, ":") || strings.HasSuffix(seg, ":") {
+			errs = append(errs, "invalid probe header: invalid colon in probe target")
+			continue
+		}
+		provider := seg
+		if colon := strings.IndexByte(seg, ':'); colon >= 0 {
+			provider = seg[:colon]
+			if provider == "BEGIN" || provider == "END" {
+				errs = append(errs, "invalid probe header: BEGIN/END cannot have target")
+				continue
+			}
+		}
+		if strings.ContainsFunc(provider, unicode.IsSpace) {
+			errs = append(errs, "invalid probe header: unexpected whitespace in probe target")
+			continue
+		}
+		targets = append(targets, seg)
+	}
+	return targets, errs
+}
+
+func extractProbes(cleaned string) (probes, errs []string) {
+	n := len(cleaned)
+	for i := 0; i < n; {
+		i = skipSpaces(cleaned, i)
+		if i >= n {
+			break
+		}
+		if cleaned[i] == '}' {
+			errs = append(errs, "invalid probe syntax: unexpected closing brace")
+			i++
+			continue
+		}
+
+		headerStart := i
+		segmentStart := headerStart
+		headerEnd := i
+		inString := false
+		hasPredicate := false
+		foundOpenBrace := false
+		foundTopCloseBrace := false
+
+		for i < n {
+			c := cleaned[i]
+			if inString {
+				i, inString = advanceInString(cleaned, i)
+				continue
+			}
+			if c == '"' {
+				inString = true
+				i++
+				continue
+			}
+			if c == ',' {
+				i++
+				segmentStart = i
+				continue
+			}
+			if c == '{' {
+				headerEnd = i
+				foundOpenBrace = true
+				break
+			}
+			if c == '}' {
+				headerEnd = i
+				foundTopCloseBrace = true
+				break
+			}
+			if c == '/' && startsPredicate(cleaned, headerStart, segmentStart, i) {
+				headerEnd = i
+				hasPredicate = true
+				break
+			}
+			i++
+		}
+
+		if foundTopCloseBrace {
+			errs = append(errs, "invalid probe syntax: unexpected closing brace")
+			i++
+			continue
+		}
+		if hasPredicate {
+			next, closed := scanPredicate(cleaned, i)
+			if !closed {
+				errs = append(errs, "invalid probe syntax: unclosed predicate")
+				break
+			}
+			i = skipSpaces(cleaned, next)
+			if i >= n {
+				errs = append(errs, "invalid probe header: missing action block")
+				break
+			}
+			if cleaned[i] != '{' {
+				errs = append(errs, "invalid probe header: unexpected token after predicate")
+				var closeBrace bool
+				i, foundOpenBrace, closeBrace = resyncToActionBlock(cleaned, i)
+				if closeBrace {
+					errs = append(errs, "invalid probe syntax: unexpected closing brace")
+					i++
+					continue
+				}
+				if !foundOpenBrace {
+					break
+				}
+			} else {
+				foundOpenBrace = true
+			}
+		} else if !foundOpenBrace {
+			if len(probes) > 0 {
+				errs = append(errs, "invalid probe header: missing action block")
+			}
+			break
+		}
+
+		header := strings.TrimSpace(cleaned[headerStart:headerEnd])
+		if header == "" {
+			errs = append(errs, "invalid probe header: empty probe header")
+		} else if !hasPredicate && cDeclRe.MatchString(header) {
+			next, closed := scanActionBlock(cleaned, i)
+			if !closed {
+				errs = append(errs, "invalid probe syntax: unclosed action block")
+				break
+			}
+			i = skipSpaces(cleaned, next)
+			if i < n && cleaned[i] == ';' {
+				i++
+			}
+			continue
+		} else {
+			targets, hdrErrs := parseHeaderTargets(header)
+			probes = append(probes, targets...)
+			errs = append(errs, hdrErrs...)
+		}
+
+		next, closed := scanActionBlock(cleaned, i)
+		if !closed {
+			errs = append(errs, "invalid probe syntax: unclosed action block")
+			break
+		}
+		i = next
+	}
+	return probes, errs
+}
+
 // StaticValidate applies blocklist, allowlist, and size rules (no exec).
 func StaticValidate(script string, catalog *Catalog) (probes []string, errors []string) {
 	if strings.TrimSpace(script) == "" {
@@ -157,8 +526,10 @@ func StaticValidate(script string, catalog *Catalog) (probes []string, errors []
 	if includeRe.MatchString(cleaned) {
 		errors = append(errors, "blocked syntax: #include/#define are forbidden")
 	}
-	probes = probeRe.FindAllString(cleaned, -1)
-	if len(probes) == 0 {
+	var parseErrs []string
+	probes, parseErrs = extractProbes(cleaned)
+	errors = append(errors, parseErrs...)
+	if len(probes) == 0 && len(parseErrs) == 0 {
 		errors = append(errors, "no probes found")
 	}
 	known := map[string]bool{}
@@ -168,12 +539,17 @@ func StaticValidate(script string, catalog *Catalog) (probes []string, errors []
 		}
 	}
 	for _, pr := range probes {
+		colon := strings.IndexByte(pr, ':')
 		provider := pr
-		if i := strings.IndexByte(pr, ':'); i >= 0 {
-			provider = pr[:i]
+		if colon >= 0 {
+			provider = pr[:colon]
 		}
 		if !allowedProviders[provider] {
 			errors = append(errors, "provider not allowed: "+provider)
+			continue
+		}
+		if colon < 0 && provider != "BEGIN" && provider != "END" {
+			errors = append(errors, "invalid probe header: missing target for provider "+provider)
 			continue
 		}
 		if provider == "uprobe" || provider == "uretprobe" {

@@ -127,7 +127,8 @@ func TestValidateBlocklist(t *testing.T) {
 	cases := map[string]string{
 		`BEGIN { system("ls"); }`:             "blocked call",
 		"#include <stdio.h>\nBEGIN {}":        "blocked syntax",
-		"myprobe:foo { @x = count(); }":       "no probes",
+		"myprobe:foo { @x = count(); }":       "provider not allowed",
+		"hello world, no probes here":         "no probes",
 		"uprobe:foo:bar {}":                   "uprobe must target",
 		"tracepoint:block:block_rq_issue { }": "",
 		"BEGIN { @x = count(); }\nEND { }":    "",

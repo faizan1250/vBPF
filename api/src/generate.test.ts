@@ -969,3 +969,288 @@ describe("validator comment and continuation stripping", () => {
     db.close();
   });
 });
+
+describe("validator probe allowlist and header parser parity", () => {
+  const known = [
+    "BEGIN",
+    "END",
+    "tracepoint:block:block_rq_issue",
+    "tracepoint:block:block_rq_complete",
+    "tracepoint:raw_syscalls:sys_enter",
+    "kprobe:do_sys_open",
+    "kretprobe:do_sys_open",
+    "uprobe:/lib/x86_64-linux-gnu/libc.so.6:getaddrinfo",
+    'uprobe:/lib/libc.so.6:"Foo::bar(int, int)"',
+  ];
+
+  it("rejects standalone, block-piggybacked, and comma-piggybacked unlisted probes and aliases", () => {
+    const unlisted: Array<[string, string]> = [
+      ["fentry:tcp_connect", "fentry"],
+      ["fexit:tcp_connect", "fexit"],
+      ["kfunc:tcp_connect", "kfunc"],
+      ["kretfunc:tcp_connect", "kretfunc"],
+      ["rawtracepoint:sched_switch", "rawtracepoint"],
+      ["watchpoint:0x1000:4:w", "watchpoint"],
+      ["asyncwatchpoint:0x1000:4:w", "asyncwatchpoint"],
+      ["hardware:cache-misses:1000", "hardware"],
+      ["usdt:/bin/sh:*", "usdt"],
+      ["iter:task", "iter"],
+      ["k:tcp_v4_connect", "k"],
+      ["kr:tcp_v4_connect", "kr"],
+      ["t:syscalls:sys_enter_openat", "t"],
+      ["u:/lib/x86_64-linux-gnu/libc.so.6:malloc", "u"],
+      ["ur:/lib/x86_64-linux-gnu/libc.so.6:malloc", "ur"],
+      ["U:/bin/app:p", "U"],
+      ["p:hz:99", "p"],
+      ["i:s:1", "i"],
+      ["s:cpu-clock:100", "s"],
+      ["h:cache-misses:1000", "h"],
+      ["rt:sched_switch", "rt"],
+      ["f:tcp_connect", "f"],
+      ["fr:tcp_connect", "fr"],
+      ["w:0x1000:4:w", "w"],
+      ["aw:0x1000:4:w", "aw"],
+      ["B", "B"],
+      ["E", "E"],
+      ["B:1", "B"],
+      ["E:1", "E"],
+      ["begin", "begin"],
+      ["end", "end"],
+    ];
+
+    for (const [probe, provider] of unlisted) {
+      for (const script of [
+        `${probe} { @x = count(); }`,
+        `BEGIN {}\n${probe} { @x = count(); }`,
+        `BEGIN, ${probe} { @x = count(); }`,
+      ]) {
+        const res = staticValidate(script, known);
+        expect(res.errors.join("; "), script).toContain(
+          `provider not allowed: ${provider}`,
+        );
+        expect(res.errors.join("; "), script).not.toContain("probe not found");
+      }
+    }
+  });
+
+  it("rejects config, macro, malformed headers, unbalanced syntax, and string spoofing", () => {
+    const cases: Array<[string, string, RegExp]> = [
+      [
+        "config with spaces",
+        "config = { max_probes = 999; }",
+        /invalid probe header/,
+      ],
+      [
+        "compact config",
+        "config={max_probes=999;}",
+        /provider not allowed: config=/,
+      ],
+      [
+        "macro definition",
+        "macro m() { @x = count(); }",
+        /invalid probe header/,
+      ],
+      [
+        "multiline comma mixed",
+        "kprobe:do_sys_open,\nu:./evil:fn { @x = count(); }",
+        /provider not allowed: u/,
+      ],
+      [
+        "BEGIN with target",
+        "BEGIN:evil {}",
+        /invalid probe header: BEGIN\/END cannot have target/,
+      ],
+      [
+        "END with target",
+        "END:evil {}",
+        /invalid probe header: BEGIN\/END cannot have target/,
+      ],
+      ["leading colon", ":foo {}", /invalid probe header: invalid colon/],
+      ["trailing colon", "kprobe: {}", /invalid probe header: invalid colon/],
+      [
+        "empty comma target",
+        "BEGIN, {}",
+        /invalid probe header: empty probe target/,
+      ],
+      [
+        "empty header",
+        "{ @x = count(); }",
+        /invalid probe header: empty probe header/,
+      ],
+      [
+        "second empty header",
+        "BEGIN {} { @x = count(); }",
+        /invalid probe header: empty probe header/,
+      ],
+      [
+        "struct mixed comma",
+        "struct s, fentry:evil {}",
+        /invalid probe header/,
+      ],
+      ["struct with predicate", "struct s /1/ {}", /invalid probe header/],
+      [
+        "unclosed action block",
+        "BEGIN { @x = count();",
+        /invalid probe syntax: unclosed action block/,
+      ],
+      [
+        "unexpected closing brace",
+        "BEGIN {} }",
+        /invalid probe syntax: unexpected closing brace/,
+      ],
+      [
+        "lone closing brace",
+        "}",
+        /invalid probe syntax: unexpected closing brace/,
+      ],
+      [
+        "unclosed predicate",
+        "BEGIN /pid == 1 { @x = count(); }",
+        /invalid probe syntax: unclosed predicate/,
+      ],
+      [
+        "unclosed paren in predicate",
+        "BEGIN /(pid == 1/ {}",
+        /invalid probe syntax: unclosed predicate/,
+      ],
+      [
+        "unexpected token after predicate",
+        "BEGIN /1/ extra {}",
+        /invalid probe header: unexpected token after predicate/,
+      ],
+      [
+        "missing action block",
+        "BEGIN {} fentry:evil",
+        /invalid probe header: missing action block/,
+      ],
+      [
+        "missing action block after predicate",
+        "BEGIN /1/",
+        /invalid probe header: missing action block/,
+      ],
+      [
+        "unclosed quote in target",
+        'uprobe:/bin/app:"unclosed\n{}',
+        /invalid probe header: unclosed quote/,
+      ],
+      [
+        "spoofed BEGIN in string",
+        'fentry:vfs_read { printf("BEGIN"); }',
+        /provider not allowed: fentry/,
+      ],
+      [
+        "spoofed catalog probe in string",
+        'u:./evil:fn { $s = "tracepoint:block:block_rq_issue"; }',
+        /provider not allowed: u/,
+      ],
+      [
+        "unknown probe wording injection",
+        "unknown probe {}",
+        /invalid probe header/,
+      ],
+      [
+        "quoted unknown probe injection",
+        '"unknown probe":foo {}',
+        /invalid probe header/,
+      ],
+    ];
+
+    for (const [name, script, pattern] of cases) {
+      const res = staticValidate(script, known);
+      const joined = res.errors.join("; ");
+      expect(joined, name).toMatch(pattern);
+      expect(joined.toLowerCase(), name).not.toMatch(
+        /probe not found|unknown probe|no such probe|too many probes/,
+      );
+    }
+  });
+
+  it("preserves valid multi-slash uprobe paths, quoted C++ signatures, predicates, structs, and strings", () => {
+    const valid: Array<[string, string[]]> = [
+      [
+        'BEGIN { printf("tracepoint:foo:bar"); $s = "kprobe:*"; $t = 1 ? 2 : 3; }',
+        ["BEGIN"],
+      ],
+      [
+        'uprobe:/lib/x86_64-linux-gnu/libc.so.6:getaddrinfo { printf("%s\\n", str(arg0)); }',
+        ["uprobe:/lib/x86_64-linux-gnu/libc.so.6:getaddrinfo"],
+      ],
+      [
+        "tracepoint:raw_syscalls:sys_enter{@x=count();}END{clear(@x);}",
+        ["tracepoint:raw_syscalls:sys_enter", "END"],
+      ],
+      [
+        "tracepoint:block:block_rq_complete\n/@start[args->dev, args->sector]/\n{ @x = count(); }",
+        ["tracepoint:block:block_rq_complete"],
+      ],
+      [
+        'tracepoint:block:block_rq_complete /(nsecs / 1000) > 10 && comm == "a/b"/ { @x = count(); }',
+        ["tracepoint:block:block_rq_complete"],
+      ],
+      [
+        'uprobe:/lib/libc.so.6:"Foo::bar(int, int)" { @x = count(); }',
+        ['uprobe:/lib/libc.so.6:"Foo::bar(int, int)"'],
+      ],
+      [
+        "struct s { int x; }; enum e { A = 1 }; union u { int y; }; BEGIN { @x = count(); }",
+        ["BEGIN"],
+      ],
+      [
+        "kprobe:do_sys_open,\nkretprobe:do_sys_open { @x = count(); }",
+        ["kprobe:do_sys_open", "kretprobe:do_sys_open"],
+      ],
+    ];
+
+    for (const [script, wantProbes] of valid) {
+      const res = staticValidate(script, known);
+      expect(res.errors, script).toEqual([]);
+      expect(res.probes, script).toEqual(wantProbes);
+    }
+
+    const stringFalseWarning = staticValidate(
+      'BEGIN { printf("tracepoint:raw_syscalls:sys_enter"); }',
+      known,
+    );
+    expect(stringFalseWarning.errors).toEqual([]);
+    expect(stringFalseWarning.warnings).toEqual([]);
+  });
+
+  it("rejects non-BEGIN/END allowed providers missing a colon target", () => {
+    const providers = [
+      "tracepoint",
+      "kprobe",
+      "kretprobe",
+      "uprobe",
+      "uretprobe",
+      "profile",
+      "interval",
+      "software",
+    ];
+    for (const provider of providers) {
+      for (const script of [
+        `${provider} { @x = count(); }`,
+        `BEGIN {}\n${provider} { @x = count(); }`,
+        `BEGIN, ${provider} { @x = count(); }`,
+      ]) {
+        for (const knownProbes of [[], known]) {
+          const res = staticValidate(script, knownProbes);
+          const joined = res.errors.join("; ");
+          expect(joined, script).toContain(
+            `invalid probe header: missing target for provider ${provider}`,
+          );
+          expect(joined.toLowerCase(), script).not.toMatch(
+            /probe not found|unknown probe|no such probe|too many probes/,
+          );
+        }
+      }
+    }
+
+    for (const valid of [
+      "BEGIN { @x = count(); }",
+      "END { @x = count(); }",
+      "BEGIN, END { @x = count(); }",
+    ]) {
+      expect(staticValidate(valid, known).errors, valid).toEqual([]);
+    }
+  });
+});
