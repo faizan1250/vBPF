@@ -415,12 +415,14 @@ type ProviderOutcome =
   | { ok: true; output: LlmOutput; model: string; usage?: LlmUsage }
   | { ok: false; kind: "auth"; message: string }
   | { ok: false; kind: "rate"; message: string; cooldownMs: number }
+  | { ok: false; kind: "timeout"; message: string; cooldownMs: number }
   | { ok: false; kind: "model" | "provider"; message: string };
 
 /** Shared failure for both generation and explain transports. */
 type TransportFailure =
   | { ok: false; kind: "auth"; message: string }
   | { ok: false; kind: "rate"; message: string; cooldownMs: number }
+  | { ok: false; kind: "timeout"; message: string; cooldownMs: number }
   | { ok: false; kind: "model" | "provider"; message: string };
 
 interface ChatMessage {
@@ -493,9 +495,39 @@ function classifyResponse(
   return null;
 }
 
+/** Shared timeout failure for fetch, error-body, and success-body aborts. */
+function timeoutFailure(
+  providerName: string,
+  model: string,
+  timeoutMs: number,
+  status: number,
+  err: unknown,
+): {
+  ok: false;
+  failure: TransportFailure;
+  status: number;
+  outcome: LlmCallOutcome;
+  errorName?: string;
+} {
+  return {
+    ok: false,
+    failure: {
+      ok: false,
+      kind: "timeout",
+      message: `${providerName}/${model}: timed out after ${timeoutMs}ms`,
+      cooldownMs: LIVE_DEFAULT_COOLDOWN_MS,
+    },
+    status,
+    outcome: "timeout",
+    ...(err instanceof Error ? { errorName: err.name } : {}),
+  };
+}
+
 /**
  * Single request path shared by generation and explain: POST the payload,
  * classify the status, then read the capped body. Callers only parse `text`.
+ * One deadline spans headers and body: the timer starts before fetch and is
+ * cleared only after the body is fully read or an error is handled.
  * Returns the HTTP status (0 when no response) and a log-ready outcome so
  * callers emit one info line without touching prompt/response/keys.
  */
@@ -520,78 +552,98 @@ async function requestChat(
 > {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs);
-  let res: Response;
   try {
-    const headers: Record<string, string> = {
-      "content-type": "application/json",
-    };
-    if (key !== undefined) headers["authorization"] = `Bearer ${key}`;
-    res = await fetchFn(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      redirect: "manual",
-      signal: ctrl.signal,
-      headers,
-      body: JSON.stringify(payload),
-    });
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : "request failed";
-    const outcome: LlmCallOutcome = isAbortError(err) ? "timeout" : "server";
-    return {
-      ok: false,
-      failure: {
+    let res: Response;
+    try {
+      const headers: Record<string, string> = {
+        "content-type": "application/json",
+      };
+      if (key !== undefined) headers["authorization"] = `Bearer ${key}`;
+      res = await fetchFn(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        redirect: "manual",
+        signal: ctrl.signal,
+        headers,
+        body: JSON.stringify(payload),
+      });
+    } catch (err) {
+      if (isAbortError(err)) {
+        return timeoutFailure(providerName, model, opts.timeoutMs, 0, err);
+      }
+      const reason = err instanceof Error ? err.message : "request failed";
+      return {
         ok: false,
-        kind: "provider",
-        message: `${providerName}/${model}: ${reason}`,
-      },
-      status: 0,
-      outcome,
-      ...(err instanceof Error ? { errorName: err.name } : {}),
-    };
+        failure: {
+          ok: false,
+          kind: "provider",
+          message: `${providerName}/${model}: ${reason}`,
+        },
+        status: 0,
+        outcome: "server",
+        ...(err instanceof Error ? { errorName: err.name } : {}),
+      };
+    }
+
+    const failure = classifyResponse(providerName, model, res, Date.now());
+    if (failure !== null) {
+      // Best-effort body read so callers can match provider error text
+      // (JSON-mode downgrade); unreadable bodies stay undefined.
+      let errorBody: string | undefined;
+      try {
+        errorBody = (
+          await readCappedText(res, opts.maxBodyBytes, ctrl.signal)
+        ).slice(0, 2000);
+      } catch (err) {
+        if (isAbortError(err)) {
+          return timeoutFailure(
+            providerName,
+            model,
+            opts.timeoutMs,
+            res.status,
+            err,
+          );
+        }
+        errorBody = undefined;
+      }
+      return {
+        ok: false,
+        failure,
+        status: res.status,
+        outcome: outcomeForStatus(res.status),
+        ...(errorBody !== undefined ? { errorBody } : {}),
+      };
+    }
+
+    try {
+      const text = await readCappedText(res, opts.maxBodyBytes, ctrl.signal);
+      return { ok: true, text, status: res.status };
+    } catch (err) {
+      if (isAbortError(err)) {
+        return timeoutFailure(
+          providerName,
+          model,
+          opts.timeoutMs,
+          res.status,
+          err,
+        );
+      }
+      const reason = err instanceof Error ? err.message : "unreadable body";
+      const capped = reason.includes("byte cap");
+      const outcome: LlmCallOutcome = capped ? "too_large" : "server";
+      return {
+        ok: false,
+        failure: {
+          ok: false,
+          kind: "provider",
+          message: `${providerName}/${model}: ${reason}`,
+        },
+        status: res.status,
+        outcome,
+        ...(err instanceof Error ? { errorName: err.name } : {}),
+      };
+    }
   } finally {
     clearTimeout(timer);
-  }
-
-  const failure = classifyResponse(providerName, model, res, Date.now());
-  if (failure !== null) {
-    // Best-effort body read so callers can match provider error text
-    // (JSON-mode downgrade); unreadable bodies stay undefined.
-    let errorBody: string | undefined;
-    try {
-      errorBody = (await readCappedText(res, opts.maxBodyBytes)).slice(0, 2000);
-    } catch {
-      errorBody = undefined;
-    }
-    return {
-      ok: false,
-      failure,
-      status: res.status,
-      outcome: outcomeForStatus(res.status),
-      ...(errorBody !== undefined ? { errorBody } : {}),
-    };
-  }
-
-  try {
-    const text = await readCappedText(res, opts.maxBodyBytes);
-    return { ok: true, text, status: res.status };
-  } catch (err) {
-    const reason = err instanceof Error ? err.message : "unreadable body";
-    const capped = reason.includes("byte cap");
-    const outcome: LlmCallOutcome = isAbortError(err)
-      ? "timeout"
-      : capped
-        ? "too_large"
-        : "server";
-    return {
-      ok: false,
-      failure: {
-        ok: false,
-        kind: "provider",
-        message: `${providerName}/${model}: ${reason}`,
-      },
-      status: res.status,
-      outcome,
-      ...(err instanceof Error ? { errorName: err.name } : {}),
-    };
   }
 }
 
@@ -605,6 +657,7 @@ type ExplainOutcome =
   | { ok: true; explanation: string; model: string }
   | { ok: false; kind: "auth"; message: string }
   | { ok: false; kind: "rate"; message: string; cooldownMs: number }
+  | { ok: false; kind: "timeout"; message: string; cooldownMs: number }
   | { ok: false; kind: "model" | "provider"; message: string };
 
 function parseRetryAfterMs(value: string | null, now: number): number {
@@ -649,28 +702,59 @@ class Semaphore {
 async function readCappedText(
   res: Response,
   maxBytes: number,
+  signal?: AbortSignal,
 ): Promise<string> {
+  const abortedError = (): Error =>
+    signal?.reason instanceof Error
+      ? signal.reason
+      : new DOMException("aborted", "AbortError");
   const announced = res.headers.get("content-length");
   if (announced !== null && Number(announced) > maxBytes) {
     throw new Error(`response exceeds ${maxBytes} byte cap`);
   }
   if (res.body === null) {
+    if (signal?.aborted) throw abortedError();
     const text = await res.text();
+    if (signal?.aborted) throw abortedError();
     if (text.length > maxBytes) {
       throw new Error(`response exceeds ${maxBytes} byte cap`);
     }
     return text;
   }
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
-    total += chunk.byteLength;
-    if (total > maxBytes) {
-      throw new Error(`response exceeds ${maxBytes} byte cap`);
+  const reader = res.body.getReader();
+  let cancelled = false;
+  const onAbort = (): void => {
+    cancelled = true;
+    reader.cancel().catch(() => {});
+  };
+  if (signal !== undefined) {
+    if (signal.aborted) {
+      onAbort();
+      throw abortedError();
     }
-    chunks.push(chunk);
+    signal.addEventListener("abort", onAbort);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  try {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (cancelled || signal?.aborted) throw abortedError();
+      if (done) break;
+      if (value !== undefined) {
+        total += value.byteLength;
+        if (total > maxBytes) {
+          onAbort();
+          throw new Error(`response exceeds ${maxBytes} byte cap`);
+        }
+        chunks.push(value);
+      }
+    }
+    return Buffer.concat(chunks).toString("utf8");
+  } finally {
+    if (signal !== undefined) signal.removeEventListener("abort", onAbort);
+    reader.releaseLock();
+  }
 }
 
 function extractJsonPayload(content: unknown): unknown {
@@ -827,7 +911,7 @@ export class LiveLlmChain implements LlmClient {
     for (const p of configured) {
       if (p.cooldownUntil > now) {
         cooled += 1;
-        last = `${p.name} is cooling down after a rate limit`;
+        last = `${p.name} is cooling down after a rate limit or timeout`;
         continue;
       }
       const outcome = await this.attemptProvider(p, prompt);
@@ -840,19 +924,19 @@ export class LiveLlmChain implements LlmClient {
           ...(outcome.usage !== undefined ? { usage: outcome.usage } : {}),
         };
       }
-      if (outcome.kind === "rate") cooled += 1;
+      if (outcome.kind === "rate" || outcome.kind === "timeout") cooled += 1;
       last = outcome.message;
     }
     if (cooled >= configured.length) {
       throw new LlmUnavailableError(
-        "all live LLM providers are cooling down after rate limits",
+        "all live LLM providers are cooling down after rate limits or timeouts",
       );
     }
     throw new LlmRequestError(`live LLM request failed: ${last}`);
   }
 
-  // One provider: rotate keys ONLY on 401/403 (revoked key); a 429 cools the
-  // whole provider down instead of trying another key of the same account.
+  // One provider: rotate keys ONLY on 401/403 (revoked key); a 429 or a
+  // timeout cools the whole provider instead of trying another key.
   private async attemptProvider(
     p: ProviderRuntime,
     prompt: string,
@@ -876,7 +960,10 @@ export class LiveLlmChain implements LlmClient {
       }
       const outcome = await this.attemptModels(p, key, keyIndex, prompt);
       if (outcome.ok || outcome.kind !== "auth") {
-        if (!outcome.ok && outcome.kind === "rate") {
+        if (
+          !outcome.ok &&
+          (outcome.kind === "rate" || outcome.kind === "timeout")
+        ) {
           p.cooldownUntil = Date.now() + outcome.cooldownMs;
         }
         return outcome;
@@ -908,9 +995,14 @@ export class LiveLlmChain implements LlmClient {
       const outcome = await this.postChat(p, key, keyIndex, model, prompt);
       if (outcome.ok) return outcome;
       last = outcome;
-      // 401/403 (rotate key) and 429 (cool provider) are decided by the
-      // caller; model-specific 4xx falls through to the next fallback model.
-      if (outcome.kind === "auth" || outcome.kind === "provider")
+      // 401/403 (rotate key), 429/timeout (cool provider), and other
+      // provider failures abort the model loop; model-specific 4xx falls
+      // through to the next fallback model.
+      if (
+        outcome.kind === "auth" ||
+        outcome.kind === "provider" ||
+        outcome.kind === "timeout"
+      )
         return outcome;
     }
     return last;
@@ -929,7 +1021,7 @@ export class LiveLlmChain implements LlmClient {
     for (const p of configured) {
       if (p.cooldownUntil > now) {
         cooled += 1;
-        last = `${p.name} is cooling down after a rate limit`;
+        last = `${p.name} is cooling down after a rate limit or timeout`;
         continue;
       }
       const outcome = await this.attemptExplainProvider(p, script);
@@ -938,19 +1030,19 @@ export class LiveLlmChain implements LlmClient {
         this.attribution = attribution;
         return { explanation: outcome.explanation, model: attribution };
       }
-      if (outcome.kind === "rate") cooled += 1;
+      if (outcome.kind === "rate" || outcome.kind === "timeout") cooled += 1;
       last = outcome.message;
     }
     if (cooled >= configured.length) {
       throw new LlmUnavailableError(
-        "all live LLM providers are cooling down after rate limits",
+        "all live LLM providers are cooling down after rate limits or timeouts",
       );
     }
     throw new LlmRequestError(`live LLM request failed: ${last}`);
   }
 
-  // Same key semantics as generation: 401/403 rotates the key, 429 cools
-  // the whole provider instead of trying another key of the same account.
+  // Same key semantics as generation: 401/403 rotates the key, 429/timeout
+  // cools the whole provider instead of trying another key.
   private async attemptExplainProvider(
     p: ProviderRuntime,
     script: string,
@@ -974,7 +1066,10 @@ export class LiveLlmChain implements LlmClient {
       }
       const outcome = await this.attemptExplainModels(p, key, keyIndex, script);
       if (outcome.ok || outcome.kind !== "auth") {
-        if (!outcome.ok && outcome.kind === "rate") {
+        if (
+          !outcome.ok &&
+          (outcome.kind === "rate" || outcome.kind === "timeout")
+        ) {
           p.cooldownUntil = Date.now() + outcome.cooldownMs;
         }
         return outcome;
@@ -1006,7 +1101,11 @@ export class LiveLlmChain implements LlmClient {
       const outcome = await this.postExplain(p, key, keyIndex, model, script);
       if (outcome.ok) return outcome;
       last = outcome;
-      if (outcome.kind === "auth" || outcome.kind === "provider")
+      if (
+        outcome.kind === "auth" ||
+        outcome.kind === "provider" ||
+        outcome.kind === "timeout"
+      )
         return outcome;
     }
     return last;

@@ -565,6 +565,242 @@ describe("transport guards", () => {
   });
 });
 
+describe("deadline spans headers and body", () => {
+  const stallUntilAbort = (init: RequestInit): Promise<Response> =>
+    new Promise((_resolve, reject) => {
+      const sig = init.signal as AbortSignal | null | undefined;
+      const err = (): Error =>
+        sig?.reason instanceof Error
+          ? sig.reason
+          : new DOMException("aborted", "AbortError");
+      if (sig?.aborted) {
+        reject(err());
+        return;
+      }
+      sig?.addEventListener("abort", () => reject(err()), { once: true });
+    });
+
+  const captureLogger = (): {
+    infos: Array<{ obj: Record<string, unknown>; msg?: string }>;
+    logger: {
+      warn: () => void;
+      info: (obj: Record<string, unknown>, msg?: string) => void;
+    };
+  } => {
+    const infos: Array<{ obj: Record<string, unknown>; msg?: string }> = [];
+    return {
+      infos,
+      logger: {
+        warn: () => {},
+        info: (obj: Record<string, unknown>, msg?: string) => {
+          infos.push({ obj, msg });
+        },
+      },
+    };
+  };
+
+  it("headers stall trips timeout, cools the provider, and frees the slot", async () => {
+    const seen: Seen[] = [];
+    const { infos, logger } = captureLogger();
+    const fetchFn = stubFetch((url, init) => {
+      if (url === GROQ_URL) return stallUntilAbort(init);
+      return chatOk();
+    }, seen);
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq,cerebras",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "ma",
+        CEREBRAS_API_KEY: "b",
+        LLM_CEREBRAS_MODEL: "mb",
+      },
+      fetchFn,
+      logger,
+      timeoutMs: 100,
+      maxConcurrency: 1,
+    });
+    const started = Date.now();
+    const out = await chain.generate("cpu?");
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(out.script).toContain("BEGIN");
+    expect(chain.model).toBe("cerebras/mb");
+    expect(chain.health().providers).toMatchObject([
+      { name: "groq", state: "cooldown" },
+      { name: "cerebras", state: "ready" },
+    ]);
+    const groqCall = infos.find(
+      (l) => l.msg === "live llm call" && l.obj["provider"] === "groq",
+    )?.obj;
+    expect(groqCall).toMatchObject({
+      status: 0,
+      outcome: "timeout",
+      error_name: "AbortError",
+    });
+    // Sole semaphore slot released: the next request runs, skips the
+    // cooling provider, and succeeds instead of hanging.
+    const again = await chain.generate("cpu?");
+    expect(again.script).toContain("BEGIN");
+    expect(seen.filter((s) => s.url === GROQ_URL)).toHaveLength(1);
+  });
+
+  it("slow-drip body is aborted by the deadline", async () => {
+    let cancelled = false;
+    const drip = new ReadableStream({
+      async start(ctrl) {
+        try {
+          for (let i = 0; i < 100; i += 1) {
+            await new Promise((done) => setTimeout(done, 25));
+            if (cancelled) return;
+            ctrl.enqueue(new TextEncoder().encode("x"));
+          }
+          ctrl.close();
+        } catch {
+          // Enqueue after cancel throws; the abort already won.
+        }
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const seen: Seen[] = [];
+    const { infos, logger } = captureLogger();
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "ma",
+      },
+      fetchFn: stubFetch(
+        () =>
+          new Response(drip, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        seen,
+      ),
+      logger,
+      timeoutMs: 120,
+      maxConcurrency: 1,
+    });
+    const started = Date.now();
+    await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+      LlmUnavailableError,
+    );
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(cancelled).toBe(true);
+    const call = infos.find((l) => l.msg === "live llm call")?.obj;
+    expect(call).toMatchObject({
+      status: 200,
+      outcome: "timeout",
+      error_name: "AbortError",
+    });
+    // Slot released and provider cooling: the next call fails fast
+    // without touching the network again.
+    await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+      LlmUnavailableError,
+    );
+    expect(seen).toHaveLength(1);
+  });
+
+  it("stalled error body trips timeout with the error status intact", async () => {
+    let cancelled = false;
+    const stalled = new ReadableStream({
+      start() {
+        // Never enqueue or close: the error-body read pends until the
+        // deadline aborts it.
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const seen: Seen[] = [];
+    const { infos, logger } = captureLogger();
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "ma",
+      },
+      fetchFn: stubFetch(
+        () =>
+          new Response(stalled, {
+            status: 500,
+            headers: { "content-type": "application/json" },
+          }),
+        seen,
+      ),
+      logger,
+      timeoutMs: 100,
+      maxConcurrency: 1,
+    });
+    const started = Date.now();
+    await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+      LlmUnavailableError,
+    );
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(cancelled).toBe(true);
+    const call = infos.find((l) => l.msg === "live llm call")?.obj;
+    expect(call).toMatchObject({
+      status: 500,
+      outcome: "timeout",
+      error_name: "AbortError",
+    });
+    expect(chain.health().providers).toMatchObject([
+      { name: "groq", state: "cooldown" },
+    ]);
+    // 500 never matches the JSON-downgrade retry (400/422 only): one hit.
+    expect(seen).toHaveLength(1);
+    // Slot released and provider cooling: the next call fails fast without
+    // touching the network again.
+    await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+      LlmUnavailableError,
+    );
+    expect(seen).toHaveLength(1);
+  });
+
+  it("body over the cap aborts the stream early", async () => {
+    let cancelled = false;
+    const flood = new ReadableStream({
+      start(ctrl) {
+        for (let i = 0; i < 1000; i += 1) {
+          ctrl.enqueue(new TextEncoder().encode("x".repeat(32)));
+        }
+        ctrl.close();
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const { infos, logger } = captureLogger();
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "ma",
+      },
+      fetchFn: stubFetch(
+        () =>
+          new Response(flood, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        [],
+      ),
+      logger,
+      timeoutMs: 5000,
+      maxBodyBytes: 64,
+    });
+    const started = Date.now();
+    await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+      LlmRequestError,
+    );
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(cancelled).toBe(true);
+    const call = infos.find((l) => l.msg === "live llm call")?.obj;
+    expect(call).toMatchObject({ status: 200, outcome: "too_large" });
+  });
+});
+
 // Live server wiring against a stub provider plus a fake agent.
 const TOKEN = "test-token-live";
 const RECIPES_DIR = join(
