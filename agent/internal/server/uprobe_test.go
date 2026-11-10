@@ -174,7 +174,7 @@ func TestUprobeHostFSChecksAndListProbe(t *testing.T) {
 	require.Equal(t, "VALIDATION_FAILED", code)
 
 	// Directory in libc path (non-regular file) is rejected with VALIDATION_FAILED.
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "usr", "lib", "libc.so.6"), 0o555))
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "usr", "lib", "libc.so.6"), 0o755))
 	status, code = postRunCode(t, s, "uprobe:/usr/lib/libc.so.6:getaddrinfo { @x = count(); }")
 	require.Equal(t, http.StatusBadRequest, status)
 	require.Equal(t, "VALIDATION_FAILED", code)
