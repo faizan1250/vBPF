@@ -1,5 +1,42 @@
 # Decisions
 
+## R2-02 Slice 10: prompt parts plus plumbing, no live behavior change (2026-11-10)
+
+- **Parts split (D-26).** `buildGeneratePrompt()` additionally returns
+  `parts: { system, context, user }` (D-15): system is the static prefix
+  plus the JSON output contract plus an untrusted-data rule; context is
+  recipes, probes, and arg formats under `Reference data` headings; user is
+  the escaped request in a `<user_request>` block. `text` is byte-identical
+  to the legacy marker format (probes still capped at 40 there), so the
+  mock path, the prompt-order tests, and the eval keep working unchanged.
+- **Plumbing (D-27).** `LlmClient.generate` gains an optional third
+  parameter; `MockLlm` ignores it by declaring fewer parameters.
+  `LiveLlmChain` uses `parts` when present (system message plus context,
+  request, and retry feedback in the user message) and falls back to the
+  legacy single sliced message otherwise. `generateDetailed` takes `parts`
+  in its opts; `runGenerate` passes the same parts through on every
+  attempt, with the `==FEEDBACK==` text suffix unchanged for the mock.
+- **Escaping (D-28).** `escapeUntrusted()` neutralizes closing tags
+  (`</user_request>`, `</previous_attempt>`, case-insensitive),
+  `==WORD==` markers (`= =WORD= =`), and control chars except `\n`/`\t`;
+  applied to the user request, the previous script, and validator errors.
+  System carries no user text, is byte-identical across hostile/benign
+  inputs, and is unchanged between attempts (prefix-cache friendly).
+  Feedback rides only in the user message as `<previous_attempt>`.
+- **Budget (D-29).** `PROMPT_BUDGET_CHARS` (24_000) lives in `llm.ts` and is
+  re-exported as `LIVE_MAX_PROMPT_CHARS`, so `prompts.ts` and `live-llm.ts`
+  share one constant with no import cycle. Shrink order: probes down to 15,
+  then arg sections lowest-ranked first, then recipes down to 1; system,
+  request, and feedback are never touched. Exhaustion throws
+  `PromptBudgetError`, mapped to 502 `LLM_ERROR` in the generate route.
+  Explain drops its 24_000-char slice; `ScriptSchema` (8 KiB) already
+  bounds the input.
+- **Verified:** `tsc --noEmit` clean, eslint/prettier clean, full api suite
+  180/180 (165 existing unchanged + 15 new in `prompt-parts.test.ts`:
+  shape, escaping, shrink order, impossible budget, chain wiring, retry
+  stability, legacy fallback, full-script explain, runGenerate passthrough,
+  mock ignores parts).
+
 ## R2-03 Slice 7: overall budget, waiter limits, 503 shape (2026-11-10)
 
 - **Per-attempt `min(per-request, remaining)` (D-16 applied).** A

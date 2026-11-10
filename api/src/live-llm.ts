@@ -1,10 +1,13 @@
 import {
   LlmOutputSchema,
+  PROMPT_BUDGET_CHARS,
   type LlmClient,
   type LlmDetailedResult,
+  type LlmFeedback,
   type LlmOutput,
   type LlmUsage,
 } from "./llm.js";
+import { renderUserMessage, type PromptParts } from "./prompts.js";
 
 // Live OpenAI-compatible LLM client with ordered provider fallback.
 //
@@ -19,7 +22,9 @@ import {
 // attempts; per-attempt timeout is min(per-request, remaining).
 export const LIVE_MAX_CONCURRENCY = 4;
 export const LIVE_MAX_BODY_BYTES = 256 * 1024;
-export const LIVE_MAX_PROMPT_CHARS = 24_000;
+// Single source for the prompt budget lives in llm.ts (PROMPT_BUDGET_CHARS);
+// prompts.ts shrinks context to fit it, so the client never tail-truncates.
+export const LIVE_MAX_PROMPT_CHARS = PROMPT_BUDGET_CHARS;
 export const LIVE_TIMEOUT_MS = 45_000;
 export const LIVE_TOTAL_TIMEOUT_MS = 90_000;
 export const LIVE_MAX_WAITERS = 10;
@@ -952,8 +957,12 @@ export class LiveLlmChain implements LlmClient {
     };
   }
 
-  async generate(prompt: string): Promise<LlmOutput> {
-    return (await this.generateDetailed(prompt)).output;
+  async generate(
+    prompt: string,
+    feedback?: LlmFeedback,
+    parts?: PromptParts,
+  ): Promise<LlmOutput> {
+    return (await this.generateDetailed(prompt, feedback, { parts })).output;
   }
 
   /** Plain-English explanation of one script; script text only is sent. */
@@ -973,7 +982,7 @@ export class LiveLlmChain implements LlmClient {
   async generateDetailed(
     prompt: string,
     feedback?: unknown,
-    opts?: { signal?: AbortSignal },
+    opts?: { signal?: AbortSignal; parts?: PromptParts },
   ): Promise<LlmDetailedResult> {
     void feedback;
     const signal =
@@ -984,10 +993,18 @@ export class LiveLlmChain implements LlmClient {
       (feedback as { signal?: AbortSignal }).signal instanceof AbortSignal
         ? (feedback as { signal?: AbortSignal }).signal
         : undefined);
+    const llmFeedback =
+      typeof feedback === "object" &&
+      feedback !== null &&
+      "previousScript" in feedback &&
+      "errors" in feedback
+        ? (feedback as LlmFeedback)
+        : undefined;
+    const parts = opts?.parts;
     const deadline = Date.now() + this.totalTimeoutMs;
     const release = await this.semaphore.acquire();
     try {
-      return await this.attempt(prompt, deadline, signal);
+      return await this.attempt(prompt, deadline, signal, parts, llmFeedback);
     } finally {
       release();
     }
@@ -1008,6 +1025,8 @@ export class LiveLlmChain implements LlmClient {
     prompt: string,
     deadline: number,
     signal?: AbortSignal,
+    parts?: PromptParts,
+    feedback?: LlmFeedback,
   ): Promise<LlmDetailedResult> {
     const now = Date.now();
     const configured = this.providers.filter(isConfigured);
@@ -1024,7 +1043,14 @@ export class LiveLlmChain implements LlmClient {
         last = `${p.name} is cooling down after a rate limit or timeout`;
         continue;
       }
-      const outcome = await this.attemptProvider(p, prompt, deadline, signal);
+      const outcome = await this.attemptProvider(
+        p,
+        prompt,
+        deadline,
+        signal,
+        parts,
+        feedback,
+      );
       if (outcome.ok) {
         const attribution = `${p.name}/${outcome.model}`;
         this.attribution = attribution;
@@ -1052,6 +1078,8 @@ export class LiveLlmChain implements LlmClient {
     prompt: string,
     deadline: number,
     signal?: AbortSignal,
+    parts?: PromptParts,
+    feedback?: LlmFeedback,
   ): Promise<ProviderOutcome> {
     for (;;) {
       const keyIndex = nextEnabledIndex(p, p.active);
@@ -1077,6 +1105,8 @@ export class LiveLlmChain implements LlmClient {
         prompt,
         deadline,
         signal,
+        parts,
+        feedback,
       );
       if (outcome.ok || outcome.kind !== "auth") {
         if (
@@ -1106,6 +1136,8 @@ export class LiveLlmChain implements LlmClient {
     prompt: string,
     deadline: number,
     signal?: AbortSignal,
+    parts?: PromptParts,
+    feedback?: LlmFeedback,
   ): Promise<ProviderOutcome> {
     let last: ProviderOutcome = {
       ok: false,
@@ -1121,6 +1153,8 @@ export class LiveLlmChain implements LlmClient {
         prompt,
         this.timeoutFor(deadline),
         signal,
+        parts,
+        feedback,
       );
       if (outcome.ok) return outcome;
       last = outcome;
@@ -1277,7 +1311,9 @@ export class LiveLlmChain implements LlmClient {
     timeoutMs: number,
     signal?: AbortSignal,
   ): Promise<ExplainOutcome> {
-    const sent = script.slice(0, LIVE_MAX_PROMPT_CHARS);
+    // Input is bounded by validation (ScriptSchema, 8 KiB), so the whole
+    // script goes out; no tail truncation.
+    const sent = script;
     const started = Date.now();
     const result = await requestChat(
       this.fetchFn,
@@ -1379,13 +1415,9 @@ export class LiveLlmChain implements LlmClient {
 
   private buildChatPayload(
     model: string,
-    sent: string,
+    messages: ChatMessage[],
     mode: JsonMode,
   ): ChatCompletionPayload {
-    const messages: ChatMessage[] = [
-      { role: "system", content: JSON_INSTRUCTION },
-      { role: "user", content: sent },
-    ];
     if (mode === "json_object") {
       return {
         model,
@@ -1428,6 +1460,8 @@ export class LiveLlmChain implements LlmClient {
     prompt: string,
     timeoutMs: number,
     signal?: AbortSignal,
+    parts?: PromptParts,
+    feedback?: LlmFeedback,
   ): Promise<ProviderOutcome> {
     const first = await this.doPostChat(
       p,
@@ -1438,6 +1472,8 @@ export class LiveLlmChain implements LlmClient {
       p.jsonMode,
       timeoutMs,
       signal,
+      parts,
+      feedback,
     );
     if (first.outcome.ok) return first.outcome;
     if (
@@ -1462,6 +1498,8 @@ export class LiveLlmChain implements LlmClient {
         "none",
         timeoutMs,
         signal,
+        parts,
+        feedback,
       );
       return retry.outcome;
     }
@@ -1477,8 +1515,17 @@ export class LiveLlmChain implements LlmClient {
     mode: JsonMode,
     timeoutMs: number,
     signal?: AbortSignal,
+    parts?: PromptParts,
+    feedback?: LlmFeedback,
   ): Promise<{ outcome: ProviderOutcome; status: number; errorBody?: string }> {
-    const sent = prompt.slice(0, LIVE_MAX_PROMPT_CHARS);
+    // Isolated messages when parts are present (system carries no user text,
+    // feedback rides in the user message); otherwise the legacy single slice.
+    const system = parts?.system ?? JSON_INSTRUCTION;
+    const user =
+      parts !== undefined
+        ? renderUserMessage(parts, feedback)
+        : prompt.slice(0, LIVE_MAX_PROMPT_CHARS);
+    const promptChars = system.length + user.length;
     const started = Date.now();
     const result = await requestChat(
       this.fetchFn,
@@ -1486,7 +1533,14 @@ export class LiveLlmChain implements LlmClient {
       p.baseUrl,
       key,
       model,
-      this.buildChatPayload(model, sent, mode),
+      this.buildChatPayload(
+        model,
+        [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+        mode,
+      ),
       { timeoutMs, maxBodyBytes: this.maxBodyBytes, signal },
     );
     const latency_ms = Date.now() - started;
@@ -1498,7 +1552,7 @@ export class LiveLlmChain implements LlmClient {
         status: result.status,
         outcome: result.outcome,
         latency_ms,
-        prompt_chars: sent.length,
+        prompt_chars: promptChars,
         ...(result.errorName !== undefined
           ? { error_name: result.errorName }
           : {}),
@@ -1537,7 +1591,7 @@ export class LiveLlmChain implements LlmClient {
             status: result.status,
             outcome: "output_invalid",
             latency_ms,
-            prompt_chars: sent.length,
+            prompt_chars: promptChars,
             ...(usage !== undefined ? { usage } : {}),
             error: sanitizeErrorMessage(
               `${p.name}/${model}: missing choices[0].message.tool_calls[0].function.arguments`,
@@ -1563,7 +1617,7 @@ export class LiveLlmChain implements LlmClient {
           status: result.status,
           outcome: "ok",
           latency_ms,
-          prompt_chars: sent.length,
+          prompt_chars: promptChars,
           ...(usage !== undefined ? { usage } : {}),
         });
         return {
@@ -1585,7 +1639,7 @@ export class LiveLlmChain implements LlmClient {
           status: result.status,
           outcome: "output_invalid",
           latency_ms,
-          prompt_chars: sent.length,
+          prompt_chars: promptChars,
           ...(usage !== undefined ? { usage } : {}),
           error: sanitizeErrorMessage(
             `${p.name}/${model}: missing choices[0].message.content`,
@@ -1608,7 +1662,7 @@ export class LiveLlmChain implements LlmClient {
         status: result.status,
         outcome: "ok",
         latency_ms,
-        prompt_chars: sent.length,
+        prompt_chars: promptChars,
         ...(usage !== undefined ? { usage } : {}),
       });
       return {
@@ -1629,7 +1683,7 @@ export class LiveLlmChain implements LlmClient {
         status: result.status,
         outcome: "output_invalid",
         latency_ms,
-        prompt_chars: sent.length,
+        prompt_chars: promptChars,
         ...(err instanceof Error ? { error_name: err.name } : {}),
         error: sanitizeErrorMessage(`${p.name}/${model}: ${reason}`),
       });
