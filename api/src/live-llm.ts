@@ -184,6 +184,134 @@ type ProviderOutcome =
   | { ok: false; kind: "rate"; message: string; cooldownMs: number }
   | { ok: false; kind: "model" | "provider"; message: string };
 
+/** Shared failure for both generation and explain transports. */
+type TransportFailure =
+  | { ok: false; kind: "auth"; message: string }
+  | { ok: false; kind: "rate"; message: string; cooldownMs: number }
+  | { ok: false; kind: "model" | "provider"; message: string };
+
+interface ChatMessage {
+  role: string;
+  content: string;
+}
+
+interface ChatCompletionPayload {
+  model: string;
+  messages: ChatMessage[];
+  temperature: number;
+  max_tokens: number;
+  response_format?: { type: string };
+}
+
+/** Single status classifier shared by generation and explain. */
+function classifyResponse(
+  providerName: string,
+  model: string,
+  res: Response,
+  now: number,
+): TransportFailure | null {
+  if (res.status === 0 || (res.status >= 300 && res.status < 400)) {
+    return {
+      ok: false,
+      kind: "provider",
+      message: `${providerName}/${model}: unexpected redirect (${res.status}), not following`,
+    };
+  }
+  if (res.status === 401 || res.status === 403) {
+    return {
+      ok: false,
+      kind: "auth",
+      message: `${providerName}: key rejected (${res.status})`,
+    };
+  }
+  if (res.status === 429) {
+    return {
+      ok: false,
+      kind: "rate",
+      message: `${providerName}/${model}: rate limited (429)`,
+      cooldownMs: parseRetryAfterMs(res.headers.get("retry-after"), now),
+    };
+  }
+  if (res.status === 400 || res.status === 404 || res.status === 422) {
+    return {
+      ok: false,
+      kind: "model",
+      message: `${providerName}/${model}: rejected (${res.status})`,
+    };
+  }
+  if (res.status < 200 || res.status >= 300) {
+    return {
+      ok: false,
+      kind: "provider",
+      message: `${providerName}/${model}: provider error (${res.status})`,
+    };
+  }
+  return null;
+}
+
+/**
+ * Single request path shared by generation and explain: POST the payload,
+ * classify the status, then read the capped body. Callers only parse `text`.
+ */
+async function requestChat(
+  fetchFn: typeof fetch,
+  providerName: string,
+  baseUrl: string,
+  key: string | undefined,
+  model: string,
+  payload: ChatCompletionPayload,
+  opts: { timeoutMs: number; maxBodyBytes: number },
+): Promise<
+  { ok: true; text: string } | { ok: false; failure: TransportFailure }
+> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), opts.timeoutMs);
+  let res: Response;
+  try {
+    const headers: Record<string, string> = {
+      "content-type": "application/json",
+    };
+    if (key !== undefined) headers["authorization"] = `Bearer ${key}`;
+    res = await fetchFn(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      redirect: "manual",
+      signal: ctrl.signal,
+      headers,
+      body: JSON.stringify(payload),
+    });
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "request failed";
+    return {
+      ok: false,
+      failure: {
+        ok: false,
+        kind: "provider",
+        message: `${providerName}/${model}: ${reason}`,
+      },
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+
+  const failure = classifyResponse(providerName, model, res, Date.now());
+  if (failure !== null) return { ok: false, failure };
+
+  try {
+    const text = await readCappedText(res, opts.maxBodyBytes);
+    return { ok: true, text };
+  } catch (err) {
+    const reason = err instanceof Error ? err.message : "unreadable body";
+    return {
+      ok: false,
+      failure: {
+        ok: false,
+        kind: "provider",
+        message: `${providerName}/${model}: ${reason}`,
+      },
+    };
+  }
+}
+
 /** Plain-text explanation result with provider/model attribution. */
 export interface ExplainDetailedResult {
   explanation: string;
@@ -563,93 +691,27 @@ export class LiveLlmChain implements LlmClient {
     model: string,
     script: string,
   ): Promise<ExplainOutcome> {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
-    let res: Response;
-    try {
-      const headers: Record<string, string> = {
-        "content-type": "application/json",
-      };
-      if (key !== undefined) headers["authorization"] = `Bearer ${key}`;
-      res = await this.fetchFn(`${p.baseUrl}/chat/completions`, {
-        method: "POST",
-        redirect: "manual",
-        signal: ctrl.signal,
-        headers,
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: "system", content: EXPLAIN_SYSTEM },
-            { role: "user", content: script.slice(0, LIVE_MAX_PROMPT_CHARS) },
-          ],
-          temperature: 0.2,
-          max_tokens: 600,
-        }),
-      });
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : "request failed";
-      return {
-        ok: false,
-        kind: "provider",
-        message: `${p.name}/${model}: ${reason}`,
-      };
-    } finally {
-      clearTimeout(timer);
-    }
+    const result = await requestChat(
+      this.fetchFn,
+      p.name,
+      p.baseUrl,
+      key,
+      model,
+      {
+        model,
+        messages: [
+          { role: "system", content: EXPLAIN_SYSTEM },
+          { role: "user", content: script.slice(0, LIVE_MAX_PROMPT_CHARS) },
+        ],
+        temperature: 0.2,
+        max_tokens: 600,
+      },
+      { timeoutMs: this.timeoutMs, maxBodyBytes: this.maxBodyBytes },
+    );
+    if (!result.ok) return result.failure;
 
-    if (res.status === 0 || (res.status >= 300 && res.status < 400)) {
-      return {
-        ok: false,
-        kind: "provider",
-        message: `${p.name}/${model}: unexpected redirect (${res.status}), not following`,
-      };
-    }
-    if (res.status === 401 || res.status === 403) {
-      return {
-        ok: false,
-        kind: "auth",
-        message: `${p.name}: key rejected (${res.status})`,
-      };
-    }
-    if (res.status === 429) {
-      return {
-        ok: false,
-        kind: "rate",
-        message: `${p.name}/${model}: rate limited (429)`,
-        cooldownMs: parseRetryAfterMs(
-          res.headers.get("retry-after"),
-          Date.now(),
-        ),
-      };
-    }
-    if (res.status === 400 || res.status === 404 || res.status === 422) {
-      return {
-        ok: false,
-        kind: "model",
-        message: `${p.name}/${model}: rejected (${res.status})`,
-      };
-    }
-    if (res.status < 200 || res.status >= 300) {
-      return {
-        ok: false,
-        kind: "provider",
-        message: `${p.name}/${model}: provider error (${res.status})`,
-      };
-    }
-
-    let text: string;
     try {
-      text = await readCappedText(res, this.maxBodyBytes);
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : "unreadable body";
-      return {
-        ok: false,
-        kind: "provider",
-        message: `${p.name}/${model}: ${reason}`,
-      };
-    }
-    try {
-      const envelope = JSON.parse(text) as {
+      const envelope = JSON.parse(result.text) as {
         choices?: Array<{ message?: { content?: unknown } }>;
       };
       const content = envelope.choices?.[0]?.message?.content;
@@ -681,98 +743,32 @@ export class LiveLlmChain implements LlmClient {
     model: string,
     prompt: string,
   ): Promise<ProviderOutcome> {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
-    let res: Response;
-    try {
-      const headers: Record<string, string> = {
-        "content-type": "application/json",
-      };
-      if (key !== undefined) headers["authorization"] = `Bearer ${key}`;
-      res = await this.fetchFn(`${p.baseUrl}/chat/completions`, {
-        method: "POST",
-        redirect: "manual",
-        signal: ctrl.signal,
-        headers,
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: "system", content: JSON_INSTRUCTION },
-            {
-              role: "user",
-              content: prompt.slice(0, LIVE_MAX_PROMPT_CHARS),
-            },
-          ],
-          response_format: { type: "json_object" },
-          temperature: 0.2,
-          max_tokens: 2000,
-        }),
-      });
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : "request failed";
-      return {
-        ok: false,
-        kind: "provider",
-        message: `${p.name}/${model}: ${reason}`,
-      };
-    } finally {
-      clearTimeout(timer);
-    }
+    const result = await requestChat(
+      this.fetchFn,
+      p.name,
+      p.baseUrl,
+      key,
+      model,
+      {
+        model,
+        messages: [
+          { role: "system", content: JSON_INSTRUCTION },
+          {
+            role: "user",
+            content: prompt.slice(0, LIVE_MAX_PROMPT_CHARS),
+          },
+        ],
+        response_format: { type: "json_object" },
+        temperature: 0.2,
+        max_tokens: 2000,
+      },
+      { timeoutMs: this.timeoutMs, maxBodyBytes: this.maxBodyBytes },
+    );
+    if (!result.ok) return result.failure;
 
-    if (res.status === 0 || (res.status >= 300 && res.status < 400)) {
-      return {
-        ok: false,
-        kind: "provider",
-        message: `${p.name}/${model}: unexpected redirect (${res.status}), not following`,
-      };
-    }
-    if (res.status === 401 || res.status === 403) {
-      return {
-        ok: false,
-        kind: "auth",
-        message: `${p.name}: key rejected (${res.status})`,
-      };
-    }
-    if (res.status === 429) {
-      return {
-        ok: false,
-        kind: "rate",
-        message: `${p.name}/${model}: rate limited (429)`,
-        cooldownMs: parseRetryAfterMs(
-          res.headers.get("retry-after"),
-          Date.now(),
-        ),
-      };
-    }
-    if (res.status === 400 || res.status === 404 || res.status === 422) {
-      return {
-        ok: false,
-        kind: "model",
-        message: `${p.name}/${model}: rejected (${res.status})`,
-      };
-    }
-    if (res.status < 200 || res.status >= 300) {
-      return {
-        ok: false,
-        kind: "provider",
-        message: `${p.name}/${model}: provider error (${res.status})`,
-      };
-    }
-
-    let text: string;
-    try {
-      text = await readCappedText(res, this.maxBodyBytes);
-    } catch (err) {
-      const reason = err instanceof Error ? err.message : "unreadable body";
-      return {
-        ok: false,
-        kind: "provider",
-        message: `${p.name}/${model}: ${reason}`,
-      };
-    }
     let content: unknown;
     try {
-      const envelope = JSON.parse(text) as {
+      const envelope = JSON.parse(result.text) as {
         choices?: Array<{ message?: { content?: unknown } }>;
       };
       content = envelope.choices?.[0]?.message?.content;
