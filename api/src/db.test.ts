@@ -20,10 +20,9 @@ describe("runs migration", () => {
     expect(cols).toContain("edited");
     expect(cols).toContain("generation_id");
     expect(cols).toContain("script_sha256");
-    db.prepare("INSERT INTO sessions (id, title, created_at) VALUES (?, '', ?)").run(
-      "s1",
-      1,
-    );
+    db.prepare(
+      "INSERT INTO sessions (id, title, created_at) VALUES (?, '', ?)",
+    ).run("s1", 1);
     db.prepare(
       "INSERT INTO generations (id, session_id, created_at) VALUES (?, ?, ?)",
     ).run("gen_x", "s1", 1);
@@ -132,7 +131,9 @@ describe("versioned migrations", () => {
       expect(tables.map((t) => t.name)).toContain("explanations");
       // Legacy rows survive with backfilled defaults.
       const gen = db
-        .prepare("SELECT prompt, warnings, latency_ms FROM generations WHERE id = ?")
+        .prepare(
+          "SELECT prompt, warnings, latency_ms FROM generations WHERE id = ?",
+        )
         .get("g1") as { prompt: string; warnings: string; latency_ms: number };
       expect(gen).toEqual({ prompt: "p", warnings: "[]", latency_ms: 0 });
       const run = db
@@ -162,24 +163,29 @@ describe("foreign keys", () => {
       migrate(db);
       expect(() =>
         db
-          .prepare("INSERT INTO generations (id, session_id, created_at) VALUES (?, ?, ?)")
+          .prepare(
+            "INSERT INTO generations (id, session_id, created_at) VALUES (?, ?, ?)",
+          )
           .run("g_orphan", "no_such_session", 1),
       ).toThrow();
-      db.prepare("INSERT INTO sessions (id, title, created_at) VALUES (?, '', ?)").run(
-        "s1",
-        1,
-      );
+      db.prepare(
+        "INSERT INTO sessions (id, title, created_at) VALUES (?, '', ?)",
+      ).run("s1", 1);
       db.prepare(
         "INSERT INTO generations (id, session_id, created_at) VALUES (?, ?, ?)",
       ).run("g1", "s1", 1);
       expect(() =>
         db
-          .prepare("INSERT INTO runs (id, generation_id, started_at) VALUES (?, ?, ?)")
+          .prepare(
+            "INSERT INTO runs (id, generation_id, started_at) VALUES (?, ?, ?)",
+          )
           .run("r_orphan", "no_such_generation", 1),
       ).toThrow();
       expect(() =>
         db
-          .prepare("INSERT INTO runs (id, generation_id, started_at) VALUES (?, ?, ?)")
+          .prepare(
+            "INSERT INTO runs (id, generation_id, started_at) VALUES (?, ?, ?)",
+          )
           .run("r1", "g1", 1),
       ).not.toThrow();
     } finally {
