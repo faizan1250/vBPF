@@ -5,7 +5,7 @@
 
 SHELL := /bin/sh
 .SHELLFLAGS := -eu -c
-.PHONY: setup lint test agent-build api-dev web-dev eval test-integration recipes-check vuln
+.PHONY: setup lint test agent-build api-dev web-dev eval test-integration recipes-check vuln secrets
 
 GO ?= go
 PNPM ?= pnpm
@@ -63,3 +63,9 @@ recipes-check:
 vuln:
 	@if [ -d agent ]; then cd agent && { command -v govulncheck >/dev/null || { echo "SKIP: govulncheck not installed (go install golang.org/x/vuln/cmd/govulncheck@v1.9.0)"; exit 0; }; govulncheck ./...; }; \
 		else echo "SKIP: no agent/ yet"; fi
+
+# Secret scan (R-22 keys hygiene). No root needed; skips when gitleaks is
+# not installed. CI runs gitleaks-action on every push/PR instead.
+secrets:
+	@if command -v gitleaks >/dev/null; then gitleaks detect --source . -v; \
+		else echo "SKIP: gitleaks not installed (see https://github.com/gitleaks/gitleaks#installing)"; fi

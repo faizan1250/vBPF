@@ -102,6 +102,17 @@ Two findings came up during the audit and were fixed, not waived:
   `govulncheck@v1.9.0` itself requires Go >= 1.26, so the old pin could not
   even run the current scanner without a toolchain switch.
 
+### R-22 keys hygiene (2026-11-10, base `92d267f`)
+
+CI runs gitleaks on every push/PR (the `secrets` job, `make secrets`
+locally). `GET /api/health` exposes per-provider key _counts_ only
+(`LiveLlmChain.health()`); the agent token is file-scoped and never part
+of any response. API logs redact `authorization` headers and token fields
+via the pino `redact` config in `buildApp`. Covered by
+`api/src/keys-hygiene.test.ts`, which boots the app in live mode with
+realistic fake keys, fetches `/api/health`, and asserts neither the
+response body nor captured log output contains key material.
+
 ## Logging and redaction
 
 - API logs redact `authorization` headers and any `token` field.
