@@ -16,6 +16,8 @@ export const ValidateResponseSchema = z
     ok: z.boolean(),
     errors: z.array(z.string()),
     probes: z.array(z.string()),
+    warnings: z.array(z.string()),
+    probe_count: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -95,6 +97,19 @@ export const RecipeListResponseSchema = z
   .object({ recipes: z.array(RecipeSchema) })
   .strict();
 
+export const CatalogStateSchema = z.enum(["loading", "ready", "failed"]);
+
+export const CatalogStatusSchema = z
+  .object({
+    state: CatalogStateSchema,
+    probes: z.number().int().nonnegative(),
+    refreshed_at: z.string().min(1).optional(),
+    stale_since: z.string().min(1).optional(),
+    last_error: z.string().min(1).optional(),
+    warnings: z.array(z.string()),
+  })
+  .strict();
+
 export const AgentHealthSchema = z
   .object({
     kernel: z.string(),
@@ -103,6 +118,8 @@ export const AgentHealthSchema = z
     root: z.boolean(),
     tracefs: z.boolean(),
     uptime_s: z.number(),
+    ready: z.boolean(),
+    catalog: CatalogStatusSchema,
   })
   .strict();
 
@@ -164,8 +181,38 @@ export const EventEnvelopeSchema = z
   })
   .passthrough();
 
+export const AgentErrorCodeSchema = z.enum([
+  "UNAUTHORIZED",
+  "NOT_FOUND",
+  "VALIDATION_FAILED",
+  "PROBE_NOT_FOUND",
+  "LIMIT_EXCEEDED",
+  "CATALOG_UNAVAILABLE",
+  "TIMEOUT",
+  "PROBE_ARGS_FAILED",
+]);
+
+export const ApiErrorCodeSchema = z.enum([
+  "AGENT_OFFLINE",
+  "AGENT_NOT_READY",
+  "LLM_UNAVAILABLE",
+  "LLM_ERROR",
+  "RATE_LIMITED",
+  "REFUSAL",
+  "VALIDATION_FAILED",
+  "PROBE_NOT_FOUND",
+  "LIMIT_EXCEEDED",
+  "NOT_FOUND",
+  "FORBIDDEN",
+  "INTERNAL",
+]);
+
 export const ErrorBodySchema = z
-  .object({ error: z.string().min(1), code: z.string().min(1) })
+  .object({
+    error: z.string().min(1),
+    code: z.string().min(1),
+    fix_hint: z.string().min(1).optional(),
+  })
   .passthrough();
 
 export const ChartTypeSchema = z.enum([
@@ -215,6 +262,11 @@ export type AgentRunSummary = z.infer<typeof AgentRunSummarySchema>;
 export type RunSummary = z.infer<typeof RunSummarySchema>;
 export type GetRunResponse = z.infer<typeof GetRunResponseSchema>;
 export type Recipe = z.infer<typeof RecipeSchema>;
+export type CatalogState = z.infer<typeof CatalogStateSchema>;
+export type CatalogStatus = z.infer<typeof CatalogStatusSchema>;
+export type AgentHealth = z.infer<typeof AgentHealthSchema>;
+export type AgentErrorCode = z.infer<typeof AgentErrorCodeSchema>;
+export type ApiErrorCode = z.infer<typeof ApiErrorCodeSchema>;
 export type LlmProviderHealth = z.infer<typeof LlmProviderHealthSchema>;
 export type LlmHealth = z.infer<typeof LlmHealthSchema>;
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
