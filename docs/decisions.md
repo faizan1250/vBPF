@@ -1,5 +1,40 @@
 # Decisions
 
+## R2-03 Slice 7: overall budget, waiter limits, 503 shape (2026-11-10)
+
+- **Per-attempt `min(per-request, remaining)` (D-16 applied).** A
+  `deadline = start + totalTimeoutMs` is captured at `generateDetailed` /
+  `explainDetailed` entry; `timeoutFor()` throws `LlmUnavailableError`
+  once the budget is exhausted and otherwise returns
+  `min(timeoutMs, remaining)` for each `requestChat`. The configured
+  `LLM_TOTAL_TIMEOUT_MS` (default 90 s) bounds one chain traversal; the
+  three-stall test stays within `total + epsilon` instead of
+  `3 x per-request`.
+- **Fixed `retry_after_s: 90` on every `LLM_UNAVAILABLE` 503 (D-24).**
+  All four `LLM_UNAVAILABLE` sites (unconfigured chain + exhausted
+  budget on both routes) send `retry_after_s: 90` plus a `Retry-After: 90`
+  header. Fixed, not derived from the configured budget, so clients and
+  the route shape stay stable when the budget is tuned; 90 matches the
+  default total budget (one budget window of backoff).
+- **Waiter env names (D-25).** `LLM_MAX_WAITERS` (default 10) caps queued
+  acquirers; `LLM_WAIT_TIMEOUT_MS` (default 10 s) bounds each wait. Both
+  live in `EnvSchema`, `.env.example`, and the README alongside
+  `LLM_TIMEOUT_MS` / `LLM_TOTAL_TIMEOUT_MS`; the chain also accepts
+  ctor overrides. Overflow and wait-timeout reject with busy
+  `LlmUnavailableError`, never a network call.
+- **Client disconnect aborts in flight.** Each `/api/generate` and
+  `/api/explain` handler creates a per-request `AbortController` from the
+  response `"close"` (before `writableEnded`; `req.raw` close fires when
+  the buffered body is consumed, so it cannot be used) and threads its
+  signal through `runGenerate`/`explainScriptText` into `requestChat`; an
+  external abort throws `LlmUnavailableError("client disconnected")`
+  without cooling the provider. Semaphore slots still release via the
+  existing `finally`.
+- **Verified:** `tsc --noEmit` clean, eslint/prettier clean, api vitest
+  green (new: env-defaults, 3-stall budget bound, explain budget, waiter
+  cap, waiter timeout, disconnect abort, route 503 shape; `config.test.ts`
+  budget defaults).
+
 ## R2-03 Slice 6: deadline spans headers and body (2026-11-10)
 
 - **One timer across fetch + body in `requestChat()`.** The

@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { buildApp } from "./server.js";
 import {
+  LIVE_UNAVAILABLE_RETRY_AFTER_S,
   LiveLlmChain,
   LlmRequestError,
   LlmUnavailableError,
@@ -19,7 +20,11 @@ import {
   discoverFallbackModels,
   discoverJsonMode,
   discoverKeys,
+  discoverMaxWaiters,
   discoverModel,
+  discoverTimeoutMs,
+  discoverTotalTimeoutMs,
+  discoverWaitTimeoutMs,
   parseChain,
   parseUsage,
   resetDeprecatedGenericModelWarnForTests,
@@ -798,6 +803,202 @@ describe("deadline spans headers and body", () => {
     expect(cancelled).toBe(true);
     const call = infos.find((l) => l.msg === "live llm call")?.obj;
     expect(call).toMatchObject({ status: 200, outcome: "too_large" });
+  });
+});
+
+describe("total budget and waiter limits", () => {
+  const stallUntilAbort = (init: RequestInit): Promise<Response> =>
+    new Promise((_resolve, reject) => {
+      const sig = init.signal as AbortSignal | null | undefined;
+      const err = (): Error =>
+        sig?.reason instanceof Error
+          ? sig.reason
+          : new DOMException("aborted", "AbortError");
+      if (sig?.aborted) {
+        reject(err());
+        return;
+      }
+      sig?.addEventListener("abort", () => reject(err()), { once: true });
+    });
+
+  it("reads timeout and waiter env with defaults", () => {
+    expect(discoverTimeoutMs({})).toBe(45_000);
+    expect(discoverTotalTimeoutMs({})).toBe(90_000);
+    expect(discoverMaxWaiters({})).toBe(10);
+    expect(discoverWaitTimeoutMs({})).toBe(10_000);
+    expect(
+      discoverTimeoutMs({ LLM_TIMEOUT_MS: "1000" } as NodeJS.ProcessEnv),
+    ).toBe(1000);
+    expect(
+      discoverTotalTimeoutMs({
+        LLM_TOTAL_TIMEOUT_MS: "5000",
+      } as NodeJS.ProcessEnv),
+    ).toBe(5000);
+    expect(discoverTimeoutMs({ LLM_TIMEOUT_MS: "junk" })).toBe(45_000);
+    expect(discoverTotalTimeoutMs({ LLM_TOTAL_TIMEOUT_MS: "0" })).toBe(90_000);
+  });
+
+  it("three stalling providers stay within the total budget", async () => {
+    const seen: Seen[] = [];
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq,cerebras,openrouter",
+        GROQ_API_KEY: "k1",
+        LLM_GROQ_MODEL: "m1",
+        CEREBRAS_API_KEY: "k2",
+        LLM_CEREBRAS_MODEL: "m2",
+        OPENROUTER_API_KEY: "k3",
+        LLM_OPENROUTER_MODEL: "m3",
+      },
+      fetchFn: stubFetch((_url, init) => stallUntilAbort(init), seen),
+      timeoutMs: 10_000,
+      totalTimeoutMs: 700,
+    });
+    const started = Date.now();
+    await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+      LlmUnavailableError,
+    );
+    const elapsed = Date.now() - started;
+    // Without the budget this would take ~30 s (3 x 10 s per-request).
+    expect(elapsed).toBeLessThan(700 + 2000);
+    // First attempt ran with min(per-request, remaining); the rest of the
+    // budget was exhausted before a second full attempt.
+    expect(seen.length).toBeLessThanOrEqual(2);
+  });
+
+  it("explain honors the total budget too", async () => {
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "m1",
+      },
+      fetchFn: stubFetch((_url, init) => stallUntilAbort(init), []),
+      timeoutMs: 10_000,
+      totalTimeoutMs: 400,
+    });
+    const started = Date.now();
+    await expect(
+      chain.explainDetailed("BEGIN { @x = count(); }\n"),
+    ).rejects.toBeInstanceOf(LlmUnavailableError);
+    expect(Date.now() - started).toBeLessThan(400 + 2000);
+  });
+
+  it("rejects waiters beyond the cap without touching the network", async () => {
+    const seen: Seen[] = [];
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "m1",
+      },
+      fetchFn: stubFetch((_url, init) => stallUntilAbort(init), seen),
+      timeoutMs: 800,
+      totalTimeoutMs: 8000,
+      maxConcurrency: 1,
+      maxWaiters: 1,
+      waitTimeoutMs: 5000,
+    });
+    const first = chain.generate("cpu?");
+    const second = chain.generate("cpu?");
+    await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+      LlmUnavailableError,
+    );
+    await expect(first).rejects.toBeInstanceOf(LlmUnavailableError);
+    await expect(second).rejects.toBeInstanceOf(LlmUnavailableError);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("times out queued waiters", async () => {
+    const seen: Seen[] = [];
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "m1",
+      },
+      fetchFn: stubFetch((_url, init) => stallUntilAbort(init), seen),
+      timeoutMs: 2500,
+      totalTimeoutMs: 8000,
+      maxConcurrency: 1,
+      maxWaiters: 10,
+      waitTimeoutMs: 150,
+    });
+    const first = chain.generate("cpu?");
+    const started = Date.now();
+    await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+      LlmUnavailableError,
+    );
+    expect(Date.now() - started).toBeLessThan(150 + 2000);
+    await expect(first).rejects.toBeInstanceOf(LlmUnavailableError);
+    expect(seen).toHaveLength(1);
+  });
+
+  it("client disconnect aborts the in-flight request", async () => {
+    const ctrl = new AbortController();
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "m1",
+      },
+      fetchFn: stubFetch((_url, init) => stallUntilAbort(init), []),
+      timeoutMs: 10_000,
+      totalTimeoutMs: 10_000,
+    });
+    const pending = chain.generateDetailed("cpu?", undefined, {
+      signal: ctrl.signal,
+    });
+    ctrl.abort();
+    await expect(pending).rejects.toBeInstanceOf(LlmUnavailableError);
+  });
+
+  it("budget exhaustion over the route returns 503 with retry_after_s", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vbpf-budget-"));
+    const tokenFile = join(dir, "agent.token");
+    writeFileSync(tokenFile, `${TOKEN}\n`);
+    const fake = await startFakeAgent();
+    const stalling = stubFetch((_url, init) => stallUntilAbort(init), []);
+    const app = await buildApp({
+      agentUrl: fake.url,
+      tokenFile,
+      dbPath: ":memory:",
+      recipesDir: RECIPES_DIR,
+      webOrigin: "http://localhost:5173",
+      llmMode: "live",
+      llmChain: "groq",
+      llmEnv: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "m1",
+        LLM_TIMEOUT_MS: "10000",
+        LLM_TOTAL_TIMEOUT_MS: "400",
+      },
+      llmFetch: stalling,
+    });
+    const addr = await app.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      const res = await fetch(
+        `${addr.replace("[::1]", "127.0.0.1")}/api/generate`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ prompt: "Which processes open files?" }),
+        },
+      );
+      expect(res.status).toBe(503);
+      expect(res.headers.get("retry-after")).toBe(
+        String(LIVE_UNAVAILABLE_RETRY_AFTER_S),
+      );
+      expect(await res.json()).toMatchObject({
+        code: "LLM_UNAVAILABLE",
+        retry_after_s: LIVE_UNAVAILABLE_RETRY_AFTER_S,
+      });
+    } finally {
+      await app.close();
+      await fake.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

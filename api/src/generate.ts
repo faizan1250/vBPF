@@ -40,6 +40,7 @@ type PossiblyDetailedLlm = LlmClient & {
   generateDetailed?: (
     prompt: string,
     feedback?: LlmFeedback,
+    opts?: { signal?: AbortSignal },
   ) => Promise<LlmDetailedResult>;
 };
 
@@ -47,10 +48,16 @@ async function generateWithAttribution(
   llm: LlmClient,
   prompt: string,
   feedback?: LlmFeedback,
+  signal?: AbortSignal,
 ): Promise<{ out: LlmOutput; model: string; usage?: LlmUsage }> {
   const detailed = (llm as PossiblyDetailedLlm).generateDetailed;
   if (typeof detailed === "function") {
-    const result = await detailed.call(llm, prompt, feedback);
+    const result = await detailed.call(
+      llm,
+      prompt,
+      feedback,
+      signal === undefined ? undefined : { signal },
+    );
     return {
       out: result.output,
       model: result.model,
@@ -174,6 +181,7 @@ export async function runGenerate(
     sessionId?: string;
     deps: GenerateDeps;
     onUsage?: (usage: LlmUsage) => void;
+    signal?: AbortSignal;
   },
 ): Promise<GenerateResponse> {
   const { db, recipesDir, agentUrl, tokenFile, llm } = opts.deps;
@@ -243,6 +251,7 @@ export async function runGenerate(
       attempt === 1
         ? undefined
         : { previousScript, errors: truncateErrors(lastErrors) },
+      opts.signal,
     );
     const out = generated.out;
     modelUsed = generated.model;

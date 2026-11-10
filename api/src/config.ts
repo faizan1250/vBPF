@@ -13,6 +13,10 @@ const EnvSchema = z
     LLM_MODEL: z.string().min(1).default("mock"),
     LLM_MODE: z.enum(["mock", "live"]).default("mock"),
     LLM_PROVIDER_CHAIN: z.string().min(1).default("groq"),
+    LLM_TIMEOUT_MS: z.coerce.number().int().positive().default(45_000),
+    LLM_TOTAL_TIMEOUT_MS: z.coerce.number().int().positive().default(90_000),
+    LLM_MAX_WAITERS: z.coerce.number().int().positive().default(10),
+    LLM_WAIT_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
   })
   .strict();
 
@@ -30,5 +34,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     LLM_MODEL: env["LLM_MODEL"],
     LLM_MODE: env["LLM_MODE"],
     LLM_PROVIDER_CHAIN: env["LLM_PROVIDER_CHAIN"],
+    LLM_TIMEOUT_MS: env["LLM_TIMEOUT_MS"],
+    LLM_TOTAL_TIMEOUT_MS: env["LLM_TOTAL_TIMEOUT_MS"],
+    LLM_MAX_WAITERS: env["LLM_MAX_WAITERS"],
+    LLM_WAIT_TIMEOUT_MS: env["LLM_WAIT_TIMEOUT_MS"],
   });
 }
