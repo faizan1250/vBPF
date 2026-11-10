@@ -1,9 +1,12 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -47,6 +50,7 @@ func testServer(t *testing.T, cfg Config) *Server {
 	}
 	s, err := New(cfg)
 	require.NoError(t, err)
+	t.Cleanup(s.runs.Shutdown)
 	if defaultCatalog {
 		require.NoError(t, s.catalog.Refresh(context.Background()))
 	}
@@ -376,4 +380,231 @@ func TestTokenFile0600(t *testing.T) {
 	} else {
 		require.NotZero(t, fi.Size())
 	}
+}
+
+func TestNewHTTPServerConfig(t *testing.T) {
+	s := testServer(t, Config{Addr: "127.0.0.1:0"})
+	srv := s.newHTTPServer()
+	require.Equal(t, "127.0.0.1:0", srv.Addr)
+	require.Equal(t, s.mux, srv.Handler)
+	require.Equal(t, 5*time.Second, srv.ReadHeaderTimeout)
+	require.Equal(t, 60*time.Second, srv.IdleTimeout)
+	require.Equal(t, 64<<10, srv.MaxHeaderBytes)
+	require.Zero(t, srv.WriteTimeout, "global WriteTimeout must stay unset for long-lived streams")
+}
+
+func TestServerHeaderLimit431AndSlowHeaderTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+
+	s := testServer(t, Config{Addr: addr})
+	s.readHeaderTimeout = 80 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- s.ListenAndServe(ctx)
+	}()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	require.Eventually(t, func() bool {
+		req, err := http.NewRequest("GET", "http://"+addr+"/health", nil)
+		if err != nil {
+			return false
+		}
+		req.Header.Set("Authorization", "Bearer "+s.Token())
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 2*time.Second, 10*time.Millisecond)
+
+	t.Run("oversized headers return 431", func(t *testing.T) {
+		req, err := http.NewRequest("GET", "http://"+addr+"/health", nil)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer "+s.Token())
+		// Exceed 64 KB + Go net/http's 4 KB slop while staying well below the 1 MB default.
+		req.Header.Set("X-Oversized", strings.Repeat("a", (64<<10)+8192))
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer func() { _ = resp.Body.Close() }()
+		require.Equal(t, http.StatusRequestHeaderFieldsTooLarge, resp.StatusCode)
+	})
+
+	t.Run("slow headers time out after ReadHeaderTimeout", func(t *testing.T) {
+		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+		require.NoError(t, err)
+		defer func() { _ = conn.Close() }()
+
+		_, err = io.WriteString(conn, "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+		require.NoError(t, err)
+		require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+
+		raw, rerr := io.ReadAll(conn)
+		if rerr != nil {
+			if ne, ok := rerr.(net.Error); ok {
+				require.False(t, ne.Timeout(), "server did not drop slow-header connection before client deadline: %v", rerr)
+			}
+		}
+		if len(raw) > 0 {
+			require.Contains(t, string(raw), "408 Request Timeout")
+		}
+	})
+
+	cancel()
+	select {
+	case err := <-serveDone:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("ListenAndServe did not stop cleanly")
+	}
+}
+
+func TestServerIdleKeepAliveTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	addr := ln.Addr().String()
+	require.NoError(t, ln.Close())
+
+	s := testServer(t, Config{Addr: addr})
+	// Keep ReadHeaderTimeout at 5s so only IdleTimeout can expire the idle keep-alive socket.
+	s.idleTimeout = 80 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- s.ListenAndServe(ctx)
+	}()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	require.Eventually(t, func() bool {
+		req, err := http.NewRequest("GET", "http://"+addr+"/health", nil)
+		if err != nil {
+			return false
+		}
+		req.Header.Set("Authorization", "Bearer "+s.Token())
+		resp, err := client.Do(req)
+		if err != nil {
+			return false
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 2*time.Second, 10*time.Millisecond)
+
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	require.NoError(t, err)
+	defer func() { _ = conn.Close() }()
+
+	_, err = io.WriteString(conn, "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer "+s.Token()+"\r\n\r\n")
+	require.NoError(t, err)
+
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, nil)
+	require.NoError(t, err)
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	_, rerr := br.ReadByte()
+	require.Error(t, rerr)
+	if ne, ok := rerr.(net.Error); ok {
+		require.False(t, ne.Timeout(), "server did not close idle keep-alive connection before client deadline: %v", rerr)
+	}
+
+	cancel()
+	select {
+	case err := <-serveDone:
+		require.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("ListenAndServe did not stop cleanly")
+	}
+}
+
+func TestStrictJSONDecoding(t *testing.T) {
+	oversizedField := fmt.Sprintf(`{"script":%q}`, strings.Repeat("x", maxRequestBodyBytes+100))
+	oversizedTrailing := `{"script":"BEGIN {}"}` + strings.Repeat(" ", maxRequestBodyBytes+100)
+
+	rejectCases := []struct {
+		name string
+		body string
+		nilB bool
+	}{
+		{name: "unknown field", body: `{"script":"BEGIN {}","extra":true}`},
+		{name: "trailing json object", body: `{"script":"BEGIN {}"} {}`},
+		{name: "trailing scalar", body: `{"script":"BEGIN {}"} 123`},
+		{name: "trailing garbage", body: `{"script":"BEGIN {}"} garbage`},
+		{name: "empty body", body: ""},
+		{name: "whitespace body", body: "   \n\t "},
+		{name: "nil body", nilB: true},
+		{name: "bare null", body: "null"},
+		{name: "padded null", body: "  null\n"},
+		{name: "json array", body: "[]"},
+		{name: "json number", body: "123"},
+		{name: "json bool", body: "true"},
+		{name: "json string", body: `"BEGIN {}"`},
+		{name: "syntax error", body: `{"script":`},
+		{name: "oversized body in field", body: oversizedField},
+		{name: "oversized trailing whitespace", body: oversizedTrailing},
+	}
+
+	s := testServer(t, Config{RunFn: fakeRunner(0, time.Millisecond)})
+	for _, endpoint := range []string{"/v1/validate", "/v1/runs"} {
+		for _, tc := range rejectCases {
+			t.Run(endpoint+"_"+tc.name, func(t *testing.T) {
+				var req *http.Request
+				if tc.nilB {
+					req, _ = http.NewRequest("POST", endpoint, nil)
+					req.Header.Set("Authorization", "Bearer "+s.Token())
+				} else {
+					req = httptest.NewRequest("POST", endpoint, strings.NewReader(tc.body))
+					req.Header.Set("Authorization", "Bearer "+s.Token())
+				}
+				w := httptest.NewRecorder()
+				s.Handler().ServeHTTP(w, req)
+				require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+				var errBody map[string]string
+				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errBody))
+				require.Equal(t, "VALIDATION_FAILED", errBody["code"])
+			})
+		}
+	}
+
+	t.Run("valid minimal bodies pass", func(t *testing.T) {
+		for _, body := range []string{`{"script":"BEGIN {}"}`, "{\"script\":\"BEGIN {}\"}\n  "} {
+			w := httptest.NewRecorder()
+			s.Handler().ServeHTTP(w, authReq(t, s, "POST", "/v1/validate", body))
+			require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+			var out struct {
+				OK bool `json:"ok"`
+			}
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+			require.True(t, out.OK)
+		}
+
+		// Run endpoint accepts minimal valid body and optional duration_s.
+		for _, body := range []string{`{"script":"BEGIN {}"}`, `{"script":"BEGIN {}","duration_s":5}`} {
+			done := make(chan struct{})
+			srv := testServer(t, Config{RunFn: func(ctx context.Context, opts runner.Options, emit func(parser.Event) error) error {
+				defer close(done)
+				_ = emit(parser.Status(opts.RunID, 0, "running"))
+				_ = emit(parser.Summarize(opts.RunID, 1, parser.Summary{ExitReason: runner.ReasonCompleted}))
+				return nil
+			}})
+			w := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(w, authReq(t, srv, "POST", "/v1/runs", body))
+			require.Equal(t, http.StatusCreated, w.Code, w.Body.String())
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("run did not finish")
+			}
+		}
+	})
 }
