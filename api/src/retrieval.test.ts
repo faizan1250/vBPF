@@ -49,6 +49,72 @@ describe("buildFtsQuery", () => {
   it("strips fts metacharacters", () => {
     expect(buildFtsQuery(['a"b*c'])).toBe('"abc"');
   });
+
+  it("neutralizes quote, wildcard, operator, and dash inputs", () => {
+    expect(buildFtsQuery(['"'])).toBe("");
+    expect(buildFtsQuery(["*"])).toBe("");
+    expect(buildFtsQuery(["NEAR("])).toBe('"NEAR("');
+    expect(buildFtsQuery(["AND"])).toBe('"AND"');
+    expect(buildFtsQuery(["-"])).toBe('"-"');
+  });
+
+  it("maps empty input to empty query", () => {
+    expect(buildFtsQuery([])).toBe("");
+    expect(buildFtsQuery([""])).toBe("");
+    expect(buildFtsQuery(["   "])).toBe("");
+  });
+
+  it("strips nul bytes", () => {
+    const nul = String.fromCharCode(0);
+    expect(buildFtsQuery([`a${nul}b`])).toBe('"ab"');
+    expect(buildFtsQuery([nul])).toBe("");
+  });
+
+  it("executes hostile queries without fts errors", () => {
+    const inputs = [
+      ['a"b'],
+      ["a*b"],
+      ["NEAR("],
+      ["NEAR(cpu, process)"],
+      ["AND"],
+      ["OR"],
+      ["NOT"],
+      ["-"],
+      ["-cpu"],
+      ["cpu:process"],
+      ["(cpu)"],
+      ['"; DROP TABLE recipes_index; --'],
+    ];
+    for (const keywords of inputs) {
+      const match = buildFtsQuery(keywords);
+      if (match === "") continue;
+      expect(() =>
+        db
+          .prepare(
+            "SELECT count(*) AS n FROM recipes_index WHERE recipes_index MATCH ?",
+          )
+          .get(match),
+      ).not.toThrow();
+    }
+  });
+
+  it("handles raw prompts without fts errors", () => {
+    const prompts = [
+      '"',
+      "*",
+      "NEAR(cpu, process)",
+      "AND OR NOT",
+      "-",
+      "",
+      "   ",
+      '"; DROP TABLE recipes_index; --',
+      "cpu:process",
+      "-cpu",
+    ];
+    for (const prompt of prompts) {
+      expect(() => searchRecipes(db, prompt, 3)).not.toThrow();
+    }
+  });
 });
 
 describe("recipe retrieval", () => {
