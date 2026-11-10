@@ -89,7 +89,11 @@ export function buildFtsQuery(keywords: string[]): string {
     // Split multi-word synonym expansions into individual quoted terms.
     for (const part of keyword.split(/\s+/)) {
       // NUL truncates the bound parameter in SQLite, orphaning the closing quote.
-      const token = part.replace(/["*\u0000]/g, "").trim();
+      const token = part
+        .replace(/["*]/g, "")
+        .split(String.fromCharCode(0))
+        .join("")
+        .trim();
       if (token !== "") terms.push(`"${token}"`);
     }
   }
