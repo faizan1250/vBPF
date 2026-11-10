@@ -1,18 +1,24 @@
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { mkdtempSync, readFileSync as readFileSyncNode } from "node:fs";
+import { tmpdir } from "node:os";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   EvalPromptsSchema,
   assertCallBudget,
   categoryFromId,
+  checkAgentPreflight,
   loadPrompts,
   parseEvalArgs,
   renderMarkdown,
   runEval,
   summarize,
+  toScriptRecords,
+  writeScriptsNdjson,
 } from "./eval.js";
+import type { AgentHealth } from "./agent-client.js";
 import { LlmOutputSchema, isRefusalPrompt, type LlmClient } from "./llm.js";
 
 const PROMPTS_PATH = join(
@@ -128,8 +134,21 @@ describe("eval runner", () => {
       latency_ms: 1,
       tokens_approx: 10,
       errors: [] as string[],
+      static_ok_first_try: true,
+      static_ok: true,
+      agent_ok_first_try: true,
+      agent_ok: true,
+      script: "profile:hz:99 { @x = count(); }\n",
+      provider_model: "stub",
+      produced_events: null as number | null,
+      produced_status: "skipped" as const,
+      notes: "",
     };
     const summary = summarize([fakeCase]);
+    expect(summary.static_first_try).toBe(1);
+    expect(summary.static_within_retries).toBe(1);
+    expect(summary.agent_first_try).toBe(1);
+    expect(summary.agent_within_retries).toBe(1);
     const live = renderMarkdown(
       "2026-11-10",
       "groq/test",
@@ -333,6 +352,349 @@ describe("eval token usage", () => {
       const md = renderMarkdown("2026-11-10", "mock", summary, cases);
       expect(md).toContain("| tokens approx total |");
       expect(md).not.toContain("tokens real total");
+    } finally {
+      db.close();
+    }
+  });
+});
+
+describe("eval agent flags", () => {
+  it("parses agent flags with env defaults", () => {
+    const root = "/repo";
+    const base = parseEvalArgs([], root, {});
+    expect(base.agent).toBe(false);
+    expect(base.agentUrl).toBe("http://127.0.0.1:8787");
+    expect(base.tokenFile).toBe("./run/agent.token");
+    const full = parseEvalArgs(
+      [
+        "--live",
+        "--agent",
+        "--agent-url",
+        "http://127.0.0.1:9999",
+        "--token-file",
+        "/tmp/tok",
+      ],
+      root,
+      {},
+    );
+    expect(full.live).toBe(true);
+    expect(full.agent).toBe(true);
+    expect(full.agentUrl).toBe("http://127.0.0.1:9999");
+    expect(full.tokenFile).toBe("/tmp/tok");
+    expect(
+      parseEvalArgs([], root, {
+        AGENT_URL: "http://127.0.0.1:8788",
+        AGENT_TOKEN_FILE: "/env/tok",
+      }).agentUrl,
+    ).toBe("http://127.0.0.1:8788");
+    expect(() => parseEvalArgs(["--agent"], root, {})).toThrow();
+    expect(() =>
+      parseEvalArgs(["--live", "--agent", "--bogus"], root, {}),
+    ).toThrow();
+    expect(() =>
+      parseEvalArgs(["--live", "--agent", "--agent-url"], root, {}),
+    ).toThrow();
+  });
+});
+
+describe("eval agent preflight", () => {
+  const healthy = (): Promise<AgentHealth> =>
+    Promise.resolve({
+      kernel: "6.6.87-test",
+      bpftrace_version: "v0.20.2",
+      btf: true,
+      root: true,
+      tracefs: true,
+      uptime_s: 1,
+    });
+
+  it("passes when reachable as root with BTF", async () => {
+    const health = await checkAgentPreflight(
+      "http://127.0.0.1:1",
+      "tok",
+      healthy,
+    );
+    expect(health.kernel).toBe("6.6.87-test");
+    expect(health.bpftrace_version).toBe("v0.20.2");
+  });
+
+  it("fails when the agent is down, not root, or lacks BTF", async () => {
+    await expect(
+      checkAgentPreflight("http://127.0.0.1:1", "tok", async () => {
+        throw new Error(" refused");
+      }),
+    ).rejects.toThrow(/not falling back to stubs/);
+    await expect(
+      checkAgentPreflight("http://127.0.0.1:1", "tok", async () => ({
+        ...(await healthy()),
+        root: false,
+      })),
+    ).rejects.toThrow(/not running as root/);
+    await expect(
+      checkAgentPreflight("http://127.0.0.1:1", "tok", async () => ({
+        ...(await healthy()),
+        btf: false,
+      })),
+    ).rejects.toThrow(/btf: false/);
+  });
+});
+
+describe("eval static vs agent layers", () => {
+  const validOutput = (script: string): object => ({
+    script,
+    chart_type: "bar",
+    explanation: "ok",
+    duration_s: 10,
+    refusal: null,
+  });
+  const validScript = "profile:hz:99 { @x = count(); }\n";
+
+  it("counts static pass but failed dry-run as not compiled", async () => {
+    const entries = loadPrompts(PROMPTS_PATH).filter(
+      (e) => e.id === "direct-01",
+    );
+    const stub = {
+      model: "stub",
+      generate: async () => LlmOutputSchema.parse(validOutput(validScript)),
+    } as unknown as LlmClient;
+    const { cases, db } = await runEval(entries, {
+      recipesDir: RECIPES_DIR,
+      model: "stub",
+      llmFactory: () => stub,
+      validateAgentFn: async () => ({
+        ok: false,
+        errors: ["fake dry-run: unknown probe"],
+        probes: [],
+      }),
+    });
+    try {
+      expect(cases).toHaveLength(1);
+      expect(cases[0]?.ok).toBe(false);
+      expect(cases[0]?.attempts).toBe(3);
+      expect(cases[0]?.static_ok).toBe(true);
+      expect(cases[0]?.static_ok_first_try).toBe(true);
+      expect(cases[0]?.agent_ok).toBe(false);
+      expect(cases[0]?.agent_ok_first_try).toBe(false);
+      expect(cases[0]?.errors.join(" ")).toContain("fake dry-run");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("tracks first-try vs within-retries per layer", async () => {
+    const entries = loadPrompts(PROMPTS_PATH).filter(
+      (e) => e.id === "direct-01",
+    );
+    const stub = {
+      model: "stub/m",
+      generate: async () => LlmOutputSchema.parse(validOutput(validScript)),
+    } as unknown as LlmClient;
+    let agentCalls = 0;
+    const { cases, summary, db } = await runEval(entries, {
+      recipesDir: RECIPES_DIR,
+      model: "stub",
+      llmFactory: () => stub,
+      validateAgentFn: async () => {
+        agentCalls += 1;
+        return agentCalls === 1
+          ? { ok: false, errors: ["fake dry-run: retry me"], probes: [] }
+          : { ok: true, errors: [], probes: [] };
+      },
+    });
+    try {
+      expect(cases[0]?.ok).toBe(true);
+      expect(cases[0]?.attempts).toBe(2);
+      expect(cases[0]?.static_ok_first_try).toBe(true);
+      expect(cases[0]?.static_ok).toBe(true);
+      expect(cases[0]?.agent_ok_first_try).toBe(false);
+      expect(cases[0]?.agent_ok).toBe(true);
+      expect(cases[0]?.provider_model).toBe("stub/m");
+      expect(cases[0]?.script).toContain("profile:hz:99");
+      expect(summary.static_first_try).toBe(1);
+      expect(summary.static_within_retries).toBe(1);
+      expect(summary.agent_first_try).toBe(0);
+      expect(summary.agent_within_retries).toBe(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("flags an accepted must_refuse script and never runs it", async () => {
+    const entries = loadPrompts(PROMPTS_PATH).filter(
+      (e) => e.id === "adversarial-01",
+    );
+    expect(entries).toHaveLength(1);
+    const stub = {
+      model: "stub",
+      generate: async () => LlmOutputSchema.parse(validOutput(validScript)),
+    } as unknown as LlmClient;
+    const runSpy = vi.fn(async () => ({ events: 3 }));
+    const { cases, db } = await runEval(entries, {
+      recipesDir: RECIPES_DIR,
+      model: "stub",
+      llmFactory: () => stub,
+      validateAgentFn: async () => ({ ok: true, errors: [], probes: [] }),
+      agentMode: true,
+      agentUrl: "http://127.0.0.1:1",
+      tokenFile: "test.token",
+      searchProbesFn: async () => [],
+      probeArgsFn: async () => "",
+      runScriptFn: runSpy,
+    });
+    try {
+      expect(cases[0]?.ok).toBe(true);
+      expect(cases[0]?.refusal_correct).toBe(false);
+      expect(cases[0]?.produced_status).toBe("skipped");
+      expect(cases[0]?.produced_events).toBeNull();
+      expect(cases[0]?.notes).toContain("ACCEPTED-UNSAFE-CASE");
+      expect(runSpy).not.toHaveBeenCalled();
+    } finally {
+      db.close();
+    }
+  });
+
+  it("requires real functions in agent mode", async () => {
+    const entries = loadPrompts(PROMPTS_PATH).filter(
+      (e) => e.id === "direct-01",
+    );
+    await expect(
+      runEval(entries, {
+        recipesDir: RECIPES_DIR,
+        model: "stub",
+        agentMode: true,
+        agentUrl: "http://127.0.0.1:1",
+        tokenFile: "test.token",
+      }),
+    ).rejects.toThrow(/no stub fallback/);
+  });
+
+  it("maps produced runs to produced, no-events, and error", async () => {
+    const entries = loadPrompts(PROMPTS_PATH).filter(
+      (e) => e.id === "direct-01",
+    );
+    const stub = {
+      model: "stub",
+      generate: async () => LlmOutputSchema.parse(validOutput(validScript)),
+    } as unknown as LlmClient;
+    const baseOpts = {
+      recipesDir: RECIPES_DIR,
+      model: "stub",
+      llmFactory: () => stub,
+      validateAgentFn: async () => ({ ok: true, errors: [], probes: [] }),
+    };
+    const { cases: produced, db: db1 } = await runEval(entries, {
+      ...baseOpts,
+      runScriptFn: async () => ({ events: 5 }),
+    });
+    try {
+      expect(produced[0]?.produced_status).toBe("produced");
+      expect(produced[0]?.produced_events).toBe(5);
+    } finally {
+      db1.close();
+    }
+    const { cases: quiet, db: db2 } = await runEval(entries, {
+      ...baseOpts,
+      runScriptFn: async () => ({ events: 0 }),
+    });
+    try {
+      expect(quiet[0]?.produced_status).toBe("no-events");
+      expect(quiet[0]?.notes).toContain("5 s window");
+    } finally {
+      db2.close();
+    }
+    const {
+      cases: broken,
+      summary,
+      db: db3,
+    } = await runEval(entries, {
+      ...baseOpts,
+      runScriptFn: async () => {
+        throw new Error("boom");
+      },
+    });
+    try {
+      expect(broken[0]?.produced_status).toBe("error");
+      expect(summary.produced_errors).toBe(1);
+      expect(summary.produced_pass).toBe(0);
+      expect(summary.produced_denominator).toBe(1);
+    } finally {
+      db3.close();
+    }
+  });
+});
+
+describe("eval scripts persistence and live+agent rendering", () => {
+  it("writes one ndjson line per generated script with no secrets", async () => {
+    const entries = loadPrompts(PROMPTS_PATH).filter(
+      (e) => e.id === "direct-01" || e.id === "adversarial-01",
+    );
+    const { cases, db } = await runEval(entries, {
+      recipesDir: RECIPES_DIR,
+      model: "mock",
+    });
+    try {
+      const dir = mkdtempSync(join(tmpdir(), "vbpf-eval-"));
+      const path = join(dir, "scripts.ndjson");
+      writeScriptsNdjson(path, cases);
+      const text = readFileSyncNode(path, "utf8");
+      const lines = text.trim().split("\n");
+      expect(lines).toHaveLength(1);
+      const record = JSON.parse(lines[0] ?? "{}") as Record<string, unknown>;
+      expect(record["id"]).toBe("direct-01");
+      expect(record["prompt"]).toBe("direct-01");
+      expect(typeof record["script"]).toBe("string");
+      expect(record["chart_type"]).toBeTruthy();
+      expect(typeof record["attempts"]).toBe("number");
+      expect(typeof record["provider_model"]).toBe("string");
+      expect(record["produced_status"]).toBe("skipped");
+      expect(text).not.toContain("token");
+      expect(toScriptRecords(cases)).toHaveLength(1);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("renders the live+agent mode with kernel, status, and notes", async () => {
+    const entries = loadPrompts(PROMPTS_PATH).filter(
+      (e) => e.id === "direct-01",
+    );
+    const stub = {
+      model: "stub",
+      generate: async () =>
+        LlmOutputSchema.parse({
+          script: "profile:hz:99 { @x = count(); }\n",
+          chart_type: "bar",
+          explanation: "ok",
+          duration_s: 10,
+          refusal: null,
+        }),
+    } as unknown as LlmClient;
+    const { cases, summary, db } = await runEval(entries, {
+      recipesDir: RECIPES_DIR,
+      model: "stub",
+      llmFactory: () => stub,
+      validateAgentFn: async () => ({ ok: true, errors: [], probes: [] }),
+      runScriptFn: async () => ({ events: 0 }),
+    });
+    try {
+      const md = renderMarkdown(
+        "2026-11-10",
+        "stub",
+        summary,
+        cases,
+        "live+agent",
+        {
+          kernel: "6.6.87-test",
+          bpftrace: "v0.20.2",
+        },
+      );
+      expect(md).toContain("Mode: live+agent");
+      expect(md).toContain("6.6.87-test");
+      expect(md).toContain("v0.20.2");
+      expect(md).toContain("dry-run compile pass");
+      expect(md).toContain("produced-output (generated)");
+      expect(md).toContain("produced");
+      expect(md).toContain("## Notes");
     } finally {
       db.close();
     }

@@ -9,6 +9,40 @@ real provider keys, and never add them to CI secrets — CI always runs with
 - Safety caps for generated probes: see `MAX_DURATION_S`, `BPFTRACE_*` in
   `.env.example`.
 
+## Real-agent eval (R2-01 stage A) — local only, never CI
+
+The harness (`make -C eval run-live-real`, i.e.
+`pnpm -C ../api run eval -- --live --agent --delay-ms 15000`) talks to the
+root agent over its HTTP API as the normal user. Stock runners keep the
+stubbed `--live` path; `--agent` never falls back to stubs.
+
+1. Build the agent and create the token file **as the user that runs the
+   eval** (so it stays user-owned, never group- or world-readable):
+   `install -m 0600 /dev/null ./run/agent.token && head -c 32 /dev/urandom | base64 > ./run/agent.token && chmod 0600 ./run/agent.token`.
+2. Start the dev agent as root with that token file (from WSL:
+   `wsl -u root /path/to/bin/agent serve --token-file /path/to/run/agent.token`),
+   then confirm `/health` reports `root: true`, `btf: true`.
+3. Run `make -C eval run-live-real` from the repo root (about 8 minutes of
+   paced LLM calls plus about 3 minutes of 5 s runs). Flags:
+   `--agent-url` (default `AGENT_URL`, else `http://127.0.0.1:8787`),
+   `--token-file` (default `AGENT_TOKEN_FILE`/`TOKEN_FILE`, else
+   `./run/agent.token`).
+4. While each validated script runs 5 s (concurrency 1), keep this mixed
+   user-level workload going in another shell (no `tc netem`, no root):
+   `while :; do find /usr -type f >/dev/null 2>&1; done &`,
+   `while :; do /bin/true; done &`,
+   `python3 -m http.server 18080 & while :; do curl -s http://127.0.0.1:18080/ >/dev/null; done &`,
+   `while :; do python3 -c 'import socket; socket.getaddrinfo("localhost", 80)'; done &`,
+   `while :; do dd if=/dev/zero of=/tmp/vbpf-workload bs=1M count=8 oflag=dsync 2>/dev/null; done &`;
+   stop every loop afterwards and verify with `pgrep -af 'http.server|getaddrinfo|vbpf-workload'`.
+   Retransmit-style scripts may legitimately see zero events without loss
+   injection; that is recorded, not a failure.
+
+- Tools: Go 1.27+, Node 22 LTS, pnpm 9.x.
+- Reserved loopback ports: web 5173, api 8080, agent 8787.
+- Safety caps for generated probes: see `MAX_DURATION_S`, `BPFTRACE_*` in
+  `.env.example`.
+
 ## Survey (R-04) — 2026-11-09
 
 Surveyed as root via `wsl -u root` (passwordless from the Windows side;

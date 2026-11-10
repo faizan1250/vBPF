@@ -1,5 +1,44 @@
 # Decisions
 
+## R2-01 Slice 12: eval agent harness (stage A, offline-testable) (2026-11-10)
+
+- **Layer split via spies, not a `runGenerate` rewrite (D-30).**
+  `runGenerate` keeps its retry loop and defaults; `runEvalCase` wraps the
+  injected LLM (`generate`/`generateDetailed`) and `validateAgentFn` to
+  record per-attempt scripts, `staticValidate` outcomes, and agent outcomes.
+  `static_ok_first_try`/`agent_ok_first_try` are false whenever the first
+  script fails static (the agent is never consulted for it). No behavior
+  change on the mock/stub paths — the wrapper only observes.
+- **Agent mode is explicit and stub-proof (D-31).** `--agent` needs
+  `--live`; `agentMode` throws when any of search/validate/probe-args is
+  missing, and `--agent-url`/`--token-file` default from `AGENT_URL` then
+  `AGENT_TOKEN_FILE`/`TOKEN_FILE`, else loopback/token-file defaults.
+  Preflight (`checkAgentPreflight`, injectable fetch) requires reachable +
+  `root: true` + `btf: true`, otherwise a non-zero exit naming the cause
+  with "not falling back to stubs". Kernel/bpftrace versions flow into the
+  `live+agent` report header.
+- **Safety ordering for produced output (D-32).** `must_refuse` cases that
+  still validate are marked `refusal_correct: false` with an
+  `ACCEPTED-UNSAFE-CASE` note and are never executed; the run helper
+  (`runScriptAndCountEvents`: `POST /v1/runs` 5 s + WS stream counting
+  `printf`/`map`/`hist`/`lhist` until `summary`) runs only validated
+  non-refusal scripts, sequentially. The mixed user-level workload stays a
+  documented manual step in `docs/environment.md`, not spawned code, so CI
+  and Windows checkouts never fork workload processes.
+- **Persistence is scripts-only ndjson (D-33).** `toScriptRecords` keeps
+  `{id, prompt: <prompt id>, script, chart_type, attempts, provider_model,
+produced_status}` per generated script; no user prompt text, no tokens.
+  `make run-live-real` mirrors `run-live` with `--live --agent
+--delay-ms 15000`; CI untouched (no live target referenced).
+- **Verified:** `tsc --noEmit` clean, eslint clean, prettier clean, api
+  vitest 191/191 (23 in `eval.test.ts`: flags, preflight down/not-root/
+  no-BTF, static-vs-agent counting, per-layer arithmetic, unsafe-accepted
+  never run, agent-mode stub refusal, produced/skipped/error mapping,
+  ndjson format, `live+agent` rendering; existing mock/stub tests
+  unchanged), mock CLI smoke (`--limit 2`) renders the static-only report,
+  and `--live --agent` against a dead agent exits 1 with the preflight
+  message.
+
 ## R2-02 Slice 11: live client drops the last tail slice (2026-11-10)
 
 - **Last slice removed.** `doPostChat()` sent

@@ -1,10 +1,15 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
 import type Database from "better-sqlite3";
 import yaml from "js-yaml";
 import { z } from "zod";
 
+import {
+  fetchAgentHealth,
+  type AgentHealth,
+  type AgentValidation,
+} from "./agent-client.js";
 import { indexRecipes, migrate, openDb } from "./db.js";
 import {
   RefusalError,
@@ -12,8 +17,16 @@ import {
   makeMockLlm,
   runGenerate,
 } from "./generate.js";
-import type { LlmClient, LlmUsage } from "./llm.js";
+import type {
+  LlmClient,
+  LlmDetailedResult,
+  LlmFeedback,
+  LlmOutput,
+  LlmUsage,
+} from "./llm.js";
 import { loadRecipes } from "./recipes.js";
+import type { PromptParts } from "./prompts.js";
+import { staticValidate } from "./validator.js";
 
 export const EvalViewSchema = z.enum([
   "table",
@@ -69,6 +82,8 @@ export const FAKE_EVAL_PROBES = [
   "BEGIN",
 ];
 
+export type ProducedStatus = "produced" | "no-events" | "skipped" | "error";
+
 export interface EvalCaseResult {
   id: string;
   category: string;
@@ -87,6 +102,17 @@ export interface EvalCaseResult {
   tokens_approx: number;
   usage?: LlmUsage;
   errors: string[];
+  // R2-01 stage A: static validation vs real agent dry-run, tracked per
+  // attempt via spies (the retry loop lives in runGenerate).
+  static_ok_first_try: boolean;
+  static_ok: boolean;
+  agent_ok_first_try: boolean;
+  agent_ok: boolean;
+  script: string;
+  provider_model: string;
+  produced_events: number | null;
+  produced_status: ProducedStatus;
+  notes: string;
 }
 
 export interface EvalRunnerOptions {
@@ -100,11 +126,24 @@ export interface EvalRunnerOptions {
     script: string,
   ) => Promise<{ ok: boolean; errors: string[]; probes: string[] }>;
   probeArgsFn?: (url: string, token: string, probe: string) => Promise<string>;
-  // Live runs share one LLM chain across cases; tests inject a stub here.
+  // Live chains share one LLM chain across cases; tests inject a stub here.
   // Defaults to the deterministic mock echoing the top-1 recipe.
   llmFactory?: (db: Database.Database) => LlmClient;
   // Courtesy pause between cases (ms), for live free-tier budgets.
   delayMs?: number;
+  // R2-01 stage A real mode. When true the caller must supply the real
+  // search/validate/probe-args functions (no stub fallback) plus the agent
+  // endpoint the GenerateDeps and produced-output runs use.
+  agentMode?: boolean;
+  agentUrl?: string;
+  tokenFile?: string;
+  // Runs a validated script for 5 s and counts data events. Injected in
+  // tests; the CLI wires the real agent run API. Absent means skipped.
+  runScriptFn?: (
+    agentUrl: string,
+    tokenFile: string,
+    script: string,
+  ) => Promise<{ events: number }>;
 }
 
 // One live eval of 30 prompts costs at most 90 LLM calls (3 attempts each).
@@ -128,9 +167,89 @@ export async function runEvalCase(
   entry: EvalPrompt,
   opts: EvalRunnerOptions,
 ): Promise<EvalCaseResult> {
-  const llm =
+  if (opts.agentMode) {
+    if (
+      opts.searchProbesFn === undefined ||
+      opts.validateAgentFn === undefined ||
+      opts.probeArgsFn === undefined
+    ) {
+      throw new Error(
+        "agent mode requires real search/validate/probe-args functions (no stub fallback)",
+      );
+    }
+    if (opts.agentUrl === undefined || opts.tokenFile === undefined) {
+      throw new Error("agent mode requires agentUrl and tokenFile");
+    }
+  }
+  const agentUrl = opts.agentUrl ?? "http://127.0.0.1:1";
+  const tokenFile = opts.tokenFile ?? "eval-mock.token";
+  const rawLlm =
     opts.llmFactory?.(db) ??
     makeMockLlm(db, opts.recipesDir, opts.model ?? "mock");
+  // Spy per-attempt scripts and static outcomes; the retry loop itself stays
+  // in runGenerate. Static is re-checked here with the same default args
+  // runGenerate uses, so mock/stub paths are unaffected.
+  const attemptScripts: string[] = [];
+  const attemptStaticOk: boolean[] = [];
+  const agentOutcomes: boolean[] = [];
+  let providerModel = rawLlm.model;
+  const recordScript = (out: LlmOutput): void => {
+    attemptScripts.push(out.script);
+    attemptStaticOk.push(staticValidate(out.script).errors.length === 0);
+  };
+  const detailed = (
+    rawLlm as LlmClient & {
+      generateDetailed?: (
+        prompt: string,
+        feedback?: LlmFeedback,
+        reqOpts?: { signal?: AbortSignal; parts?: PromptParts },
+      ) => Promise<LlmDetailedResult>;
+    }
+  ).generateDetailed;
+  const llm: LlmClient & {
+    generateDetailed?: (
+      prompt: string,
+      feedback?: LlmFeedback,
+      reqOpts?: { signal?: AbortSignal; parts?: PromptParts },
+    ) => Promise<LlmDetailedResult>;
+  } =
+    typeof detailed === "function"
+      ? {
+          model: rawLlm.model,
+          generate: (prompt, feedback, parts) =>
+            rawLlm.generate(prompt, feedback, parts),
+          generateDetailed: async (prompt, feedback, reqOpts) => {
+            const result = await detailed.call(rawLlm, prompt, feedback, {
+              ...(reqOpts?.signal !== undefined
+                ? { signal: reqOpts.signal }
+                : {}),
+              ...(reqOpts?.parts !== undefined ? { parts: reqOpts.parts } : {}),
+            });
+            providerModel = result.model;
+            recordScript(result.output);
+            return result;
+          },
+        }
+      : {
+          model: rawLlm.model,
+          generate: async (prompt, feedback, parts) => {
+            const out = await rawLlm.generate(prompt, feedback, parts);
+            recordScript(out);
+            return out;
+          },
+        };
+  const validateAgentFn =
+    opts.validateAgentFn ??
+    (async () => ({ ok: true, errors: [], probes: [] }));
+  const validateSpy = async (
+    url: string,
+    token: string,
+    script: string,
+  ): Promise<AgentValidation> => {
+    const res = await validateAgentFn(url, token, script);
+    agentOutcomes.push(res.ok);
+    return res;
+  };
   const started = Date.now();
   let refused = false;
   let ok = false;
@@ -148,14 +267,12 @@ export async function runEvalCase(
       deps: {
         db,
         recipesDir: opts.recipesDir,
-        agentUrl: "http://127.0.0.1:1",
-        tokenFile: "eval-mock.token",
+        agentUrl,
+        tokenFile,
         llm,
         searchProbesFn:
           opts.searchProbesFn ?? (async () => [...FAKE_EVAL_PROBES]),
-        validateAgentFn:
-          opts.validateAgentFn ??
-          (async () => ({ ok: true, errors: [], probes: [] })),
+        validateAgentFn: validateSpy,
         ...(opts.probeArgsFn === undefined
           ? {}
           : { probeArgsFn: opts.probeArgsFn }),
@@ -186,8 +303,40 @@ export async function runEvalCase(
     } else {
       errors = [err instanceof Error ? err.message : "unknown eval error"];
     }
+    if (!refused && attemptScripts.length > 0) {
+      script = attemptScripts[attemptScripts.length - 1] ?? "";
+    }
   }
   const latency_ms = Date.now() - started;
+  const static_ok_first_try = (attemptStaticOk[0] ?? false) === true;
+  const static_ok = attemptStaticOk.some((v) => v);
+  const agent_ok_first_try =
+    static_ok_first_try && (agentOutcomes[0] ?? false) === true;
+  const agent_ok = agentOutcomes.some((v) => v);
+  // Produced output: only validated non-refusal scripts, never must_refuse
+  // cases, one 5 s run each (sequential; caller paces cases with delayMs).
+  let produced_events: number | null = null;
+  let produced_status: ProducedStatus = "skipped";
+  let notes = "";
+  if (ok && entry.must_refuse) {
+    notes =
+      "ACCEPTED-UNSAFE-CASE: must_refuse case produced a script accepted by both validators; not executed.";
+  } else if (ok && opts.runScriptFn !== undefined) {
+    try {
+      const run = await opts.runScriptFn(agentUrl, tokenFile, script);
+      produced_events = run.events;
+      if (run.events > 0) {
+        produced_status = "produced";
+      } else {
+        produced_status = "no-events";
+        notes =
+          "no data events in the 5 s window; likely a low-traffic probe or a threshold (e.g. 10 ms block-IO filter) with no matching activity.";
+      }
+    } catch (err) {
+      produced_status = "error";
+      notes = err instanceof Error ? err.message.slice(0, 200) : "run failed";
+    }
+  }
   const view_match = ok ? chart === entry.expected_view : null;
   const probe_match =
     ok && entry.expected_probe_family !== null
@@ -218,6 +367,15 @@ export async function runEvalCase(
         }
       : {}),
     errors,
+    static_ok_first_try,
+    static_ok,
+    agent_ok_first_try,
+    agent_ok,
+    script,
+    provider_model: providerModel,
+    produced_events,
+    produced_status,
+    notes,
   };
 }
 
@@ -236,6 +394,15 @@ export interface EvalSummary {
   latency_p50_ms: number;
   tokens_approx_total: number;
   tokens_real_total: number;
+  // R2-01 stage A: static vs agent dry-run pass counts plus produced output
+  // over generated (validated) scripts.
+  static_first_try: number;
+  static_within_retries: number;
+  agent_first_try: number;
+  agent_within_retries: number;
+  produced_pass: number;
+  produced_denominator: number;
+  produced_errors: number;
   by_category: Record<
     string,
     { total: number; ok: number; refusal_correct: number; view_match: number }
@@ -259,9 +426,10 @@ export function summarize(cases: EvalCaseResult[]): EvalSummary {
   }
   const viewDen = cases.filter((c) => c.view_match !== null);
   const probeDen = cases.filter((c) => c.probe_match !== null);
+  const validated = cases.filter((c) => c.ok);
   return {
     total: cases.length,
-    ok_within_retries: cases.filter((c) => c.ok).length,
+    ok_within_retries: validated.length,
     first_try_compile: cases.filter((c) => c.first_try).length,
     produced_output: "SKIP",
     refusal_correct: cases.filter((c) => c.refusal_correct).length,
@@ -270,6 +438,14 @@ export function summarize(cases: EvalCaseResult[]): EvalSummary {
     view_match_denominator: viewDen.length,
     probe_match: cases.filter((c) => c.probe_match === true).length,
     probe_match_denominator: probeDen.length,
+    static_first_try: cases.filter((c) => c.static_ok_first_try === true)
+      .length,
+    static_within_retries: cases.filter((c) => c.static_ok === true).length,
+    agent_first_try: cases.filter((c) => c.agent_ok_first_try === true).length,
+    agent_within_retries: cases.filter((c) => c.agent_ok === true).length,
+    produced_pass: cases.filter((c) => c.produced_status === "produced").length,
+    produced_denominator: validated.length,
+    produced_errors: cases.filter((c) => c.produced_status === "error").length,
     latency_avg_ms:
       cases.length === 0
         ? 0
@@ -315,6 +491,9 @@ export interface EvalCliOptions {
   live: boolean;
   limit: number | null;
   delayMs: number;
+  agent: boolean;
+  agentUrl: string;
+  tokenFile: string;
 }
 
 function positiveInt(raw: string | undefined, flag: string): number {
@@ -335,17 +514,36 @@ function nonNegativeInt(raw: string | undefined, flag: string): number {
 
 // CLI flags for the eval runner. The first positional arg stays the prompts
 // file for backward compatibility with `pnpm run eval <path>`.
-export function parseEvalArgs(argv: string[], root: string): EvalCliOptions {
+export function parseEvalArgs(
+  argv: string[],
+  root: string,
+  env: NodeJS.ProcessEnv = process.env,
+): EvalCliOptions {
   let promptsPath = join(root, "eval", "prompts.yaml");
   let outPath: string | null = null;
   let live = false;
   let limit: number | null = null;
   let delayMs = 0;
+  let agent = false;
+  let agentUrl: string | null = null;
+  let tokenFile: string | null = null;
   const rest = [...argv];
   while (rest.length > 0) {
     const arg = rest.shift() as string;
     if (arg === "--live") {
       live = true;
+    } else if (arg === "--agent") {
+      agent = true;
+    } else if (arg === "--agent-url") {
+      const raw = rest.shift();
+      if (raw === undefined || raw === "")
+        throw new Error("--agent-url needs a value");
+      agentUrl = raw;
+    } else if (arg === "--token-file") {
+      const raw = rest.shift();
+      if (raw === undefined || raw === "")
+        throw new Error("--token-file needs a value");
+      tokenFile = raw;
     } else if (arg === "--limit") {
       limit = positiveInt(rest.shift(), "--limit");
     } else if (arg === "--delay-ms") {
@@ -361,9 +559,97 @@ export function parseEvalArgs(argv: string[], root: string): EvalCliOptions {
       promptsPath = isAbsolute(arg) ? arg : resolve(root, arg);
     }
   }
+  if (agent && !live) {
+    throw new Error("--agent needs --live");
+  }
   // Courtesy delay for live free-tier budgets; mock stays instant.
   if (live && delayMs === 0) delayMs = 2000;
-  return { promptsPath, outPath, live, limit, delayMs };
+  return {
+    promptsPath,
+    outPath,
+    live,
+    limit,
+    delayMs,
+    agent,
+    agentUrl: agentUrl ?? env["AGENT_URL"] ?? "http://127.0.0.1:8787",
+    tokenFile:
+      tokenFile ??
+      env["AGENT_TOKEN_FILE"] ??
+      env["TOKEN_FILE"] ??
+      "./run/agent.token",
+  };
+}
+
+// Real-mode preflight: the agent must be reachable, running as root, and
+// have BTF. Anything else is a hard non-zero failure with no stub fallback.
+export async function checkAgentPreflight(
+  agentUrl: string,
+  tokenFile: string,
+  fetchHealth: (
+    base: string,
+    token: string,
+  ) => Promise<AgentHealth> = fetchAgentHealth,
+): Promise<AgentHealth> {
+  let health: AgentHealth;
+  try {
+    health = await fetchHealth(agentUrl, tokenFile);
+  } catch (err) {
+    throw new Error(
+      `agent preflight failed: agent unreachable at ${agentUrl} (${err instanceof Error ? err.message : "unknown error"}); not falling back to stubs`,
+    );
+  }
+  if (!health.root) {
+    throw new Error(
+      `agent preflight failed: agent at ${agentUrl} is not running as root; not falling back to stubs`,
+    );
+  }
+  if (!health.btf) {
+    throw new Error(
+      `agent preflight failed: agent at ${agentUrl} reports btf: false; not falling back to stubs`,
+    );
+  }
+  return health;
+}
+
+// Generated scripts only, one JSON object per line. Field `prompt` is the
+// eval prompt ID, not user data. Never includes tokens or keys.
+export interface EvalScriptRecord {
+  id: string;
+  prompt: string;
+  script: string;
+  chart_type: string | null;
+  attempts: number;
+  provider_model: string;
+  produced_status: ProducedStatus;
+}
+
+export function toScriptRecords(cases: EvalCaseResult[]): EvalScriptRecord[] {
+  return cases
+    .filter((c) => c.ok && c.script !== "")
+    .map((c) => ({
+      id: c.id,
+      prompt: c.id,
+      script: c.script,
+      chart_type: c.chart_type,
+      attempts: c.attempts,
+      provider_model: c.provider_model,
+      produced_status: c.produced_status,
+    }));
+}
+
+export function writeScriptsNdjson(
+  path: string,
+  cases: EvalCaseResult[],
+): void {
+  const lines = toScriptRecords(cases).map((r) => JSON.stringify(r));
+  writeFileSync(path, lines.length > 0 ? `${lines.join("\n")}\n` : "");
+}
+
+export type EvalReportMode = "mock" | "live" | "live+agent";
+
+export interface EvalReportExtra {
+  kernel?: string;
+  bpftrace?: string;
 }
 
 export function renderMarkdown(
@@ -371,14 +657,20 @@ export function renderMarkdown(
   model: string,
   summary: EvalSummary,
   cases: EvalCaseResult[],
-  mode: "mock" | "live" = "mock",
+  mode: EvalReportMode = "mock",
+  extra: EvalReportExtra = {},
 ): string {
+  const staticOnly = mode !== "live+agent";
   const modeLine =
-    mode === "live"
-      ? `Mode: live (model=${model}). Agent validation stubbed (stock runner, no root): compile = static validator only; scripts never executed.`
-      : `Mode: mock-only (model=${model}). No secrets, no root, no bpftrace.`;
+    mode === "live+agent"
+      ? `Mode: live+agent (model=${model}${extra.kernel !== undefined ? `, kernel=${extra.kernel}` : ""}${extra.bpftrace !== undefined ? `, bpftrace=${extra.bpftrace}` : ""}). Real agent dry-run compile; generated scripts executed 5 s each.`
+      : mode === "live"
+        ? `Mode: live static-only (model=${model}). Agent validation stubbed (stock runner, no root): compile = static validator only; static-only; scripts never compiled or executed.`
+        : `Mode: mock-only (model=${model}). No secrets, no root, no bpftrace; static-only; scripts never compiled or executed.`;
   const producedLine =
-    "produced-output is SKIP: scripts are compile-validated, never executed.";
+    mode === "live+agent"
+      ? "produced-output: generated scripts that produced at least one data event (printf/map/hist/lhist) in 5 s agent runs / scripts that passed validation."
+      : "produced-output is SKIP: scripts are compile-validated, never executed.";
   const tokensLine =
     "tokens are real usage when the provider reports it, else approximate (chars/4).";
   const lines = [
@@ -393,12 +685,22 @@ export function renderMarkdown(
     "| metric | value |",
     "| --- | --- |",
     `| total cases | ${summary.total} |`,
-    `| first-try compile | ${summary.first_try_compile} |`,
-    `| within-retries (ok) | ${summary.ok_within_retries} |`,
-    `| produced-output | SKIP (${mode}) |`,
+    ...(staticOnly
+      ? [
+          `| passes static validation (first try) | ${summary.static_first_try} |`,
+          `| passes static validation (within retries) | ${summary.static_within_retries} |`,
+        ]
+      : [
+          `| passes static validation (first try) | ${summary.static_first_try} |`,
+          `| passes static validation (within retries) | ${summary.static_within_retries} |`,
+          `| dry-run compile pass (first try) | ${summary.agent_first_try} |`,
+          `| dry-run compile pass (within retries) | ${summary.agent_within_retries} |`,
+          `| produced-output (generated) | ${summary.produced_pass}/${summary.produced_denominator} |`,
+        ]),
+    `| produced-output | ${mode === "live+agent" ? `${summary.produced_pass}/${summary.produced_denominator} generated` : `SKIP (${mode})`} |`,
     `| correct-refusal | ${summary.refusal_correct}/${summary.refusal_total} |`,
     `| view-match | ${summary.view_match}/${summary.view_match_denominator} |`,
-    `| probe-match | ${summary.probe_match}/${summary.probe_match_denominator} |`,
+    `| probe-match${mode === "live+agent" ? " (real catalog)" : ""} | ${summary.probe_match}/${summary.probe_match_denominator} |`,
     `| latency avg / p50 (ms) | ${summary.latency_avg_ms} / ${summary.latency_p50_ms} |`,
     `| tokens approx total | ${summary.tokens_approx_total} |`,
     ...(summary.tokens_real_total > 0
@@ -419,19 +721,21 @@ export function renderMarkdown(
     "",
     "## Cases",
     "",
-    "| id | refused | ok | attempts | view | probe | latency_ms | errors |",
+    "| id | refused | ok | attempts | static | agent | view | probe | produced | latency_ms | errors |",
   );
-  lines.push("| --- | --- | --- | --- | --- | --- | --- | --- |");
+  lines.push(
+    "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+  );
   for (const c of cases) {
     const view = c.view_match === null ? "n/a" : String(c.view_match);
     const probe = c.probe_match === null ? "n/a" : String(c.probe_match);
     const errs = c.errors.length === 0 ? "" : c.errors[0]?.slice(0, 80);
     lines.push(
-      `| ${c.id} | ${c.refused} | ${c.ok} | ${c.attempts} | ${view} | ${probe} | ${c.latency_ms} | ${errs} |`,
+      `| ${c.id} | ${c.refused} | ${c.ok} | ${c.attempts} | ${String(c.static_ok ?? false)} | ${String(c.agent_ok ?? false)} | ${view} | ${probe} | ${c.produced_status ?? "skipped"} | ${c.latency_ms} | ${errs} |`,
     );
   }
   lines.push("");
-  if (mode === "live") {
+  if (mode === "live" || mode === "live+agent") {
     lines.push("## Failures (full errors)", "");
     const failed = cases.filter((c) => !c.ok && !c.refused);
     if (failed.length === 0) {
@@ -445,6 +749,38 @@ export function renderMarkdown(
         "",
       );
       for (const e of c.errors) lines.push(`- ${e}`);
+      lines.push("");
+    }
+  }
+  if (mode === "live+agent") {
+    lines.push("## Notes", "");
+    const noEvents = cases.filter((c) => c.produced_status === "no-events");
+    const unsafe = cases.filter((c) => c.must_refuse && c.ok);
+    const runErrors = cases.filter((c) => c.produced_status === "error");
+    if (
+      noEvents.length === 0 &&
+      unsafe.length === 0 &&
+      runErrors.length === 0
+    ) {
+      lines.push(
+        "Nothing to note: every validated script produced events.",
+        "",
+      );
+    }
+    for (const c of noEvents) {
+      lines.push(
+        `- ${c.id}: no data events in the 5 s window. Likely cause: a low-traffic probe (e.g. retransmit/interval) or a threshold (e.g. 10 ms block-IO filter) with no matching activity during the run; the mixed user-level workload may not have exercised it.`,
+      );
+    }
+    for (const c of unsafe) {
+      lines.push(
+        `- ${c.id}: ACCEPTED-UNSAFE-CASE. A must_refuse case produced a script accepted by both validators; it was recorded and NOT executed.`,
+      );
+    }
+    for (const c of runErrors) {
+      lines.push(`- ${c.id}: produced-output run error: ${c.notes}`);
+    }
+    if (noEvents.length > 0 || unsafe.length > 0 || runErrors.length > 0) {
       lines.push("");
     }
   }

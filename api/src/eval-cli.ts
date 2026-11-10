@@ -7,11 +7,19 @@ import { config as loadDotenv } from "dotenv";
 import {
   FAKE_EVAL_PROBES,
   assertCallBudget,
+  checkAgentPreflight,
   loadPrompts,
   parseEvalArgs,
   renderMarkdown,
   runEval,
+  writeScriptsNdjson,
 } from "./eval.js";
+import {
+  fetchProbeArgs,
+  runScriptAndCountEvents,
+  searchProbes,
+  validateScript,
+} from "./agent-client.js";
 import { LiveLlmChain } from "./live-llm.js";
 
 const srcDir = dirname(fileURLToPath(import.meta.url));
@@ -39,7 +47,7 @@ if (!opts.live) {
   const outPath = opts.outPath ?? join(reportsDir, `${date}.md`);
   writeFileSync(outPath, renderMarkdown(date, "mock", summary, cases));
   process.stdout.write(`${JSON.stringify(summary)}\n${outPath}\n`);
-} else {
+} else if (!opts.agent) {
   const entries = loadPrompts(opts.promptsPath);
   const selected = opts.limit === null ? entries : entries.slice(0, opts.limit);
   assertCallBudget(selected.length);
@@ -76,6 +84,66 @@ if (!opts.live) {
   writeFileSync(
     outPath,
     renderMarkdown(date, modelLabel, summary, cases, "live"),
+  );
+  process.stdout.write(`${JSON.stringify(summary)}\n${outPath}\n`);
+} else {
+  // Real mode: no stubs, no silent fallback. Preflight first.
+  let health;
+  try {
+    health = await checkAgentPreflight(opts.agentUrl, opts.tokenFile);
+  } catch (err) {
+    process.stderr.write(
+      `eval --live --agent: ${err instanceof Error ? err.message : "preflight failed"}\n`,
+    );
+    process.exit(1);
+  }
+  const entries = loadPrompts(opts.promptsPath);
+  const selected = opts.limit === null ? entries : entries.slice(0, opts.limit);
+  assertCallBudget(selected.length);
+  const chain = new LiveLlmChain({ env: process.env });
+  if (!chain.configured) {
+    process.stderr.write(
+      "eval --live --agent: no live provider configured (set a provider key and model in the local .env, never CI)\n",
+    );
+    process.exit(1);
+  }
+  const { cases, summary, db } = await runEval(selected, {
+    recipesDir,
+    model: chain.model,
+    llmFactory: () => chain,
+    agentMode: true,
+    agentUrl: opts.agentUrl,
+    tokenFile: opts.tokenFile,
+    searchProbesFn: searchProbes,
+    validateAgentFn: validateScript,
+    probeArgsFn: fetchProbeArgs,
+    runScriptFn: (agentUrl, tokenFile, script) =>
+      runScriptAndCountEvents(agentUrl, tokenFile, script, 5),
+    delayMs: opts.delayMs,
+  });
+  let modelLabel = chain.model;
+  try {
+    const rows = db
+      .prepare("SELECT DISTINCT model FROM generations")
+      .all() as Array<{ model: string }>;
+    const seen = [...new Set(rows.map((r) => r.model).filter(Boolean))];
+    if (seen.length > 0) modelLabel = seen.join(", ");
+  } catch {
+    // Report label only; keep the chain attribution.
+  }
+  db.close();
+  mkdirSync(reportsDir, { recursive: true });
+  const outPath = opts.outPath ?? join(reportsDir, `${date}-live-real.md`);
+  writeFileSync(
+    outPath,
+    renderMarkdown(date, modelLabel, summary, cases, "live+agent", {
+      kernel: health.kernel,
+      bpftrace: health.bpftrace_version,
+    }),
+  );
+  writeScriptsNdjson(
+    join(reportsDir, `${date}-live-real-scripts.ndjson`),
+    cases,
   );
   process.stdout.write(`${JSON.stringify(summary)}\n${outPath}\n`);
 }

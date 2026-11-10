@@ -10,3 +10,6 @@ run:
 
 run-live:
 	@$(PNPM) -C ../api run eval -- --live --delay-ms 15000
+
+run-live-real:
+	@$(PNPM) -C ../api run eval -- --live --agent --delay-ms 15000
