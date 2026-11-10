@@ -24,6 +24,7 @@ export const LIVE_MAX_CONCURRENCY = 4;
 export const LIVE_MAX_BODY_BYTES = 256 * 1024;
 // Single source for the prompt budget lives in llm.ts (PROMPT_BUDGET_CHARS);
 // prompts.ts shrinks context to fit it, so the client never tail-truncates.
+// Kept as a legacy alias; the client no longer slices prompts to fit it.
 export const LIVE_MAX_PROMPT_CHARS = PROMPT_BUDGET_CHARS;
 export const LIVE_TIMEOUT_MS = 45_000;
 export const LIVE_TOTAL_TIMEOUT_MS = 90_000;
@@ -1518,13 +1519,13 @@ export class LiveLlmChain implements LlmClient {
     parts?: PromptParts,
     feedback?: LlmFeedback,
   ): Promise<{ outcome: ProviderOutcome; status: number; errorBody?: string }> {
-    // Isolated messages when parts are present (system carries no user text,
-    // feedback rides in the user message); otherwise the legacy single slice.
+    // Isolated messages: system carries no user text, the user message holds
+    // context plus the request (plus retry feedback). Never tail-slice: the
+    // budget is enforced in prompts.ts by shrinking context, so even the
+    // legacy fallback sends the full prompt.
     const system = parts?.system ?? JSON_INSTRUCTION;
     const user =
-      parts !== undefined
-        ? renderUserMessage(parts, feedback)
-        : prompt.slice(0, LIVE_MAX_PROMPT_CHARS);
+      parts !== undefined ? renderUserMessage(parts, feedback) : prompt;
     const promptChars = system.length + user.length;
     const started = Date.now();
     const result = await requestChat(
