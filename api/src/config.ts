@@ -28,5 +28,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     RECIPES_DIR: env["RECIPES_DIR"],
     LLM_MODEL: env["LLM_MODEL"],
     LLM_MODE: env["LLM_MODE"],
+    LLM_PROVIDER_CHAIN: env["LLM_PROVIDER_CHAIN"],
   });
 }

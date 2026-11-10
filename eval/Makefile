@@ -9,4 +9,4 @@ run:
 	@$(PNPM) -C ../api run eval
 
 run-live:
-	@$(PNPM) -C ../api run eval -- --live --delay-ms 2000
+	@$(PNPM) -C ../api run eval -- --live --delay-ms 15000

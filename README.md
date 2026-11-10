@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/faizan1250/vBPF/actions/workflows/ci.yml/badge.svg)](https://github.com/faizan1250/vBPF/actions/workflows/ci.yml)
 ![Linux](https://img.shields.io/badge/platform-Linux%20%7C%20WSL2-lightgrey)
-![Go](https://img.shields.io/badge/Go-1.23%2B-00ADD8)
+![Go](https://img.shields.io/badge/Go-1.27%2B-00ADD8)
 ![Node](https://img.shields.io/badge/Node-22%2B-339933)
 
 ![vBPF demo: prompt, review, run, and live charts for three fixture scenarios](docs/assets/demo.gif)
@@ -151,7 +151,7 @@ Default limits:
 | Kernel      | 5.8+ with BTF (`/sys/kernel/btf/vmlinux` must exist)                                                    |
 | bpftrace    | 0.20+ recommended                                                                                       |
 | Privileges  | Root for the agent only                                                                                 |
-| Node / Go   | Node 22+ with pnpm 9+, Go 1.23+ (native development only)                                               |
+| Node / Go   | Node 22+ with pnpm 9+, Go 1.27+ (native development only)                                               |
 | LLM access  | A provider API key (Groq by default; optional: recipe-only mode works without it)                       |
 
 Quick check on your machine:
@@ -258,7 +258,7 @@ Configuration is via environment variables (`.env` for local development). Never
 | `BPFTRACE_MAX_PROBES`   | `50`                    | Cap on attached probes (limits wildcard expansion)                            |
 | `BPFTRACE_STRLEN`       | `64`                    | Maximum string length captured                                                |
 
-Limits can be lowered freely; raising them increases overhead and risk.
+Duration and `BPFTRACE_*` values above are the caps enforced by the agent/API on every run; the `.env` entries document the current defaults. Tighter in-kernel aggregation lowers overhead; looser caps increase it.
 
 ### Live LLM providers
 
@@ -356,7 +356,7 @@ Quality targets for the full harness:
 | Compiles within retries                 | at least 95% | 26/26 (100% of generatable)                           |
 | Produces output when run                | TBD          | 9/10 recipes produced events in 5 s agent runs (R-07) |
 | Correct view type selected              | TBD          | 26/26 view-match, 26/26 probe-match                   |
-| Adversarial prompts refused or rejected | 100%         | 30/30                                                 |
+| Adversarial prompts refused or rejected | 100%         | 4/4 (30/30 refusal-correct overall)                   |
 
 Full report: [`eval/reports/2026-11-09-live.md`](eval/reports/2026-11-09-live.md). Adversarial
 cases (4) are correctly refused, not generated, so generation metrics cover the
@@ -407,9 +407,9 @@ Common tasks (run inside Linux or WSL, from the repository root):
 
 CI ([`ci.yml`](.github/workflows/ci.yml)) runs the same checks mock-only on every push/PR to `main`: lint, unit tests, contract check, mocked Playwright e2e, mock eval, and image-build checks. No secrets, no root, no privileged runs. Real-probe tests live in [`integration-manual.yml`](.github/workflows/integration-manual.yml) (`workflow_dispatch` only).
 
-**Testing without root.** `scripts/fake-bpftrace.sh` replays recorded output from `fixtures/` (5 of 10 recipes have captured fixtures), so the parser, API, and UI can be developed and tested without a privileged environment.
+**Testing without root.** `scripts/fake-bpftrace.sh` replays recorded output from `fixtures/` (all 10 recipes have captured fixtures), so the parser, API, and UI can be developed and tested without a privileged environment.
 
-**Stack:** Go 1.23+, Node 22+, pnpm 9, Fastify, zod, SQLite, React, Vite, Tailwind, Monaco, Recharts, Playwright.
+**Stack:** Go 1.27+, Node 22+, pnpm 9, Fastify, zod, SQLite, React, Vite, Tailwind, Monaco, Recharts, Playwright.
 
 **Conventions:** Conventional Commits, `gofmt` and `golangci-lint`, strict TypeScript, `shellcheck` for scripts, and `go test -race` in CI.
 
@@ -437,7 +437,7 @@ More detail: [`docs/environment.md`](docs/environment.md).
 
 ## Privacy and security
 
-**What leaves your machine (only if you use AI generation):** your prompt, selected recipe text, candidate probe names and tracepoint argument formats, and compiler error messages, sent to the configured LLM provider. **Probe output (process names, file paths, command lines) is not sent to the LLM** unless you explicitly use an "Explain these results" feature when it is available. In recipe-only mode nothing is sent anywhere.
+**What leaves your machine (only if you use AI generation):** your prompt, selected recipe text, candidate probe names and tracepoint argument formats, and compiler error messages, sent to the configured LLM provider. **Probe output (process names, file paths, command lines) is never sent to the LLM.** The **Explain this probe** button sends only the script text for a plain-English walkthrough — never run output. In recipe-only mode nothing is sent anywhere.
 
 **Hardening in place:**
 
