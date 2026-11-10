@@ -1,0 +1,19 @@
+# Security Policy
+
+Threat model and hardening details: [`docs/security.md`](docs/security.md).
+
+## Supported versions
+
+| Version | Supported |
+| ------- | --------- |
+| 0.1.x   | Yes       |
+| < 0.1   | No        |
+
+Only the latest minor release line receives security fixes.
+
+## Reporting a vulnerability
+
+Please do not open a public issue. Report through
+[GitHub private vulnerability reporting](https://github.com/faizan1250/vBPF/security/advisories/new)
+(the repository "Security" tab, "Report a vulnerability").
+We aim to acknowledge reports within 3 business days.

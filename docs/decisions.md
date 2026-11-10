@@ -1,5 +1,11 @@
 # Decisions
 
+## R-23: Security and community files (2026-11-10)
+
+- **Root `SECURITY.md` is a thin pointer, `docs/security.md` stays canonical.** The root file holds only the supported-versions table (latest minor line, `0.1.x`, only), the GitHub private vulnerability reporting link ("Security" tab, "Report a vulnerability"), and the 3-business-day acknowledgement target. No email contact anywhere, per D-6.
+- **`CODE_OF_CONDUCT.md` is Contributor Covenant 2.1 verbatim except enforcement.** The `[INSERT CONTACT METHOD]` slot points at the same private channel (Security tab report) or the repository owner, so conduct reports stay out of public issues and no inbox needs monitoring.
+- **README no longer duplicates the reporting instructions.** The privacy section points at `SECURITY.md`; the contributing section points at `CODE_OF_CONDUCT.md` and `SECURITY.md`. `CONTRIBUTING.md` already carries the private-reporting line, so it was left untouched.
+
 ## R-19: SQLite hygiene (2026-11-10)
 
 - **Pragmas on every connection (`applyPragmas`, called by both `openDb` and `migrate`).** `journal_mode=WAL` (kept), `foreign_keys=ON`, `busy_timeout=5000`, `synchronous=NORMAL`, `trusted_schema=OFF`. `migrate` re-applies them so test/raw handles get them too; scope is the two API entry points (`openDb` in `server.ts`/`eval.ts`), no pooling layer exists to update.

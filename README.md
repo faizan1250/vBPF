@@ -445,7 +445,7 @@ More detail: [`docs/environment.md`](docs/environment.md).
 - Scripts run from private temp files, never through a shell.
 - Process-group termination and a startup sweep for stale children.
 
-**Reporting a vulnerability:** please do not open a public issue. Use a GitHub private vulnerability report or contact the maintainer directly. We aim to acknowledge reports within 3 business days.
+**Reporting a vulnerability:** please do not open a public issue. See [`SECURITY.md`](SECURITY.md).
 
 Details: [`docs/security.md`](docs/security.md). Overhead method and (pending) numbers: [`docs/overhead.md`](docs/overhead.md).
 
@@ -487,6 +487,8 @@ Have a request? [Open an issue](https://github.com/faizan1250/vBPF/issues/new/ch
 
 Contributions are welcome, especially **new recipes** and **kernel compatibility reports**.
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) and the issue templates.
+Please follow the [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), and report
+security issues per [`SECURITY.md`](SECURITY.md), not via public issues.
 
 1. Open an issue to discuss larger changes.
 2. Fork, create a branch (`feat/<area>-<name>`), and make focused commits using Conventional Commits.
