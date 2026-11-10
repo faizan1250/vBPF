@@ -137,19 +137,19 @@ leaves the machine.
 
 ## Error taxonomy
 
-| Code                 | Signal                                                   | Surfaced where                                                  |
-| -------------------- | -------------------------------------------------------- | --------------------------------------------------------------- |
-| `AGENT_OFFLINE`      | Agent unreachable / token unreadable                     | `/api/health`, proxies (`503`)                                  |
-| `AGENT_NOT_READY`    | Agent catalog still loading or refresh failed            | `/api/health` readiness, proxies (`503` + `Retry-After` + hint) |
-| `NO_PRIVILEGE`       | Agent health `root: false`                               | `/api/health` warnings, TopBar hint                             |
-| `KERNEL_UNSUPPORTED` | Health `btf: false` or `tracefs: false`                  | `/api/health` warnings, TopBar hint                             |
-| `PROBE_NOT_FOUND`    | Probe / wildcard / uprobe symbol missing on host         | `POST /v1/validate`, `POST /v1/runs`                            |
-| `VALIDATION_FAILED`  | Blocklist, allowlist, host libc FS check, or compile err | `POST /v1/validate`, `POST /v1/runs`                            |
-| `LIMIT_EXCEEDED`     | Concurrent run (`409`) or total probes > 50 (`400`)      | `POST /v1/validate`, `POST /v1/runs`                            |
-| `RATE_LIMITED`       | Generate budget spent                                    | `POST /api/generate` (`429` + `Retry-After`)                    |
-| `REFUSAL`            | Unsafe prompt refused by the LLM gate                    | `POST /api/generate` (`422`)                                    |
-| `LLM_UNAVAILABLE`    | Live mode without a provider key                         | `POST /api/generate` (`503`)                                    |
-| `FORBIDDEN`          | Foreign `Origin` / non-loopback `Host`                   | Any API route (`403`)                                           |
+| Code                 | Signal                                                               | Surfaced where                                                                                       |
+| -------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `AGENT_OFFLINE`      | Agent unreachable / token unreadable                                 | `/api/health`, proxies (`503`)                                                                       |
+| `AGENT_NOT_READY`    | Agent catalog still loading or refresh failed                        | `/api/health` readiness, proxies (`503` + `Retry-After` + hint)                                      |
+| `NO_PRIVILEGE`       | Agent health `root: false`                                           | `/api/health` warnings, TopBar hint                                                                  |
+| `KERNEL_UNSUPPORTED` | Health `btf: false` or `tracefs: false`                              | `/api/health` warnings, TopBar hint                                                                  |
+| `PROBE_NOT_FOUND`    | Probe / wildcard / uprobe symbol missing on host                     | `POST /v1/runs` (`400` `code`); `/v1/validate` reports `errors` (`200`, no `code`)                   |
+| `VALIDATION_FAILED`  | Blocklist, allowlist, host libc FS, compile err, or bad JSON (`400`) | `POST /v1/runs` (`400` `code`); `/v1/validate` (`400` bad JSON only; script errs `200` `errors`)     |
+| `LIMIT_EXCEEDED`     | Concurrent run (`409`) or total probes > 50 (`400`)                  | `POST /v1/runs` (`409` / `400` `code`); `/v1/validate` reports `> 50` in `errors` (`200`, no `code`) |
+| `RATE_LIMITED`       | Generate budget spent                                                | `POST /api/generate` (`429` + `Retry-After`)                                                         |
+| `REFUSAL`            | Unsafe prompt refused by the LLM gate                                | `POST /api/generate` (`422`)                                                                         |
+| `LLM_UNAVAILABLE`    | Live mode without a provider key                                     | `POST /api/generate` (`503`)                                                                         |
+| `FORBIDDEN`          | Foreign `Origin` / non-loopback `Host`                               | Any API route (`403`)                                                                                |
 
 Known design trade-offs (documented, not silently unhandled):
 
@@ -158,6 +158,21 @@ Known design trade-offs (documented, not silently unhandled):
   catalog is ready and fails at exec/dry-run time (surfaced as a failed run and
   stderr events). By contrast, catalog unready states (`ready: false`) fail
   closed across validation, generation, and run creation (`503 AGENT_NOT_READY`).
+- **Validation vs. run error envelopes (`POST /v1/validate` vs. `POST /v1/runs`):**
+  `POST /v1/runs` returns HTTP `400` with JSON `{error, code, errors}` for
+  `PROBE_NOT_FOUND`, `VALIDATION_FAILED` (static blocklist, allowlist,
+  host-libc, or compile failures), and `LIMIT_EXCEEDED` (>50 probes), plus
+  HTTP `409` `LIMIT_EXCEEDED` for a concurrent active run. By contrast,
+  `POST /v1/validate` reports probe misses, static/host-libc/compile
+  failures, and >50 probe-cap errors inside
+  `{ok: false, errors, probes, warnings, probe_count}`
+  (`ValidateResponseSchema`) on HTTP `200` with **no** `code` field;
+  beyond `401 UNAUTHORIZED`, `POST /v1/validate` **only** returns a JSON
+  `code` field on `400 VALIDATION_FAILED` (malformed JSON request) and
+  `503 CATALOG_UNAVAILABLE` (when the probe catalog is not ready, mapped to
+  `503 AGENT_NOT_READY` by `/api/validate`). Callers of `/v1/validate` must
+  inspect `ok`, `errors`, `warnings`, and `probe_count` rather than checking
+  `res.status === 400` or `body.code`.
 
 ## Reporting a vulnerability
 
