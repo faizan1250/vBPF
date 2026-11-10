@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/faizan1250/vBPF/agent/internal/limits"
 )
 
 // sweepPattern matches only our own temp-file runs (os.CreateTemp
@@ -20,7 +22,9 @@ const sweepPattern = `vbpf-.*\.bt`
 var (
 	sweepLookPath = exec.LookPath
 	sweepPgrep    = func(ctx context.Context, path string) ([]byte, error) {
-		return exec.CommandContext(ctx, path, "-f", sweepPattern).Output()
+		cmd := exec.CommandContext(ctx, path, "-f", sweepPattern)
+		cmd.Env = limits.ChildEnv(false)
+		return cmd.Output()
 	}
 	sweepKill = func(pid int) error { return killGroup(pid, killSignal()) }
 	sweepSelf = os.Getpid

@@ -37,3 +37,32 @@ func TestBPFtraceEnv(t *testing.T) {
 		require.NotEmpty(t, env[k], "missing %s", k)
 	}
 }
+
+func TestChildEnvScrubsUnsafeAndRespectsTestingMode(t *testing.T) {
+	parent := []string{
+		"PATH=/custom/bin",
+		"LD_LIBRARY_PATH=/tmp/hijack",
+		"LD_PRELOAD=/tmp/preload.so",
+		"API_SECRET=super-secret",
+		"FAKE_MODE=replay",
+		"FAKE_EXIT=2",
+	}
+
+	prodWithCaps := buildChildEnv(true, false, parent)
+	require.Equal(t, []string{
+		"PATH=/custom/bin",
+		"BPFTRACE_MAP_KEYS_MAX=4096",
+		"BPFTRACE_MAX_PROBES=50",
+		"BPFTRACE_STRLEN=64",
+	}, prodWithCaps)
+
+	testNoCaps := buildChildEnv(false, true, parent)
+	require.Equal(t, []string{
+		"PATH=/custom/bin",
+		"FAKE_EXIT=2",
+		"FAKE_MODE=replay",
+	}, testNoCaps)
+
+	fallbackPath := buildChildEnv(false, false, nil)
+	require.Equal(t, []string{"PATH=" + defaultChildPath}, fallbackPath)
+}

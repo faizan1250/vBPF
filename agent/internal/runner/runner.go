@@ -98,7 +98,7 @@ func Run(ctx context.Context, opts Options, emit func(parser.Event) error) error
 	// Fixed argv (no shell, no extra flags): the bpftrace unsafe escape
 	// hatch can never reach the command line from here.
 	cmd := exec.Command(opts.BPFtracePath, "-q", "-f", "json", tmpName)
-	cmd.Env = append(os.Environ(), bpfEnv()...)
+	cmd.Env = limits.ChildEnv(true)
 	cmd.SysProcAttr = sysProcAttr()
 
 	stdout, err := cmd.StdoutPipe()
@@ -222,11 +222,7 @@ func stopGroup(pid int, grace time.Duration, waitDone <-chan error) error {
 }
 
 func bpfEnv() []string {
-	out := make([]string, 0, len(limits.BPFtraceEnv()))
-	for k, v := range limits.BPFtraceEnv() {
-		out = append(out, k+"="+v)
-	}
-	return out
+	return limits.BPFtraceEnvSlice()
 }
 
 // capReader counts bytes and returns EOF once max is reached.

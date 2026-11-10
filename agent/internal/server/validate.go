@@ -616,7 +616,9 @@ func DefaultDryRun(bpftracePath string) DryRunFunc {
 		_ = tmp.Close()
 		for _, flag := range []string{"--dry-run", "-d"} {
 			cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			out, err := exec.CommandContext(cctx, bpftracePath, flag, name).CombinedOutput()
+			cmd := exec.CommandContext(cctx, bpftracePath, flag, name)
+			cmd.Env = limits.ChildEnv(true)
+			out, err := cmd.CombinedOutput()
 			cancel()
 			text := strings.TrimSpace(string(out))
 			if err == nil {

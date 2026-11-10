@@ -6,6 +6,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/faizan1250/vBPF/agent/internal/limits"
 )
 
 // Catalog caches bpftrace probe names from `bpftrace -l`.
@@ -25,7 +27,9 @@ func NewCatalog(bpftracePath string, listFunc func(ctx context.Context) ([]strin
 		listFunc = func(ctx context.Context) ([]string, error) {
 			cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
-			out, err := exec.CommandContext(cctx, bin, "-l").Output()
+			cmd := exec.CommandContext(cctx, bin, "-l")
+			cmd.Env = limits.ChildEnv(false)
+			out, err := cmd.Output()
 			if err != nil {
 				return nil, err
 			}

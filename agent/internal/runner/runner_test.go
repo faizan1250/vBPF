@@ -2,8 +2,11 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -165,4 +168,44 @@ func TestBPFEnv(t *testing.T) {
 	}
 	require.Equal(t, 60*time.Second, limits.MaxDuration)
 	require.Equal(t, 10*time.Second, limits.DefaultDuration)
+}
+
+func TestRunScrubsChildEnvAndPassesBPFtraceCaps(t *testing.T) {
+	dir := t.TempDir()
+	envOut := filepath.Join(dir, "env.txt")
+	srcPath := filepath.Join(dir, "main.go")
+	binPath := filepath.Join(dir, "fake-bpftrace")
+	if runtime.GOOS == "windows" {
+		binPath += ".exe"
+	}
+	src := fmt.Sprintf(`package main
+import ("os"; "strings")
+func main() { _ = os.WriteFile(%q, []byte(strings.Join(os.Environ(), "\n")), 0o600) }
+`, envOut)
+	require.NoError(t, os.WriteFile(srcPath, []byte(src), 0o600))
+	build := exec.Command("go", "build", "-o", binPath, srcPath)
+	out, err := build.CombinedOutput()
+	require.NoError(t, err, "build helper: %s", out)
+
+	t.Setenv("LD_LIBRARY_PATH", "/tmp/evil-lib")
+	t.Setenv("LD_PRELOAD", "/tmp/evil-preload.so")
+	t.Setenv("UNRELATED_SECRET", "must-not-leak")
+
+	_, err = run(t, Options{
+		BPFtracePath: binPath,
+		Script:       "BEGIN { @x = count(); }",
+		Duration:     time.Second,
+		RunID:        "run_env_check",
+	})
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(envOut)
+	require.NoError(t, err)
+	got := string(raw)
+	require.NotContains(t, got, "LD_LIBRARY_PATH")
+	require.NotContains(t, got, "LD_PRELOAD")
+	require.NotContains(t, got, "UNRELATED_SECRET")
+	require.Contains(t, got, "BPFTRACE_MAX_PROBES=50")
+	require.Contains(t, got, "BPFTRACE_MAP_KEYS_MAX=4096")
+	require.Contains(t, got, "BPFTRACE_STRLEN=64")
 }
