@@ -57,6 +57,88 @@ func classifyValidationError(errs []string) string {
 	return "VALIDATION_FAILED"
 }
 
+// stripCommentsAndContinuations removes // and /* */ comments and \\\r?\n
+// line continuations outside double-quoted strings so regex checks see unified
+// tokens without gluing adjacent identifiers or merging lines across comments.
+func stripCommentsAndContinuations(script string) (string, bool) {
+	var out strings.Builder
+	out.Grow(len(script))
+	inString := false
+	unclosedComment := false
+
+	for i := 0; i < len(script); {
+		c := script[i]
+		if inString {
+			if c == '\\' {
+				out.WriteByte(c)
+				i++
+				if i < len(script) && script[i] != '\n' {
+					out.WriteByte(script[i])
+					i++
+				}
+				continue
+			}
+			out.WriteByte(c)
+			if c == '"' || c == '\n' {
+				inString = false
+			}
+			i++
+			continue
+		}
+
+		if c == '"' {
+			inString = true
+			out.WriteByte(c)
+			i++
+			continue
+		}
+		if c == '\\' {
+			if i+1 < len(script) && script[i+1] == '\n' {
+				i += 2
+				continue
+			}
+			if i+2 < len(script) && script[i+1] == '\r' && script[i+2] == '\n' {
+				i += 3
+				continue
+			}
+			out.WriteByte(c)
+			i++
+			continue
+		}
+		if c == '/' && i+1 < len(script) && script[i+1] == '/' {
+			i += 2
+			for i < len(script) && script[i] != '\n' {
+				i++
+			}
+			out.WriteByte(' ')
+			continue
+		}
+		if c == '/' && i+1 < len(script) && script[i+1] == '*' {
+			i += 2
+			out.WriteByte(' ')
+			closed := false
+			for i < len(script) {
+				if script[i] == '*' && i+1 < len(script) && script[i+1] == '/' {
+					i += 2
+					closed = true
+					break
+				}
+				if script[i] == '\n' {
+					out.WriteByte('\n')
+				}
+				i++
+			}
+			if !closed {
+				unclosedComment = true
+			}
+			continue
+		}
+		out.WriteByte(c)
+		i++
+	}
+	return out.String(), unclosedComment
+}
+
 // StaticValidate applies blocklist, allowlist, and size rules (no exec).
 func StaticValidate(script string, catalog *Catalog) (probes []string, errors []string) {
 	if strings.TrimSpace(script) == "" {
@@ -65,13 +147,17 @@ func StaticValidate(script string, catalog *Catalog) (probes []string, errors []
 	if len(script) > MaxScriptBytes {
 		return nil, []string{"script exceeds 8 KB"}
 	}
-	if blockedCalls.MatchString(script) {
+	cleaned, unclosedComment := stripCommentsAndContinuations(script)
+	if unclosedComment {
+		errors = append(errors, "blocked syntax: unclosed block comment")
+	}
+	if blockedCalls.MatchString(cleaned) {
 		errors = append(errors, "blocked call: system/signal/override/cat are forbidden")
 	}
-	if includeRe.MatchString(script) {
+	if includeRe.MatchString(cleaned) {
 		errors = append(errors, "blocked syntax: #include/#define are forbidden")
 	}
-	probes = probeRe.FindAllString(script, -1)
+	probes = probeRe.FindAllString(cleaned, -1)
 	if len(probes) == 0 {
 		errors = append(errors, "no probes found")
 	}
