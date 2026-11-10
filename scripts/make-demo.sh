@@ -48,7 +48,9 @@ rm -rf web/test-results/demo-demo-three-fixture-scenarios-chromium
 pnpm -C web exec playwright test -c playwright.demo.config.ts || fail "demo recording failed"
 
 VIDEO="$(find web/test-results/demo-demo-three-fixture-scenarios-chromium -maxdepth 1 -name '*.webm' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)"
-[ -n "$VIDEO" ] && [ -f "$VIDEO" ] || fail "no video captured"
+if [ -z "$VIDEO" ] || [ ! -f "$VIDEO" ]; then
+  fail "no video captured"
+fi
 
 DUR="$(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "$VIDEO")"
 printf 'make-demo: captured %s (%.0fs)\n' "$VIDEO" "$DUR"
