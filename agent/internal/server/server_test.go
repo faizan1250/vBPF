@@ -49,6 +49,7 @@ func testServer(t *testing.T, cfg Config) *Server {
 	}
 	s, err := New(cfg)
 	require.NoError(t, err)
+	t.Cleanup(s.runs.Shutdown)
 	if defaultCatalog {
 		require.NoError(t, s.catalog.Refresh(context.Background()))
 	}

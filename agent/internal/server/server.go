@@ -228,6 +228,7 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	s.logger.Info().Str("addr", ln.Addr().String()).Msg("agent listening")
 	serveErr := srv.Serve(ln)
 	<-loaderDone
+	s.runs.Shutdown()
 	if serveErr != nil && serveErr != http.ErrServerClosed {
 		return serveErr
 	}
@@ -551,12 +552,14 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
 	var pending []parser.Event
+	sentSummary := false
 	flush := func() bool {
 		for _, ev := range pending {
 			if err := writeEvent(ctx, conn, ev); err != nil {
 				return false
 			}
 			if ev.Kind == parser.KindSummary {
+				sentSummary = true
 				return false
 			}
 		}
@@ -575,6 +578,11 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 				default:
 					if !flush() {
 						return
+					}
+					if !sentSummary {
+						if sumEv, ok := run.summaryEvent(); ok {
+							_ = writeEvent(ctx, conn, sumEv)
+						}
 					}
 					return
 				}
