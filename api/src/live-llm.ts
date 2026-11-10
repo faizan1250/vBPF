@@ -495,6 +495,34 @@ function classifyResponse(
   return null;
 }
 
+/** Shared timeout failure for fetch, error-body, and success-body aborts. */
+function timeoutFailure(
+  providerName: string,
+  model: string,
+  timeoutMs: number,
+  status: number,
+  err: unknown,
+): {
+  ok: false;
+  failure: TransportFailure;
+  status: number;
+  outcome: LlmCallOutcome;
+  errorName?: string;
+} {
+  return {
+    ok: false,
+    failure: {
+      ok: false,
+      kind: "timeout",
+      message: `${providerName}/${model}: timed out after ${timeoutMs}ms`,
+      cooldownMs: LIVE_DEFAULT_COOLDOWN_MS,
+    },
+    status,
+    outcome: "timeout",
+    ...(err instanceof Error ? { errorName: err.name } : {}),
+  };
+}
+
 /**
  * Single request path shared by generation and explain: POST the payload,
  * classify the status, then read the capped body. Callers only parse `text`.
@@ -540,18 +568,13 @@ async function requestChat(
       });
     } catch (err) {
       if (isAbortError(err)) {
-        return {
-          ok: false,
-          failure: {
-            ok: false,
-            kind: "timeout",
-            message: `${providerName}/${model}: timed out after ${opts.timeoutMs}ms`,
-            cooldownMs: LIVE_DEFAULT_COOLDOWN_MS,
-          },
-          status: 0,
-          outcome: "timeout",
-          ...(err instanceof Error ? { errorName: err.name } : {}),
-        };
+        return timeoutFailure(
+          providerName,
+          model,
+          opts.timeoutMs,
+          0,
+          err,
+        );
       }
       const reason = err instanceof Error ? err.message : "request failed";
       return {
@@ -578,18 +601,13 @@ async function requestChat(
         ).slice(0, 2000);
       } catch (err) {
         if (isAbortError(err)) {
-          return {
-            ok: false,
-            failure: {
-              ok: false,
-              kind: "timeout",
-              message: `${providerName}/${model}: timed out after ${opts.timeoutMs}ms`,
-              cooldownMs: LIVE_DEFAULT_COOLDOWN_MS,
-            },
-            status: res.status,
-            outcome: "timeout",
-            ...(err instanceof Error ? { errorName: err.name } : {}),
-          };
+          return timeoutFailure(
+            providerName,
+            model,
+            opts.timeoutMs,
+            res.status,
+            err,
+          );
         }
         errorBody = undefined;
       }
@@ -607,18 +625,13 @@ async function requestChat(
       return { ok: true, text, status: res.status };
     } catch (err) {
       if (isAbortError(err)) {
-        return {
-          ok: false,
-          failure: {
-            ok: false,
-            kind: "timeout",
-            message: `${providerName}/${model}: timed out after ${opts.timeoutMs}ms`,
-            cooldownMs: LIVE_DEFAULT_COOLDOWN_MS,
-          },
-          status: res.status,
-          outcome: "timeout",
-          ...(err instanceof Error ? { errorName: err.name } : {}),
-        };
+        return timeoutFailure(
+          providerName,
+          model,
+          opts.timeoutMs,
+          res.status,
+          err,
+        );
       }
       const reason = err instanceof Error ? err.message : "unreadable body";
       const capped = reason.includes("byte cap");
@@ -904,7 +917,7 @@ export class LiveLlmChain implements LlmClient {
     for (const p of configured) {
       if (p.cooldownUntil > now) {
         cooled += 1;
-        last = `${p.name} is cooling down after a rate limit`;
+        last = `${p.name} is cooling down after a rate limit or timeout`;
         continue;
       }
       const outcome = await this.attemptProvider(p, prompt);
@@ -922,7 +935,7 @@ export class LiveLlmChain implements LlmClient {
     }
     if (cooled >= configured.length) {
       throw new LlmUnavailableError(
-        "all live LLM providers are cooling down after rate limits",
+        "all live LLM providers are cooling down after rate limits or timeouts",
       );
     }
     throw new LlmRequestError(`live LLM request failed: ${last}`);
@@ -1014,7 +1027,7 @@ export class LiveLlmChain implements LlmClient {
     for (const p of configured) {
       if (p.cooldownUntil > now) {
         cooled += 1;
-        last = `${p.name} is cooling down after a rate limit`;
+        last = `${p.name} is cooling down after a rate limit or timeout`;
         continue;
       }
       const outcome = await this.attemptExplainProvider(p, script);
@@ -1028,7 +1041,7 @@ export class LiveLlmChain implements LlmClient {
     }
     if (cooled >= configured.length) {
       throw new LlmUnavailableError(
-        "all live LLM providers are cooling down after rate limits",
+        "all live LLM providers are cooling down after rate limits or timeouts",
       );
     }
     throw new LlmRequestError(`live LLM request failed: ${last}`);

@@ -702,6 +702,62 @@ describe("deadline spans headers and body", () => {
     expect(seen).toHaveLength(1);
   });
 
+  it("stalled error body trips timeout with the error status intact", async () => {
+    let cancelled = false;
+    const stalled = new ReadableStream({
+      start() {
+        // Never enqueue or close: the error-body read pends until the
+        // deadline aborts it.
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const seen: Seen[] = [];
+    const { infos, logger } = captureLogger();
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "ma",
+      },
+      fetchFn: stubFetch(
+        () =>
+          new Response(stalled, {
+            status: 500,
+            headers: { "content-type": "application/json" },
+          }),
+        seen,
+      ),
+      logger,
+      timeoutMs: 100,
+      maxConcurrency: 1,
+    });
+    const started = Date.now();
+    await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+      LlmUnavailableError,
+    );
+    expect(Date.now() - started).toBeLessThan(5000);
+    expect(cancelled).toBe(true);
+    const call = infos.find((l) => l.msg === "live llm call")?.obj;
+    expect(call).toMatchObject({
+      status: 500,
+      outcome: "timeout",
+      error_name: "AbortError",
+    });
+    expect(chain.health().providers).toMatchObject([
+      { name: "groq", state: "cooldown" },
+    ]);
+    // 500 never matches the JSON-downgrade retry (400/422 only): one hit.
+    expect(seen).toHaveLength(1);
+    // Slot released and provider cooling: the next call fails fast without
+    // touching the network again.
+    await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+      LlmUnavailableError,
+    );
+    expect(seen).toHaveLength(1);
+  });
+
   it("body over the cap aborts the stream early", async () => {
     let cancelled = false;
     const flood = new ReadableStream({
