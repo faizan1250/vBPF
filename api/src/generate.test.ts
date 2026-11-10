@@ -1214,4 +1214,43 @@ describe("validator probe allowlist and header parser parity", () => {
     expect(stringFalseWarning.errors).toEqual([]);
     expect(stringFalseWarning.warnings).toEqual([]);
   });
+
+  it("rejects non-BEGIN/END allowed providers missing a colon target", () => {
+    const providers = [
+      "tracepoint",
+      "kprobe",
+      "kretprobe",
+      "uprobe",
+      "uretprobe",
+      "profile",
+      "interval",
+      "software",
+    ];
+    for (const provider of providers) {
+      for (const script of [
+        `${provider} { @x = count(); }`,
+        `BEGIN {}\n${provider} { @x = count(); }`,
+        `BEGIN, ${provider} { @x = count(); }`,
+      ]) {
+        for (const knownProbes of [[], known]) {
+          const res = staticValidate(script, knownProbes);
+          const joined = res.errors.join("; ");
+          expect(joined, script).toContain(
+            `invalid probe header: missing target for provider ${provider}`,
+          );
+          expect(joined.toLowerCase(), script).not.toMatch(
+            /probe not found|unknown probe|no such probe|too many probes/,
+          );
+        }
+      }
+    }
+
+    for (const valid of [
+      "BEGIN { @x = count(); }",
+      "END { @x = count(); }",
+      "BEGIN, END { @x = count(); }",
+    ]) {
+      expect(staticValidate(valid, known).errors, valid).toEqual([]);
+    }
+  });
 });

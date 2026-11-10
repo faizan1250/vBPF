@@ -18,14 +18,40 @@ import (
 
 func TestClassifyValidationError(t *testing.T) {
 	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{"probe not found: tracepoint:foo:bar"}))
+	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{"probe not found: tracepoint:too many probes:bar"}))
 	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{"ERROR: unknown probe foo"}))
+	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{"ERROR: No such probe: foo"}))
+	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{"stdin:1:1: ERROR: probe not found: foo"}))
 	require.Equal(t, "LIMIT_EXCEEDED", classifyValidationError([]string{"wildcard expands to too many probes: tracepoint:block:item*"}))
+	require.Equal(t, "LIMIT_EXCEEDED", classifyValidationError([]string{"wildcard expands to too many probes: tracepoint:unknown probe:*"}))
+	require.Equal(t, "LIMIT_EXCEEDED", classifyValidationError([]string{"ERROR: too many probes"}))
 	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{"blocked call: system/signal/override/cat are forbidden"}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{`uprobe must target libc or an absolute path: uprobe:rel/"unknown probe":fn`}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{`uprobe must target libc or an absolute path: uprobe:rel/"too many probes":fn`}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{`wildcard too broad: tracepoint:block:"unknown probe":*`}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{`wildcard too broad: tracepoint:block:"too many probes":*`}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{`provider not allowed: "no such probe"`}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{"invalid probe header: missing target for provider profile"}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{"empty script"}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{"script exceeds 8 KB"}))
+	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{"no probes found"}))
 	require.Equal(t, "VALIDATION_FAILED", classifyValidationError(nil))
-	// Probe misses win over limit errors when both are present.
+	// Probe misses win over limit errors regardless of order.
 	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{
 		"wildcard expands to too many probes: tracepoint:block:item*",
 		"probe not found: tracepoint:foo:bar",
+	}))
+	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{
+		"probe not found: tracepoint:foo:bar",
+		"wildcard expands to too many probes: tracepoint:block:item*",
+	}))
+	require.Equal(t, "PROBE_NOT_FOUND", classifyValidationError([]string{
+		"wildcard expands to too many probes: tracepoint:unknown probe:*",
+		"ERROR: unknown probe foo",
+	}))
+	require.Equal(t, "LIMIT_EXCEEDED", classifyValidationError([]string{
+		`uprobe must target libc or an absolute path: uprobe:rel/"unknown probe":fn`,
+		"wildcard expands to too many probes: tracepoint:unknown probe:*",
 	}))
 }
 
@@ -426,4 +452,100 @@ func TestStaticValidateHeaderSyntaxAndSpoofing(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, status)
 		require.Equal(t, "VALIDATION_FAILED", code)
 	})
+}
+
+func TestCreateRunErrorClassificationImmunity(t *testing.T) {
+	emptySrv := testServer(t, Config{})
+	for _, script := range []string{
+		`tracepoint:block:"unknown probe":* {}`,
+		`tracepoint:block:"too many probes":* {}`,
+		`uprobe:rel/"unknown probe":fn {}`,
+		`uprobe:rel/"too many probes":fn {}`,
+	} {
+		t.Run("empty_catalog_"+script, func(t *testing.T) {
+			status, code := postRunCode(t, emptySrv, script)
+			require.Equal(t, http.StatusBadRequest, status)
+			require.Equal(t, "VALIDATION_FAILED", code)
+		})
+	}
+
+	known := []string{"BEGIN", "tracepoint:block:block_rq_issue"}
+	for i := 0; i < 60; i++ {
+		known = append(known, fmt.Sprintf("tracepoint:block:item%d", i))
+		known = append(known, fmt.Sprintf(`tracepoint:"unknown probe":item%d`, i))
+	}
+	catSrv := knownCatalogServer(t, known)
+
+	for _, tc := range []struct {
+		name   string
+		script string
+		want   string
+	}{
+		{"quoted unknown probe broad wildcard", `tracepoint:block:"unknown probe":* {}`, "VALIDATION_FAILED"},
+		{"quoted too many probes broad wildcard", `tracepoint:block:"too many probes":* {}`, "VALIDATION_FAILED"},
+		{"wildcard limit containing unknown probe text", `tracepoint:"unknown probe":item* { @x = count(); }`, "LIMIT_EXCEEDED"},
+		{"probe miss beats limit exceeded", `tracepoint:block:item*, tracepoint:foo:bar { @x = count(); }`, "PROBE_NOT_FOUND"},
+		{"probe miss first beats limit exceeded", `tracepoint:foo:bar, tracepoint:block:item* { @x = count(); }`, "PROBE_NOT_FOUND"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, code := postRunCode(t, catSrv, tc.script)
+			require.Equal(t, http.StatusBadRequest, status)
+			require.Equal(t, tc.want, code)
+		})
+	}
+}
+
+func TestStaticValidateRejectsAllowedProvidersMissingTarget(t *testing.T) {
+	cat := NewCatalog("", func(ctx context.Context) ([]string, error) {
+		return []string{"BEGIN", "END", "tracepoint:block:block_rq_issue", "profile:hz:99", "software:page-faults"}, nil
+	})
+	require.NoError(t, cat.Refresh(context.Background()))
+
+	providers := []string{"tracepoint", "kprobe", "kretprobe", "uprobe", "uretprobe", "profile", "interval", "software"}
+	for _, provider := range providers {
+		for _, tc := range []struct {
+			name   string
+			script string
+		}{
+			{"standalone", provider + " { @x = count(); }"},
+			{"block_piggybacked", "BEGIN {}\n" + provider + " { @x = count(); }"},
+			{"comma_piggybacked", "BEGIN, " + provider + " { @x = count(); }"},
+		} {
+			for _, c := range []struct {
+				label   string
+				catalog *Catalog
+			}{
+				{"nil_catalog", nil},
+				{"with_catalog", cat},
+			} {
+				t.Run(provider+"_"+tc.name+"_"+c.label, func(t *testing.T) {
+					_, errs := StaticValidate(tc.script, c.catalog)
+					require.NotEmpty(t, errs)
+					joined := strings.Join(errs, "; ")
+					require.Contains(t, joined, "invalid probe header: missing target for provider "+provider)
+					low := strings.ToLower(joined)
+					require.NotContains(t, low, "probe not found")
+					require.NotContains(t, low, "unknown probe")
+					require.NotContains(t, low, "no such probe")
+					require.NotContains(t, low, "too many probes")
+					require.Equal(t, "VALIDATION_FAILED", classifyValidationError(errs))
+				})
+			}
+		}
+	}
+
+	emptySrv := testServer(t, Config{})
+	catSrv := knownCatalogServer(t, []string{"BEGIN", "END", "tracepoint:block:block_rq_issue"})
+	for _, script := range []string{"profile { @x = count(); }", "kprobe { @x = count(); }"} {
+		for _, srv := range []*Server{emptySrv, catSrv} {
+			status, code := postRunCode(t, srv, script)
+			require.Equal(t, http.StatusBadRequest, status)
+			require.Equal(t, "VALIDATION_FAILED", code)
+		}
+	}
+
+	for _, valid := range []string{"BEGIN { @x = count(); }", "END { @x = count(); }", "BEGIN, END { @x = count(); }"} {
+		_, errs := StaticValidate(valid, cat)
+		require.Empty(t, errs, valid)
+	}
 }
