@@ -16,8 +16,12 @@ export function RunControls() {
   const setConfirmOpen = useAppStore((s) => s.setConfirmOpen);
   const generation = useAppStore((s) => s.generation);
   const validationOk = useAppStore((s) => s.validationOk);
+  const validationCode = useAppStore((s) => s.validationCode);
+  const agentReady = useAppStore((s) => s.agentReady);
   const [elapsed, setElapsed] = useState(0);
 
+  const agentNotReady =
+    agentReady === false || validationCode === "AGENT_NOT_READY";
   const active =
     runPhase === "running" ||
     runPhase === "starting" ||
@@ -41,7 +45,13 @@ export function RunControls() {
           e.target.tagName === "TEXTAREA" ||
           e.target.tagName === "SELECT");
       if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-        if (!active && generation && validationOk === true && !inField) {
+        if (
+          !active &&
+          generation &&
+          validationOk === true &&
+          !agentNotReady &&
+          !inField
+        ) {
           e.preventDefault();
           setConfirmOpen(true);
         }
@@ -54,7 +64,7 @@ export function RunControls() {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [active, generation, validationOk, runId, setConfirmOpen]);
+  }, [active, generation, validationOk, agentNotReady, runId, setConfirmOpen]);
 
   if (!generation && !active) return null;
 
@@ -70,14 +80,16 @@ export function RunControls() {
               ? "Run failed"
               : active
                 ? `Running… ${remaining}s left`
-                : "Ready to run"}
+                : agentNotReady
+                  ? "AGENT_NOT_READY: agent catalog warming up"
+                  : "Ready to run"}
         </span>
         <div className="ml-auto flex gap-2">
           {!active && (
             <Button
               intent="primary"
               onClick={() => setConfirmOpen(true)}
-              disabled={validationOk !== true}
+              disabled={validationOk !== true || agentNotReady}
             >
               <Play aria-hidden />
               Review & run

@@ -2,18 +2,17 @@ import { readFileSync, statSync } from "node:fs";
 
 import { WebSocket } from "ws";
 
-import { EventEnvelopeSchema } from "@vbpf/schemas";
+import {
+  AgentHealthSchema,
+  EventEnvelopeSchema,
+  ValidateResponseSchema,
+  type AgentHealth,
+  type ValidateResponse,
+} from "@vbpf/schemas";
+
+export type { AgentHealth, ValidateResponse };
 
 export const AGENT_TIMEOUT_MS = 10_000;
-
-export interface AgentHealth {
-  kernel: string;
-  bpftrace_version: string;
-  btf: boolean;
-  root: boolean;
-  tracefs: boolean;
-  uptime_s: number;
-}
 
 export class AgentOfflineError extends Error {
   readonly code = "AGENT_OFFLINE";
@@ -25,10 +24,31 @@ export class AgentOfflineError extends Error {
 export class AgentProxyError extends Error {
   readonly status: number;
   readonly body: string;
-  constructor(status: number, body: string) {
+  readonly code: string | undefined;
+  readonly errorMessage: string | undefined;
+  readonly errors: string[] | undefined;
+  readonly retryAfter: string | undefined;
+  constructor(status: number, body: string, retryAfter?: string | null) {
     super(`agent responded ${status}`);
     this.status = status;
     this.body = body;
+    this.retryAfter = retryAfter ?? undefined;
+    try {
+      const parsed = JSON.parse(body) as {
+        code?: unknown;
+        error?: unknown;
+        errors?: unknown;
+      };
+      if (typeof parsed.code === "string") this.code = parsed.code;
+      if (typeof parsed.error === "string") this.errorMessage = parsed.error;
+      if (Array.isArray(parsed.errors)) {
+        this.errors = parsed.errors.filter(
+          (e): e is string => typeof e === "string",
+        );
+      }
+    } catch {
+      // Non-JSON upstream response body; parsed metadata remains undefined.
+    }
   }
 }
 
@@ -96,8 +116,14 @@ export async function fetchAgentHealth(
   timeoutMs = 3000,
 ): Promise<AgentHealth> {
   const res = await agentFetch(base, tokenFile, "/health", {}, timeoutMs);
-  if (!res.ok) throw new AgentProxyError(res.status, await res.text());
-  return (await res.json()) as AgentHealth;
+  if (!res.ok) {
+    throw new AgentProxyError(
+      res.status,
+      await res.text(),
+      res.headers.get("retry-after"),
+    );
+  }
+  return AgentHealthSchema.parse(await res.json());
 }
 
 export async function searchProbes(
@@ -114,7 +140,13 @@ export async function searchProbes(
     {},
     timeoutMs,
   );
-  if (!res.ok) throw new AgentProxyError(res.status, await res.text());
+  if (!res.ok) {
+    throw new AgentProxyError(
+      res.status,
+      await res.text(),
+      res.headers.get("retry-after"),
+    );
+  }
   const body = (await res.json()) as { probes?: unknown };
   if (!Array.isArray(body.probes)) return [];
   return body.probes
@@ -122,17 +154,12 @@ export async function searchProbes(
     .slice(0, 40);
 }
 
-export interface AgentValidation {
-  ok: boolean;
-  errors: string[];
-  probes: string[];
-}
 export async function validateScript(
   base: string,
   tokenFile: string,
   script: string,
   timeoutMs = AGENT_TIMEOUT_MS,
-): Promise<AgentValidation> {
+): Promise<ValidateResponse> {
   const res = await agentFetch(
     base,
     tokenFile,
@@ -144,21 +171,14 @@ export async function validateScript(
     },
     timeoutMs,
   );
-  if (!res.ok) throw new AgentProxyError(res.status, await res.text());
-  const body = (await res.json()) as {
-    ok?: unknown;
-    errors?: unknown;
-    probes?: unknown;
-  };
-  return {
-    ok: body.ok === true,
-    errors: Array.isArray(body.errors)
-      ? body.errors.filter((e): e is string => typeof e === "string")
-      : [],
-    probes: Array.isArray(body.probes)
-      ? body.probes.filter((p): p is string => typeof p === "string")
-      : [],
-  };
+  if (!res.ok) {
+    throw new AgentProxyError(
+      res.status,
+      await res.text(),
+      res.headers.get("retry-after"),
+    );
+  }
+  return ValidateResponseSchema.parse(await res.json());
 }
 
 export const PROBE_ARGS_TIMEOUT_MS = 3000;
@@ -189,7 +209,13 @@ export async function runScriptAndCountEvents(
       body: JSON.stringify({ script, duration_s: durationS }),
       signal: ctrl.signal,
     });
-    if (!res.ok) throw new AgentProxyError(res.status, await res.text());
+    if (!res.ok) {
+      throw new AgentProxyError(
+        res.status,
+        await res.text(),
+        res.headers.get("retry-after"),
+      );
+    }
     const body = (await res.json()) as { run_id?: unknown };
     if (typeof body.run_id !== "string" || body.run_id === "") {
       throw new AgentProxyError(res.status, "run creation returned no id");
@@ -275,7 +301,13 @@ export async function fetchProbeArgs(
     {},
     timeoutMs,
   );
-  if (!res.ok) throw new AgentProxyError(res.status, await res.text());
+  if (!res.ok) {
+    throw new AgentProxyError(
+      res.status,
+      await res.text(),
+      res.headers.get("retry-after"),
+    );
+  }
   const body = (await res.json()) as { output?: unknown };
   if (typeof body.output !== "string") return "";
   return body.output.slice(0, 8 * 1024);

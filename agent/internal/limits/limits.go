@@ -4,6 +4,11 @@ package limits
 
 import (
 	"fmt"
+	"os"
+	"runtime"
+	"sort"
+	"strings"
+	"testing"
 	"time"
 )
 
@@ -51,4 +56,57 @@ func BPFtraceEnv() map[string]string {
 		"BPFTRACE_MAX_PROBES":   fmt.Sprint(MaxProbes),
 		"BPFTRACE_STRLEN":       fmt.Sprint(StrLen),
 	}
+}
+
+const defaultChildPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+// BPFtraceEnvSlice returns BPFtraceEnv pairs sorted deterministically by key.
+func BPFtraceEnvSlice() []string {
+	m := BPFtraceEnv()
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]string, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, k+"="+m[k])
+	}
+	return out
+}
+
+// ChildEnv builds a minimal allowlisted environment for child processes.
+// Inherited host variables like LD_LIBRARY_PATH and LD_PRELOAD are stripped;
+// FAKE_* test hooks are forwarded only when running under `go test`.
+func ChildEnv(withBPFtraceCaps bool) []string {
+	return buildChildEnv(withBPFtraceCaps, testing.Testing(), os.Environ())
+}
+
+func buildChildEnv(withBPFtraceCaps, includeFake bool, parentEnv []string) []string {
+	pathVal := ""
+	var fakeVars []string
+	for _, entry := range parentEnv {
+		k, v, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		isPath := k == "PATH" || (runtime.GOOS == "windows" && strings.EqualFold(k, "PATH"))
+		if isPath && pathVal == "" && v != "" {
+			pathVal = v
+		} else if includeFake && strings.HasPrefix(k, "FAKE_") {
+			fakeVars = append(fakeVars, entry)
+		}
+	}
+	if pathVal == "" {
+		pathVal = defaultChildPath
+	}
+	out := []string{"PATH=" + pathVal}
+	if withBPFtraceCaps {
+		out = append(out, BPFtraceEnvSlice()...)
+	}
+	if len(fakeVars) > 0 {
+		sort.Strings(fakeVars)
+		out = append(out, fakeVars...)
+	}
+	return out
 }

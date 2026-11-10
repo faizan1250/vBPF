@@ -7,16 +7,20 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/faizan1250/vBPF/agent/internal/limits"
 )
 
 // Health is the GET /health payload.
 type Health struct {
-	Kernel          string `json:"kernel"`
-	BpftraceVersion string `json:"bpftrace_version"`
-	BTF             bool   `json:"btf"`
-	Root            bool   `json:"root"`
-	Tracefs         bool   `json:"tracefs"`
-	UptimeS         int64  `json:"uptime_s"`
+	Kernel          string        `json:"kernel"`
+	BpftraceVersion string        `json:"bpftrace_version"`
+	BTF             bool          `json:"btf"`
+	Root            bool          `json:"root"`
+	Tracefs         bool          `json:"tracefs"`
+	UptimeS         int64         `json:"uptime_s"`
+	Ready           bool          `json:"ready"`
+	Catalog         CatalogStatus `json:"catalog"`
 }
 
 // HealthProvider gathers capability signals. Func fields allow hermetic tests.
@@ -54,6 +58,8 @@ func (p *HealthProvider) Snapshot(ctx context.Context) Health {
 		Root:            p.IsRoot(),
 		Tracefs:         p.HasTracefs(),
 		UptimeS:         int64(time.Since(p.StartTime).Seconds()),
+		Ready:           false,
+		Catalog:         CatalogStatus{State: CatalogStateLoading, Warnings: []string{}},
 	}
 }
 
@@ -69,7 +75,9 @@ func defaultKernel() string {
 func (p *HealthProvider) defaultVersion(ctx context.Context) string {
 	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(cctx, p.BPFtracePath, "--version").CombinedOutput()
+	cmd := exec.CommandContext(cctx, p.BPFtracePath, "--version")
+	cmd.Env = limits.ChildEnv(false)
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return "unknown"
 	}

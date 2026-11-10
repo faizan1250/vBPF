@@ -121,6 +121,10 @@ func TestRawSyscallsPrintfWarns(t *testing.T) {
 }
 
 func TestStaticValidateRejectsCommentAndContinuationBypasses(t *testing.T) {
+	cat := NewCatalog("", func(ctx context.Context) ([]string, error) {
+		return []string{"tracepoint:syscalls:sys_enter_openat"}, nil
+	})
+	require.NoError(t, cat.Refresh(context.Background()))
 	cases := []struct {
 		name   string
 		script string
@@ -156,16 +160,16 @@ func TestStaticValidateRejectsCommentAndContinuationBypasses(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, errs := StaticValidate(tc.script, nil)
-			require.NotEmpty(t, errs, "expected validation error for %s", tc.name)
-			require.Contains(t, strings.Join(errs, "; "), tc.want)
+			res := StaticValidate(tc.script, cat)
+			require.NotEmpty(t, res.Errors, "expected validation error for %s", tc.name)
+			require.Contains(t, strings.Join(res.Errors, "; "), tc.want)
 		})
 	}
 
 	t.Run("commented fake probe is ignored", func(t *testing.T) {
-		probes, errs := StaticValidate("// BEGIN {}\ncat/*x*/(\"/etc/shadow\")", nil)
-		require.Empty(t, probes)
-		joined := strings.Join(errs, "; ")
+		res := StaticValidate("// BEGIN {}\ncat/*x*/(\"/etc/shadow\")", cat)
+		require.Empty(t, res.Probes)
+		joined := strings.Join(res.Errors, "; ")
 		require.Contains(t, joined, "blocked call")
 		require.Contains(t, joined, "no probes found")
 	})
@@ -186,18 +190,18 @@ func TestStaticValidateStringAndSlashInvariants(t *testing.T) {
 		"/* // inside block comment */ BEGIN { @x = count(); }",
 		`/**/BEGIN { @x = count(); }`,
 	} {
-		probes, errs := StaticValidate(script, cat)
-		require.Empty(t, errs, script)
-		require.Equal(t, []string{"BEGIN"}, probes, script)
+		res := StaticValidate(script, cat)
+		require.Empty(t, res.Errors, script)
+		require.Equal(t, []string{"BEGIN"}, res.Probes, script)
 	}
 
-	probes, errs := StaticValidate("// comment mentioning BEGIN tracepoint:foo:bar\ntracepoint:block:block_rq_issue { @x = count(); }", cat)
-	require.Empty(t, errs)
-	require.Equal(t, []string{"tracepoint:block:block_rq_issue"}, probes)
+	res := StaticValidate("// comment mentioning BEGIN tracepoint:foo:bar\ntracepoint:block:block_rq_issue { @x = count(); }", cat)
+	require.Empty(t, res.Errors)
+	require.Equal(t, []string{"tracepoint:block:block_rq_issue"}, res.Probes)
 
-	probes, errs = StaticValidate("tracepoint:block:block_rq_complete /@start[args->dev]/ { @lat = hist((nsecs - @start[args->dev]) / 1000); }", cat)
-	require.Empty(t, errs)
-	require.Equal(t, []string{"tracepoint:block:block_rq_complete"}, probes)
+	res = StaticValidate("tracepoint:block:block_rq_complete /@start[args->dev]/ { @lat = hist((nsecs - @start[args->dev]) / 1000); }", cat)
+	require.Empty(t, res.Errors)
+	require.Equal(t, []string{"tracepoint:block:block_rq_complete"}, res.Probes)
 }
 
 func TestCommentBypassRunsRejectedAndValidRawScriptPreserved(t *testing.T) {
@@ -308,22 +312,22 @@ func TestStaticValidateRejectsUnlistedProbesAndAliases(t *testing.T) {
 
 	for _, tc := range unlisted {
 		t.Run("standalone_"+tc.probe, func(t *testing.T) {
-			_, errs := StaticValidate(tc.probe+" { @x = count(); }", cat)
-			require.NotEmpty(t, errs)
-			require.Contains(t, strings.Join(errs, "; "), "provider not allowed: "+tc.provider)
-			require.Equal(t, "VALIDATION_FAILED", classifyValidationError(errs))
+			res := StaticValidate(tc.probe+" { @x = count(); }", cat)
+			require.NotEmpty(t, res.Errors)
+			require.Contains(t, strings.Join(res.Errors, "; "), "provider not allowed: "+tc.provider)
+			require.Equal(t, "VALIDATION_FAILED", classifyValidationError(res.Errors))
 		})
 		t.Run("piggybacked_block_"+tc.probe, func(t *testing.T) {
-			_, errs := StaticValidate("BEGIN {}\n"+tc.probe+" { @x = count(); }", cat)
-			require.NotEmpty(t, errs)
-			require.Contains(t, strings.Join(errs, "; "), "provider not allowed: "+tc.provider)
-			require.Equal(t, "VALIDATION_FAILED", classifyValidationError(errs))
+			res := StaticValidate("BEGIN {}\n"+tc.probe+" { @x = count(); }", cat)
+			require.NotEmpty(t, res.Errors)
+			require.Contains(t, strings.Join(res.Errors, "; "), "provider not allowed: "+tc.provider)
+			require.Equal(t, "VALIDATION_FAILED", classifyValidationError(res.Errors))
 		})
 		t.Run("piggybacked_comma_"+tc.probe, func(t *testing.T) {
-			_, errs := StaticValidate("BEGIN, "+tc.probe+" { @x = count(); }", cat)
-			require.NotEmpty(t, errs)
-			require.Contains(t, strings.Join(errs, "; "), "provider not allowed: "+tc.provider)
-			require.Equal(t, "VALIDATION_FAILED", classifyValidationError(errs))
+			res := StaticValidate("BEGIN, "+tc.probe+" { @x = count(); }", cat)
+			require.NotEmpty(t, res.Errors)
+			require.Contains(t, strings.Join(res.Errors, "; "), "provider not allowed: "+tc.provider)
+			require.Equal(t, "VALIDATION_FAILED", classifyValidationError(res.Errors))
 		})
 	}
 }
@@ -374,6 +378,7 @@ func TestStaticValidateHeaderSyntaxAndSpoofing(t *testing.T) {
 		{"trailing flag after probe", "BEGIN {} --flag", "invalid probe header: missing action block"},
 		{"missing action block after predicate", "BEGIN /1/", "invalid probe header: missing action block"},
 		{"unclosed quote in target", "uprobe:/bin/app:\"unclosed\n{}", "invalid probe header: unclosed quote"},
+		{"quoted C++ uprobe symbol rejected", `uprobe:/lib/libc.so.6:"Foo::bar(int, int)" { @x = count(); }`, "invalid uprobe symbol"},
 		{"spoofed BEGIN in string", `fentry:vfs_read { printf("BEGIN"); }`, "provider not allowed: fentry"},
 		{"spoofed catalog probe in string", `u:./evil:fn { $s = "tracepoint:block:block_rq_issue"; }`, "provider not allowed: u"},
 		{"unknown probe wording injection", "unknown probe {}", "invalid probe header"},
@@ -384,10 +389,10 @@ func TestStaticValidateHeaderSyntaxAndSpoofing(t *testing.T) {
 
 	for _, tc := range rejectCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, errs := StaticValidate(tc.script, cat)
-			require.NotEmpty(t, errs)
-			require.Contains(t, strings.Join(errs, "; "), tc.want)
-			require.Equal(t, "VALIDATION_FAILED", classifyValidationError(errs))
+			res := StaticValidate(tc.script, cat)
+			require.NotEmpty(t, res.Errors)
+			require.Contains(t, strings.Join(res.Errors, "; "), tc.want)
+			require.Equal(t, "VALIDATION_FAILED", classifyValidationError(res.Errors))
 		})
 	}
 
@@ -422,11 +427,6 @@ func TestStaticValidateHeaderSyntaxAndSpoofing(t *testing.T) {
 			[]string{"tracepoint:block:block_rq_complete"},
 		},
 		{
-			"quoted C++ signature with comma and spaces",
-			`uprobe:/lib/libc.so.6:"Foo::bar(int, int)" { @x = count(); }`,
-			[]string{`uprobe:/lib/libc.so.6:"Foo::bar(int, int)"`},
-		},
-		{
 			"struct enum union before probe",
 			"struct s { int x; }; enum e { A = 1 }; union u { int y; }; BEGIN { @x = count(); }",
 			[]string{"BEGIN"},
@@ -440,9 +440,9 @@ func TestStaticValidateHeaderSyntaxAndSpoofing(t *testing.T) {
 
 	for _, tc := range validCases {
 		t.Run(tc.name, func(t *testing.T) {
-			probes, errs := StaticValidate(tc.script, cat)
-			require.Empty(t, errs)
-			require.Equal(t, tc.wantProbes, probes)
+			res := StaticValidate(tc.script, cat)
+			require.Empty(t, res.Errors)
+			require.Equal(t, tc.wantProbes, res.Probes)
 		})
 	}
 
@@ -455,15 +455,15 @@ func TestStaticValidateHeaderSyntaxAndSpoofing(t *testing.T) {
 }
 
 func TestCreateRunErrorClassificationImmunity(t *testing.T) {
-	emptySrv := testServer(t, Config{})
+	minimalSrv := knownCatalogServer(t, []string{"tracepoint:syscalls:sys_enter_openat"})
 	for _, script := range []string{
 		`tracepoint:block:"unknown probe":* {}`,
 		`tracepoint:block:"too many probes":* {}`,
 		`uprobe:rel/"unknown probe":fn {}`,
 		`uprobe:rel/"too many probes":fn {}`,
 	} {
-		t.Run("empty_catalog_"+script, func(t *testing.T) {
-			status, code := postRunCode(t, emptySrv, script)
+		t.Run("minimal_catalog_"+script, func(t *testing.T) {
+			status, code := postRunCode(t, minimalSrv, script)
 			require.Equal(t, http.StatusBadRequest, status)
 			require.Equal(t, "VALIDATION_FAILED", code)
 		})
@@ -511,33 +511,30 @@ func TestStaticValidateRejectsAllowedProvidersMissingTarget(t *testing.T) {
 			{"block_piggybacked", "BEGIN {}\n" + provider + " { @x = count(); }"},
 			{"comma_piggybacked", "BEGIN, " + provider + " { @x = count(); }"},
 		} {
-			for _, c := range []struct {
-				label   string
-				catalog *Catalog
-			}{
-				{"nil_catalog", nil},
-				{"with_catalog", cat},
-			} {
-				t.Run(provider+"_"+tc.name+"_"+c.label, func(t *testing.T) {
-					_, errs := StaticValidate(tc.script, c.catalog)
-					require.NotEmpty(t, errs)
-					joined := strings.Join(errs, "; ")
-					require.Contains(t, joined, "invalid probe header: missing target for provider "+provider)
-					low := strings.ToLower(joined)
-					require.NotContains(t, low, "probe not found")
-					require.NotContains(t, low, "unknown probe")
-					require.NotContains(t, low, "no such probe")
-					require.NotContains(t, low, "too many probes")
-					require.Equal(t, "VALIDATION_FAILED", classifyValidationError(errs))
-				})
-			}
+			t.Run(provider+"_"+tc.name+"_nil_catalog", func(t *testing.T) {
+				res := StaticValidate(tc.script, nil)
+				require.Equal(t, "CATALOG_UNAVAILABLE", res.Code)
+				require.NotEmpty(t, res.Errors)
+			})
+			t.Run(provider+"_"+tc.name+"_with_catalog", func(t *testing.T) {
+				res := StaticValidate(tc.script, cat)
+				require.NotEmpty(t, res.Errors)
+				joined := strings.Join(res.Errors, "; ")
+				require.Contains(t, joined, "invalid probe header: missing target for provider "+provider)
+				low := strings.ToLower(joined)
+				require.NotContains(t, low, "probe not found")
+				require.NotContains(t, low, "unknown probe")
+				require.NotContains(t, low, "no such probe")
+				require.NotContains(t, low, "too many probes")
+				require.Equal(t, "VALIDATION_FAILED", classifyValidationError(res.Errors))
+			})
 		}
 	}
 
-	emptySrv := testServer(t, Config{})
+	minimalSrv := knownCatalogServer(t, []string{"tracepoint:syscalls:sys_enter_openat"})
 	catSrv := knownCatalogServer(t, []string{"BEGIN", "END", "tracepoint:block:block_rq_issue"})
 	for _, script := range []string{"profile { @x = count(); }", "kprobe { @x = count(); }"} {
-		for _, srv := range []*Server{emptySrv, catSrv} {
+		for _, srv := range []*Server{minimalSrv, catSrv} {
 			status, code := postRunCode(t, srv, script)
 			require.Equal(t, http.StatusBadRequest, status)
 			require.Equal(t, "VALIDATION_FAILED", code)
@@ -545,7 +542,13 @@ func TestStaticValidateRejectsAllowedProvidersMissingTarget(t *testing.T) {
 	}
 
 	for _, valid := range []string{"BEGIN { @x = count(); }", "END { @x = count(); }", "BEGIN, END { @x = count(); }"} {
-		_, errs := StaticValidate(valid, cat)
-		require.Empty(t, errs, valid)
+		res := StaticValidate(valid, cat)
+		require.Empty(t, res.Errors, valid)
 	}
+}
+
+func TestParseHeaderTargetsPreservesQuotedColon(t *testing.T) {
+	targets, errs := parseHeaderTargets(`uprobe:/lib/libc.so.6:"Foo::bar(int, int)"`)
+	require.Empty(t, errs)
+	require.Equal(t, []string{`uprobe:/lib/libc.so.6:"Foo::bar(int, int)"`}, targets)
 }

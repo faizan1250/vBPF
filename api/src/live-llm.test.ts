@@ -1025,12 +1025,31 @@ function startFakeAgent(): Promise<{
       return;
     }
     const url = new URL(req.url ?? "/", "http://x");
+    if (req.method === "GET" && url.pathname === "/health") {
+      send(200, {
+        kernel: "6.8.0",
+        bpftrace_version: "bpftrace v0.20.4",
+        btf: true,
+        root: true,
+        tracefs: true,
+        uptime_s: 12,
+        ready: true,
+        catalog: { state: "ready", probes: 1, warnings: [] },
+      });
+      return;
+    }
     if (req.method === "GET" && url.pathname === "/v1/probes") {
       send(200, { probes: ["BEGIN"], count: 1 });
       return;
     }
     if (req.method === "POST" && url.pathname === "/v1/validate") {
-      send(200, { ok: true, errors: [], probes: ["BEGIN"] });
+      send(200, {
+        ok: true,
+        errors: [],
+        probes: ["BEGIN"],
+        warnings: [],
+        probe_count: 1,
+      });
       return;
     }
     send(404, { error: "not found", code: "NOT_FOUND" });

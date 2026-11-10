@@ -4,6 +4,8 @@ import (
 	"context"
 	"os/exec"
 	"time"
+
+	"github.com/faizan1250/vBPF/agent/internal/limits"
 )
 
 // ProbeArgsTimeout bounds `bpftrace -vl` per the R-03 contract.
@@ -26,7 +28,9 @@ func DefaultProbeArgs(bpftracePath string) ProbeArgsFunc {
 	return func(ctx context.Context, probe string) (string, error) {
 		cctx, cancel := context.WithTimeout(ctx, ProbeArgsTimeout)
 		defer cancel()
-		out, err := exec.CommandContext(cctx, bpftracePath, "-vl", probe).CombinedOutput()
+		cmd := exec.CommandContext(cctx, bpftracePath, "-vl", probe)
+		cmd.Env = limits.ChildEnv(false)
+		out, err := cmd.CombinedOutput()
 		s := string(out)
 		if len(s) > ProbeArgsMaxBytes {
 			s = s[:ProbeArgsMaxBytes]

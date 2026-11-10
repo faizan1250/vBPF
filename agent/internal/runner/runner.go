@@ -98,20 +98,36 @@ func Run(ctx context.Context, opts Options, emit func(parser.Event) error) error
 	// Fixed argv (no shell, no extra flags): the bpftrace unsafe escape
 	// hatch can never reach the command line from here.
 	cmd := exec.Command(opts.BPFtracePath, "-q", "-f", "json", tmpName)
-	cmd.Env = append(os.Environ(), bpfEnv()...)
+	cmd.Env = limits.ChildEnv(true)
 	cmd.SysProcAttr = sysProcAttr()
 
-	stdout, err := cmd.StdoutPipe()
+	// Own OS pipes directly instead of StdoutPipe/StderrPipe so concurrent
+	// cmd.Wait() never closes read ends before readers drain them.
+	stdout, stdoutW, err := os.Pipe()
 	if err != nil {
 		return fmt.Errorf("runner: stdout pipe: %w", err)
 	}
-	stderr, err := cmd.StderrPipe()
+	stderr, stderrW, err := os.Pipe()
 	if err != nil {
+		_ = stdout.Close()
+		_ = stdoutW.Close()
 		return fmt.Errorf("runner: stderr pipe: %w", err)
 	}
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
 	if err := cmd.Start(); err != nil {
+		_ = stdout.Close()
+		_ = stdoutW.Close()
+		_ = stderr.Close()
+		_ = stderrW.Close()
 		return fmt.Errorf("runner: start bpftrace: %w", err)
 	}
+	_ = stdoutW.Close()
+	_ = stderrW.Close()
+	defer func() {
+		_ = stdout.Close()
+		_ = stderr.Close()
+	}()
 	logger.Info().Dur("duration", opts.Duration).Msg("bpftrace started")
 	// Group kill on every exit path; harmless if the group is already reaped.
 	defer func() {
@@ -122,6 +138,8 @@ func Run(ctx context.Context, opts Options, emit func(parser.Event) error) error
 	nextSeq := func() uint64 { return seq.Add(1) - 1 }
 
 	if err := emit(parser.Status(opts.RunID, nextSeq(), "running")); err != nil {
+		_ = killGroup(cmd.Process.Pid, killSignal())
+		_ = cmd.Wait()
 		return err
 	}
 
@@ -222,11 +240,7 @@ func stopGroup(pid int, grace time.Duration, waitDone <-chan error) error {
 }
 
 func bpfEnv() []string {
-	out := make([]string, 0, len(limits.BPFtraceEnv()))
-	for k, v := range limits.BPFtraceEnv() {
-		out = append(out, k+"="+v)
-	}
-	return out
+	return limits.BPFtraceEnvSlice()
 }
 
 // capReader counts bytes and returns EOF once max is reached.

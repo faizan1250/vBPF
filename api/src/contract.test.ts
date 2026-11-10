@@ -28,6 +28,12 @@ const HEALTH = {
   root: false,
   tracefs: true,
   uptime_s: 42,
+  ready: true,
+  catalog: {
+    state: "ready" as const,
+    probes: 5,
+    warnings: [],
+  },
 };
 
 interface FakeAgent {
@@ -79,9 +85,17 @@ function startFakeAgent(): Promise<FakeAgent> {
             ok: false,
             errors: ["probe not found: bad-probe"],
             probes: [],
+            warnings: [],
+            probe_count: 0,
           });
         } else {
-          send(200, { ok: true, errors: [], probes: ["BEGIN"] });
+          send(200, {
+            ok: true,
+            errors: [],
+            probes: ["BEGIN"],
+            warnings: [],
+            probe_count: 1,
+          });
         }
       });
       return;
@@ -324,6 +338,8 @@ describe("validate proxy", () => {
       ok: true,
       errors: [],
       probes: ["BEGIN"],
+      warnings: [],
+      probe_count: 1,
     });
   });
 
@@ -337,6 +353,8 @@ describe("validate proxy", () => {
       ok: false,
       errors: ["probe not found: bad-probe"],
       probes: [],
+      warnings: [],
+      probe_count: 0,
     });
   });
 
@@ -897,6 +915,120 @@ describe("health warnings", () => {
       "NO_PRIVILEGE",
       "KERNEL_UNSUPPORTED",
     ]);
+    expect(healthWarnings({ ...HEALTH, root: true, ready: false })).toEqual([
+      "AGENT_NOT_READY",
+    ]);
+  });
+});
+
+describe("agent catalog not ready (AGENT_NOT_READY)", () => {
+  it("translates 503 CATALOG_UNAVAILABLE to 503 AGENT_NOT_READY across validate, runs, generate, and health", async () => {
+    let notReadyServer: Server | null = null;
+    const notReadyUrl = await new Promise<string>((resolve) => {
+      notReadyServer = createServer((req, res) => {
+        const url = new URL(req.url ?? "/", "http://x");
+        if (req.method === "GET" && url.pathname === "/health") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify({
+              ...HEALTH,
+              root: true,
+              ready: false,
+              catalog: {
+                state: "loading",
+                probes: 0,
+                last_error: "debugfs not mounted",
+                warnings: [],
+              },
+            }),
+          );
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/v1/probes") {
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ probes: [], count: 0 }));
+          return;
+        }
+        res.writeHead(503, {
+          "content-type": "application/json",
+          "retry-after": "3",
+        });
+        res.end(
+          JSON.stringify({
+            error: "probe catalog not ready",
+            code: "CATALOG_UNAVAILABLE",
+          }),
+        );
+      });
+      notReadyServer.listen(0, "127.0.0.1", () => {
+        const addr = notReadyServer?.address();
+        const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+        resolve(`http://127.0.0.1:${port}`);
+      });
+    });
+    const unreadyApp = await buildApp({
+      agentUrl: notReadyUrl,
+      tokenFile,
+      dbPath: ":memory:",
+      recipesDir,
+      webOrigin: "http://localhost:5173",
+      llmMode: "mock",
+    });
+    const addr = await unreadyApp.listen({ host: "127.0.0.1", port: 0 });
+    const url = addr.replace("[::1]", "127.0.0.1");
+    try {
+      const hRes = await fetch(`${url}/api/health`);
+      expect(hRes.status).toBe(200);
+      expect(await hRes.json()).toMatchObject({
+        ok: true,
+        agent: {
+          reachable: true,
+          warnings: ["AGENT_NOT_READY"],
+          health: { ready: false, catalog: { state: "loading" } },
+        },
+      });
+
+      const vRes = await fetch(`${url}/api/validate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+      });
+      expect(vRes.status).toBe(503);
+      expect(vRes.headers.get("retry-after")).toBe("3");
+      expect(await vRes.json()).toMatchObject({
+        code: "AGENT_NOT_READY",
+        fix_hint: expect.stringContaining("tracefs"),
+      });
+
+      const rRes = await fetch(`${url}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+      });
+      expect(rRes.status).toBe(503);
+      expect(rRes.headers.get("retry-after")).toBe("3");
+      expect(await rRes.json()).toMatchObject({
+        code: "AGENT_NOT_READY",
+        fix_hint: expect.stringContaining("tracefs"),
+      });
+
+      const gRes = await fetch(`${url}/api/generate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ prompt: "Which processes use CPU?" }),
+      });
+      expect(gRes.status).toBe(503);
+      expect(gRes.headers.get("retry-after")).toBe("3");
+      expect(await gRes.json()).toMatchObject({
+        code: "AGENT_NOT_READY",
+        fix_hint: expect.stringContaining("tracefs"),
+      });
+    } finally {
+      await unreadyApp.close();
+      await new Promise<void>((resolve) =>
+        notReadyServer?.close(() => resolve()),
+      );
+    }
   });
 });
 

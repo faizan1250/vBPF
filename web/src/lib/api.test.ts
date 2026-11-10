@@ -26,6 +26,56 @@ describe("ApiError", () => {
     const err = new ApiError(503, "AGENT_OFFLINE", "agent offline");
     expect(err.code).toBe("AGENT_OFFLINE");
     expect(err.status).toBe(503);
+    expect(err.fixHint).toBeUndefined();
+  });
+
+  it("carries optional fixHint on AGENT_NOT_READY", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: "agent probe catalog not ready",
+              code: "AGENT_NOT_READY",
+              fix_hint: "Mount debugfs/tracefs and retry.",
+            }),
+            { status: 503, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    await expect(validateScript("BEGIN { }")).rejects.toMatchObject({
+      status: 503,
+      code: "AGENT_NOT_READY",
+      message: "agent probe catalog not ready",
+      fixHint: "Mount debugfs/tracefs and retry.",
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("returns warnings and probe_count from validateScript", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          ok: true,
+          errors: [],
+          probes: ["tracepoint:sched:*"],
+          warnings: ["Wildcard probe tracepoint:sched:* expands to 8 probes."],
+          probe_count: 8,
+        }),
+      ),
+    );
+    await expect(
+      validateScript("tracepoint:sched:* { @c = count(); }"),
+    ).resolves.toEqual({
+      ok: true,
+      errors: [],
+      probes: ["tracepoint:sched:*"],
+      warnings: ["Wildcard probe tracepoint:sched:* expands to 8 probes."],
+      probe_count: 8,
+    });
+    vi.unstubAllGlobals();
   });
 });
 

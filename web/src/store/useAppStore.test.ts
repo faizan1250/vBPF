@@ -16,6 +16,14 @@ describe("useAppStore", () => {
       script: "",
       validationOk: null,
       validationErrors: [],
+      validationProbes: [],
+      validationWarnings: [],
+      validationProbeCount: null,
+      validationCode: null,
+      validationFixHint: null,
+      agentReady: null,
+      agentCatalogState: null,
+      agentStatusHint: null,
       events: [],
       dropped: 0,
       viewOverride: null,
@@ -55,5 +63,21 @@ describe("useAppStore", () => {
     expect(state.script).toBe("BEGIN { }");
     expect(state.durationS).toBe(12);
     expect(state.validationOk).toBe(true);
+  });
+
+  it("tracks validation warnings, probeCount, code, and agent readiness", () => {
+    useAppStore.getState().setValidation(true, [], ["tracepoint:sched:*"], {
+      warnings: ["Wildcard probe tracepoint:sched:* expands to 12 probes."],
+      probeCount: 12,
+    });
+    expect(useAppStore.getState().validationProbeCount).toBe(12);
+    expect(useAppStore.getState().validationWarnings).toEqual([
+      "Wildcard probe tracepoint:sched:* expands to 12 probes.",
+    ]);
+
+    useAppStore.getState().setAgentStatus(false, "loading", "catalog loading");
+    expect(useAppStore.getState().agentReady).toBe(false);
+    expect(useAppStore.getState().agentCatalogState).toBe("loading");
+    expect(useAppStore.getState().agentStatusHint).toBe("catalog loading");
   });
 });

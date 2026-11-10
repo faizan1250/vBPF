@@ -31,10 +31,215 @@ const HIGH_FREQ = new Set([
   "tracepoint:raw_syscalls:sys_exit",
 ]);
 
+const ALLOWED_LIBC_ROOTS = [
+  "/lib",
+  "/lib64",
+  "/usr/lib",
+  "/usr/lib64",
+] as const;
+const MULTIARCH_DIR_RE = /^[a-z0-9_]+-linux-[a-z0-9]+$/;
+const LIBC_SO_VERSION_RE = /^libc\.so(\.[0-9]+)*$/;
+const LIBC_DASH_VER_SO_RE = /^libc-[0-9]+(\.[0-9]+)*\.so$/;
+const UPROBE_SYMBOL_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const HOT_LIBC_SYMBOLS = new Set([
+  "malloc",
+  "free",
+  "memcpy",
+  "memset",
+  "strlen",
+  "read",
+  "write",
+]);
+
+export type ValidateCatalogOption =
+  { mode: "enforce"; known: readonly string[] } | { mode: "skip" };
+
+export interface ValidateOptions {
+  catalog: ValidateCatalogOption;
+}
+
+export type StaticErrorCode =
+  | "CATALOG_UNAVAILABLE"
+  | "VALIDATION_FAILED"
+  | "PROBE_NOT_FOUND"
+  | "LIMIT_EXCEEDED";
+
 export interface StaticResult {
+  code?: StaticErrorCode;
   probes: string[];
   errors: string[];
   warnings: string[];
+  probe_count: number;
+}
+
+function isLibcBasename(base: string): boolean {
+  return LIBC_SO_VERSION_RE.test(base) || LIBC_DASH_VER_SO_RE.test(base);
+}
+
+function isAllowedLibcDir(dir: string): boolean {
+  for (const root of ALLOWED_LIBC_ROOTS) {
+    if (dir === root) return true;
+    if (dir.startsWith(`${root}/`)) {
+      const sub = dir.slice(root.length + 1);
+      if (sub !== "" && !sub.includes("/") && MULTIARCH_DIR_RE.test(sub)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function isAllowedLibcPath(target: string): boolean {
+  if (
+    target === "" ||
+    !target.startsWith("/") ||
+    target.endsWith("/") ||
+    target.includes("//") ||
+    /\s/.test(target)
+  ) {
+    return false;
+  }
+  const parts = target.slice(1).split("/");
+  for (const part of parts) {
+    if (part === "" || part === "." || part === "..") return false;
+  }
+  const idx = target.lastIndexOf("/");
+  if (idx <= 0) return false;
+  const dir = target.slice(0, idx);
+  const base = target.slice(idx + 1);
+  return isAllowedLibcDir(dir) && isLibcBasename(base);
+}
+
+function isAllowedLibcTarget(target: string): boolean {
+  return target === "libc" || isAllowedLibcPath(target);
+}
+
+function parseUprobeProbe(pr: string): {
+  provider: string;
+  target: string;
+  symbol: string;
+  ok: boolean;
+} {
+  const colon = pr.indexOf(":");
+  if (colon < 0) return { provider: "", target: "", symbol: "", ok: false };
+  const provider = pr.slice(0, colon);
+  if (provider !== "uprobe" && provider !== "uretprobe") {
+    return { provider: "", target: "", symbol: "", ok: false };
+  }
+  const rest = pr.slice(colon + 1);
+  const second = rest.indexOf(":");
+  if (second < 0) {
+    return { provider, target: rest, symbol: "", ok: false };
+  }
+  return {
+    provider,
+    target: rest.slice(0, second),
+    symbol: rest.slice(second + 1),
+    ok: true,
+  };
+}
+
+function validateWildcardShape(pr: string, provider: string): string {
+  if (
+    provider !== "tracepoint" &&
+    provider !== "kprobe" &&
+    provider !== "kretprobe"
+  ) {
+    return `wildcard not allowed on provider ${provider}: ${pr}`;
+  }
+  const starCount = (pr.match(/\*/g) ?? []).length;
+  if (/[?[\]]/.test(pr) || starCount !== 1 || !pr.endsWith("*")) {
+    return `invalid wildcard pattern: ${pr}`;
+  }
+  const rest = pr.slice(provider.length + 1);
+  if (provider === "tracepoint") {
+    const colon = rest.indexOf(":");
+    if (colon <= 0) {
+      return `invalid wildcard pattern: ${pr}`;
+    }
+    const event = rest.slice(colon + 1);
+    if (event.includes(":")) {
+      return `invalid wildcard pattern: ${pr}`;
+    }
+    return "";
+  }
+  const prefix = rest.slice(0, -1);
+  if (prefix.includes(":")) {
+    return `invalid wildcard pattern: ${pr}`;
+  }
+  if (prefix.length < 3) {
+    return `wildcard too broad: ${pr}`;
+  }
+  return "";
+}
+
+function suggestProbes(pr: string, known: Set<string>): string {
+  if (known.size === 0) return "";
+  const colon = pr.indexOf(":");
+  const provider = colon < 0 ? pr : pr.slice(0, colon);
+  const cleanTarget = pr.endsWith("*") ? pr.slice(0, -1) : pr;
+  let searchPrefix = `${provider}:`;
+  if (colon >= 0 && provider === "tracepoint") {
+    const second = cleanTarget.indexOf(":", colon + 1);
+    if (second > colon + 1) {
+      searchPrefix = cleanTarget.slice(0, second + 1);
+    }
+  }
+  const targetStem =
+    cleanTarget.length > provider.length + 4
+      ? cleanTarget.slice(0, provider.length + 4)
+      : cleanTarget;
+
+  const candidates: string[] = [];
+  for (const k of known) {
+    if (provider === "tracepoint") {
+      if (k.startsWith(searchPrefix)) candidates.push(k);
+    } else if (k.startsWith(`${provider}:`) && k.startsWith(targetStem)) {
+      candidates.push(k);
+    }
+  }
+  if (candidates.length === 0) {
+    for (const k of known) {
+      if (k.startsWith(`${provider}:`)) candidates.push(k);
+    }
+  }
+  if (candidates.length === 0) return "";
+  candidates.sort();
+  return ` (did you mean: ${candidates.slice(0, 3).join(", ")}?)`;
+}
+
+const STATIC_VALIDATION_FAILED_PREFIXES = [
+  "empty script",
+  "script exceeds ",
+  "--unsafe is forbidden",
+  "blocked ",
+  "invalid probe ",
+  "invalid uprobe ",
+  "invalid wildcard ",
+  "no probes found",
+  "provider not allowed:",
+  "uprobe must ",
+  "wildcard too broad:",
+  "wildcard not allowed ",
+];
+
+function classifyStaticErrors(errors: string[]): StaticErrorCode {
+  let code: StaticErrorCode = "VALIDATION_FAILED";
+  for (const err of errors) {
+    if (err.startsWith("catalog unavailable:")) return "CATALOG_UNAVAILABLE";
+    if (err.startsWith("probe not found:")) return "PROBE_NOT_FOUND";
+    if (
+      err.startsWith("wildcard expands to too many probes:") ||
+      err.startsWith("too many probes:")
+    ) {
+      code = "LIMIT_EXCEEDED";
+      continue;
+    }
+    if (STATIC_VALIDATION_FAILED_PREFIXES.some((p) => err.startsWith(p))) {
+      continue;
+    }
+  }
+  return code;
 }
 
 function expandCount(pattern: string, known: Set<string>): number {
@@ -312,7 +517,7 @@ function inspectHeaderSegment(seg: string): {
   return { hasUnquotedSpace, hasUnclosedQuote };
 }
 
-function parseHeaderTargets(header: string): {
+export function parseHeaderTargets(header: string): {
   targets: string[];
   errs: string[];
 } {
@@ -479,14 +684,40 @@ function extractProbes(cleaned: string): { probes: string[]; errs: string[] } {
 
 export function staticValidate(
   script: string,
-  knownProbes: string[] = [],
+  options: ValidateOptions,
 ): StaticResult {
+  if (
+    options.catalog.mode === "enforce" &&
+    options.catalog.known.length === 0
+  ) {
+    return {
+      code: "CATALOG_UNAVAILABLE",
+      probes: [],
+      errors: ["catalog unavailable: probe catalog not ready"],
+      warnings: [],
+      probe_count: 0,
+    };
+  }
   const errors: string[] = [];
   const warnings: string[] = [];
-  if (script.trim() === "")
-    return { probes: [], errors: ["empty script"], warnings };
+  const seenHotSym = new Set<string>();
+  if (script.trim() === "") {
+    return {
+      code: "VALIDATION_FAILED",
+      probes: [],
+      errors: ["empty script"],
+      warnings,
+      probe_count: 0,
+    };
+  }
   if (script.length > MAX_SCRIPT_BYTES) {
-    return { probes: [], errors: ["script exceeds 8 KB"], warnings };
+    return {
+      code: "VALIDATION_FAILED",
+      probes: [],
+      errors: ["script exceeds 8 KB"],
+      warnings,
+      probe_count: 0,
+    };
   }
   if (script.includes("--unsafe")) errors.push("--unsafe is forbidden");
   const { cleaned, unclosedComment } = stripCommentsAndContinuations(script);
@@ -504,7 +735,12 @@ export function staticValidate(
   if (probes.length === 0 && parseErrors.length === 0) {
     errors.push("no probes found");
   }
-  const known = new Set(knownProbes);
+  const enforceCatalog = options.catalog.mode === "enforce";
+  const known = new Set<string>(
+    options.catalog.mode === "enforce" ? options.catalog.known : [],
+  );
+  let probeCount = 0;
+  let exceededByWildcard = false;
   for (const pr of probes) {
     const colon = pr.indexOf(":");
     const provider = colon < 0 ? pr : pr.slice(0, colon);
@@ -519,45 +755,79 @@ export function staticValidate(
       continue;
     }
     if (provider === "uprobe" || provider === "uretprobe") {
-      const rest = pr.slice(provider.length + 1);
-      if (!rest.includes("libc") && !rest.startsWith("/")) {
-        errors.push(`uprobe must target libc or an absolute path: ${pr}`);
-      }
-    }
-    if (pr.includes("*")) {
-      if (
-        pr === "*" ||
-        pr.endsWith(":*") ||
-        pr === "tracepoint:*:*" ||
-        pr === "kprobe:*"
-      ) {
-        errors.push(`wildcard too broad: ${pr}`);
+      if (/[*?[\]]/.test(pr)) {
+        errors.push(`wildcard not allowed on provider ${provider}: ${pr}`);
         continue;
       }
-      if (known.size > 0) {
-        const n = expandCount(pr, known);
-        if (n > MAX_PROBES) {
-          errors.push(`wildcard expands to too many probes: ${pr}`);
-        } else if (n === 0) {
-          errors.push(`probe not found: ${pr}`);
-        } else {
-          warnings.push(
-            `Wildcard probe expands to ${n} probes; capped at ${MAX_PROBES}.`,
-          );
-        }
+      const parsed = parseUprobeProbe(pr);
+      if (!parsed.ok) {
+        errors.push(`invalid uprobe target: missing symbol in ${pr}`);
+        continue;
       }
+      if (!isAllowedLibcTarget(parsed.target)) {
+        errors.push(`uprobe must target libc or canonical libc path: ${pr}`);
+        continue;
+      }
+      if (!UPROBE_SYMBOL_RE.test(parsed.symbol)) {
+        errors.push(`invalid uprobe symbol: ${parsed.symbol} in ${pr}`);
+        continue;
+      }
+      if (
+        HOT_LIBC_SYMBOLS.has(parsed.symbol) &&
+        !seenHotSym.has(parsed.symbol)
+      ) {
+        seenHotSym.add(parsed.symbol);
+        warnings.push(
+          `Hot libc symbol "${parsed.symbol}" fires at high frequency; rely on in-kernel aggregation and agent rate caps.`,
+        );
+      }
+      probeCount += 1;
       continue;
     }
+    if (/[*?[\]]/.test(pr)) {
+      const shapeErr = validateWildcardShape(pr, provider);
+      if (shapeErr !== "") {
+        errors.push(shapeErr);
+        continue;
+      }
+      if (!enforceCatalog) {
+        probeCount += 1;
+        continue;
+      }
+      const n = expandCount(pr, known);
+      if (n === 0) {
+        errors.push(`probe not found: ${pr}${suggestProbes(pr, known)}`);
+      } else if (n > MAX_PROBES) {
+        errors.push(
+          `wildcard expands to too many probes: ${pr} (${n} exceeds max ${MAX_PROBES})`,
+        );
+        exceededByWildcard = true;
+      } else {
+        warnings.push(
+          `Wildcard probe ${pr} expands to ${n} probes; capped at ${MAX_PROBES}.`,
+        );
+      }
+      probeCount += n;
+      continue;
+    }
+    probeCount += 1;
     if (
-      known.size > 0 &&
+      enforceCatalog &&
       provider !== "profile" &&
       provider !== "interval" &&
       provider !== "software" &&
       provider !== "BEGIN" &&
       provider !== "END"
     ) {
-      if (!known.has(pr)) errors.push(`probe not found: ${pr}`);
+      if (!known.has(pr)) {
+        errors.push(`probe not found: ${pr}${suggestProbes(pr, known)}`);
+      }
     }
+  }
+  if (probeCount > MAX_PROBES && !exceededByWildcard) {
+    errors.push(
+      `too many probes: script attaches ${probeCount} probes (limit ${MAX_PROBES})`,
+    );
   }
   if (/\bprintf\s*\(/.test(cleaned)) {
     const hot = probes.some(
@@ -569,7 +839,13 @@ export function staticValidate(
       warnings.push("High-frequency probe; output is aggregated in-kernel.");
     }
   }
-  return { probes, errors, warnings };
+  return {
+    ...(errors.length > 0 ? { code: classifyStaticErrors(errors) } : {}),
+    probes,
+    errors,
+    warnings,
+    probe_count: probeCount,
+  };
 }
 
 export function truncateErrors(errors: string[], max = 20): string[] {

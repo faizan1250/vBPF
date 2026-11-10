@@ -8,7 +8,7 @@ import { z } from "zod";
 import {
   fetchAgentHealth,
   type AgentHealth,
-  type AgentValidation,
+  type ValidateResponse,
 } from "./agent-client.js";
 import { indexRecipes, migrate, openDb } from "./db.js";
 import {
@@ -124,7 +124,7 @@ export interface EvalRunnerOptions {
     url: string,
     token: string,
     script: string,
-  ) => Promise<{ ok: boolean; errors: string[]; probes: string[] }>;
+  ) => Promise<ValidateResponse>;
   probeArgsFn?: (url: string, token: string, probe: string) => Promise<string>;
   // Live chains share one LLM chain across cases; tests inject a stub here.
   // Defaults to the deterministic mock echoing the top-1 recipe.
@@ -195,7 +195,10 @@ export async function runEvalCase(
   let providerModel = rawLlm.model;
   const recordScript = (out: LlmOutput): void => {
     attemptScripts.push(out.script);
-    attemptStaticOk.push(staticValidate(out.script).errors.length === 0);
+    attemptStaticOk.push(
+      staticValidate(out.script, { catalog: { mode: "skip" } }).errors
+        .length === 0,
+    );
   };
   const detailed = (
     rawLlm as LlmClient & {
@@ -240,12 +243,18 @@ export async function runEvalCase(
         };
   const validateAgentFn =
     opts.validateAgentFn ??
-    (async () => ({ ok: true, errors: [], probes: [] }));
+    (async (): Promise<ValidateResponse> => ({
+      ok: true,
+      errors: [],
+      probes: [],
+      warnings: [],
+      probe_count: 0,
+    }));
   const validateSpy = async (
     url: string,
     token: string,
     script: string,
-  ): Promise<AgentValidation> => {
+  ): Promise<ValidateResponse> => {
     const res = await validateAgentFn(url, token, script);
     agentOutcomes.push(res.ok);
     return res;
@@ -606,6 +615,15 @@ export async function checkAgentPreflight(
   if (!health.btf) {
     throw new Error(
       `agent preflight failed: agent at ${agentUrl} reports btf: false; not falling back to stubs`,
+    );
+  }
+  if (!health.ready) {
+    const detail =
+      health.catalog.last_error !== undefined
+        ? ` (state=${health.catalog.state}, error=${health.catalog.last_error})`
+        : ` (state=${health.catalog.state})`;
+    throw new Error(
+      `agent preflight failed: agent at ${agentUrl} reports ready: false${detail}; not falling back to stubs`,
     );
   }
   return health;

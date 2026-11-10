@@ -4,6 +4,7 @@ import type {
   GenerateResponse,
   HealthResponse,
   Recipe,
+  ValidateResponse,
 } from "@vbpf/schemas";
 
 // Caps mirror packages/schemas + api/src/validator.ts. Enforced client-side
@@ -14,11 +15,7 @@ export const MIN_DURATION_S = 1;
 export const MAX_DURATION_S = 60;
 export const MAX_SESSION_ID_CHARS = 128;
 
-export interface ValidateResult {
-  ok: boolean;
-  errors: string[];
-  probes: string[];
-}
+export type ValidateResult = ValidateResponse;
 
 export interface CreateRunResult {
   run_id: string;
@@ -33,12 +30,14 @@ export interface StopRunResult {
 export class ApiError extends Error {
   readonly code: string;
   readonly status: number;
+  readonly fixHint?: string;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, fixHint?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    if (fixHint !== undefined) this.fixHint = fixHint;
   }
 }
 
@@ -51,11 +50,18 @@ export function fixtureMode(): boolean {
 async function parseError(res: Response): Promise<never> {
   let code = "INTERNAL";
   let message = `request failed (${res.status})`;
+  let fixHint: string | undefined;
   try {
-    const body = (await res.json()) as { error?: unknown; code?: unknown };
+    const body = (await res.json()) as {
+      error?: unknown;
+      code?: unknown;
+      fix_hint?: unknown;
+    };
     if (typeof body.error === "string" && body.error !== "")
       message = body.error;
     if (typeof body.code === "string" && body.code !== "") code = body.code;
+    if (typeof body.fix_hint === "string" && body.fix_hint !== "")
+      fixHint = body.fix_hint;
   } catch {
     try {
       const text = await res.text();
@@ -64,7 +70,7 @@ async function parseError(res: Response): Promise<never> {
       /* keep default */
     }
   }
-  throw new ApiError(res.status, code, message);
+  throw new ApiError(res.status, code, message, fixHint);
 }
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
@@ -176,4 +182,5 @@ export type {
   GenerateResponse,
   HealthResponse,
   Recipe,
+  ValidateResponse,
 };

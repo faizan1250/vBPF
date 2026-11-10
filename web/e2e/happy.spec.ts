@@ -23,6 +23,12 @@ const HEALTH = {
       root: true,
       tracefs: true,
       uptime_s: 60,
+      ready: true,
+      catalog: {
+        state: "ready",
+        probes: 1,
+        warnings: [],
+      },
     },
   },
 };
@@ -69,6 +75,8 @@ test("happy path: prompt, review, confirm, chart, stop", async ({ page }) => {
         ok: true,
         errors: [],
         probes: ["tracepoint:raw_syscalls:sys_enter"],
+        warnings: [],
+        probe_count: 1,
       }),
     }),
   );

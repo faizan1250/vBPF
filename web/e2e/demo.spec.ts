@@ -16,6 +16,12 @@ const HEALTH = {
       root: true,
       tracefs: true,
       uptime_s: 60,
+      ready: true,
+      catalog: {
+        state: "ready",
+        probes: 1,
+        warnings: [],
+      },
     },
   },
 };

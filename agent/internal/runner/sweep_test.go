@@ -5,6 +5,8 @@ package runner
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -53,4 +55,22 @@ func TestSweepStaleNoPgrep(t *testing.T) {
 	n, err := SweepStale(context.Background())
 	require.NoError(t, err)
 	require.Zero(t, n)
+}
+
+func TestSweepPgrepScrubsEnv(t *testing.T) {
+	dir := t.TempDir()
+	fakePgrep := filepath.Join(dir, "pgrep")
+	err := os.WriteFile(fakePgrep, []byte("#!/bin/sh\nenv\n"), 0o755)
+	require.NoError(t, err)
+
+	t.Setenv("LD_LIBRARY_PATH", "/tmp/evil-lib")
+	t.Setenv("LD_PRELOAD", "/tmp/evil-preload.so")
+	t.Setenv("UNRELATED_SECRET", "must-not-leak")
+
+	out, err := sweepPgrep(context.Background(), fakePgrep)
+	require.NoError(t, err)
+	got := string(out)
+	require.NotContains(t, got, "LD_LIBRARY_PATH")
+	require.NotContains(t, got, "LD_PRELOAD")
+	require.NotContains(t, got, "UNRELATED_SECRET")
 }

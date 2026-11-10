@@ -3,10 +3,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type Database from "better-sqlite3";
-import type { GenerateResponse } from "@vbpf/schemas";
+import type { GenerateResponse, ValidateResponse } from "@vbpf/schemas";
 
 import {
   AgentOfflineError,
+  AgentProxyError,
   fetchProbeArgs,
   searchProbes,
   validateScript,
@@ -184,6 +185,13 @@ function newGenerationId(): string {
   return `gen_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
 }
 
+function isCatalogUnavailableError(err: unknown): boolean {
+  return (
+    err instanceof AgentProxyError &&
+    (err.status === 503 || err.code === "CATALOG_UNAVAILABLE")
+  );
+}
+
 function newSessionId(): string {
   return `ses_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
 }
@@ -297,18 +305,20 @@ export async function runGenerate(
       throw new RefusalError(generationId, out.refusal);
     }
     previousScript = out.script;
-    const stat = staticValidate(out.script);
-    warnings = stat.warnings;
+    const stat = staticValidate(out.script, { catalog: { mode: "skip" } });
+    warnings = [...stat.warnings];
     if (stat.errors.length > 0) {
       lastErrors = truncateErrors(stat.errors);
       if (attempt === 3) break;
       continue;
     }
-    let agentRes: { ok: boolean; errors: string[] };
+    let agentRes: ValidateResponse;
     try {
       agentRes = await validateFn(agentUrl, tokenFile, out.script);
     } catch (err) {
-      if (err instanceof AgentOfflineError) throw err;
+      if (err instanceof AgentOfflineError || isCatalogUnavailableError(err)) {
+        throw err;
+      }
       lastErrors = [err instanceof Error ? err.message : "agent error"];
       if (attempt === 3) break;
       continue;
@@ -317,6 +327,9 @@ export async function runGenerate(
       lastErrors = truncateErrors(agentRes.errors);
       if (attempt === 3) break;
       continue;
+    }
+    for (const w of agentRes.warnings) {
+      if (!warnings.includes(w)) warnings.push(w);
     }
     const latencyMs = Date.now() - started;
     insertGeneration(db, {

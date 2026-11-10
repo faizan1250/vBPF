@@ -21,6 +21,12 @@ const HEALTH = {
   root: false,
   tracefs: true,
   uptime_s: 42,
+  ready: true,
+  catalog: {
+    state: "ready" as const,
+    probes: 5,
+    warnings: [],
+  },
 };
 
 let dir = "";
