@@ -45,6 +45,16 @@ export function useRunStream(
   useEffect(() => {
     if (!runId) return;
     const store = useAppStore.getState();
+    // A new generation re-runs this effect with the previous runId still
+    // set (resetForGenerate keeps it). Only attach when a run is in flight;
+    // otherwise a chart-type switch would phantom-start the old run.
+    if (
+      store.runPhase !== "starting" &&
+      store.runPhase !== "running" &&
+      store.runPhase !== "stopping"
+    ) {
+      return;
+    }
     store.setRunPhase("running");
     attemptRef.current = 0;
     bufferRef.current = [];
