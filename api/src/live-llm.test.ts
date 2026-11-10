@@ -13,13 +13,17 @@ import {
   LiveLlmChain,
   LlmRequestError,
   LlmUnavailableError,
+  SUBMIT_PROBE_PARAMETERS,
+  SUBMIT_PROBE_TOOL_NAME,
   cooldownMsForRetryAfter,
   discoverFallbackModels,
+  discoverJsonMode,
   discoverKeys,
   discoverModel,
   parseChain,
   parseUsage,
   resetDeprecatedGenericModelWarnForTests,
+  resetJsonDowngradeForTests,
   validateBaseUrl,
 } from "./live-llm.js";
 import { LlmOutputSchema } from "./llm.js";
@@ -942,5 +946,375 @@ describe("structured per-call logs and usage", () => {
     expect(typeof timeoutCall["error"]).toBe("string");
     expect((timeoutCall["error"] as string).length).toBeLessThanOrEqual(200);
     expect(timeoutCall).not.toHaveProperty("stack");
+  });
+});
+
+describe("json modes", () => {
+  const validArgs = (): string => VALID_CONTENT;
+
+  const toolEnvelope = (args: string): unknown => ({
+    choices: [
+      {
+        message: {
+          tool_calls: [
+            { function: { name: SUBMIT_PROBE_TOOL_NAME, arguments: args } },
+          ],
+        },
+      },
+    ],
+  });
+
+  const startJsonStub = (
+    respond: (body: Record<string, unknown>) => {
+      status: number;
+      json: unknown;
+    },
+  ): Promise<{
+    baseUrl: string;
+    requests: Array<Record<string, unknown>>;
+    close: () => Promise<void>;
+  }> => {
+    const requests: Array<Record<string, unknown>> = [];
+    const server: Server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (chunk) => {
+        raw += String(chunk);
+      });
+      req.on("end", () => {
+        let body: Record<string, unknown> = {};
+        try {
+          body = JSON.parse(raw) as Record<string, unknown>;
+        } catch {
+          body = {};
+        }
+        requests.push(body);
+        const out = respond(body);
+        res.writeHead(out.status, { "content-type": "application/json" });
+        res.end(JSON.stringify(out.json));
+      });
+    });
+    return new Promise((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const addr = server.address();
+        const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+        resolve({
+          baseUrl: `http://127.0.0.1:${port}/v1`,
+          requests,
+          close: () =>
+            new Promise<void>((done) => {
+              server.close(() => done());
+            }),
+        });
+      });
+    });
+  };
+
+  const chainFor = (
+    baseUrl: string,
+    mode: string | undefined,
+    warns?: string[],
+  ): LiveLlmChain =>
+    new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "m1",
+        LLM_GROQ_BASE_URL: baseUrl,
+        ...(mode === undefined ? {} : { LLM_GROQ_JSON_MODE: mode }),
+      } as NodeJS.ProcessEnv,
+      ...(warns === undefined
+        ? {}
+        : { logger: { warn: (msg: string) => warns.push(msg) } }),
+    });
+
+  it("reads LLM_<NAME>_JSON_MODE with a json_object default", () => {
+    expect(discoverJsonMode("groq", {})).toBe("json_object");
+    expect(discoverJsonMode("groq", { LLM_GROQ_JSON_MODE: "garbage" })).toBe(
+      "json_object",
+    );
+    expect(discoverJsonMode("groq", { LLM_GROQ_JSON_MODE: " Tool " })).toBe(
+      "tool",
+    );
+    expect(discoverJsonMode("groq", { LLM_GROQ_JSON_MODE: "NONE" })).toBe(
+      "none",
+    );
+    expect(
+      discoverJsonMode("groq", { LLM_GROQ_JSON_MODE: "json_object" }),
+    ).toBe("json_object");
+  });
+
+  it("json_object sends response_format and keeps JSON in the system message", async () => {
+    resetJsonDowngradeForTests();
+    const stub = await startJsonStub(() => ({
+      status: 200,
+      json: { choices: [{ message: { content: validArgs() } }] },
+    }));
+    try {
+      const chain = chainFor(stub.baseUrl, undefined);
+      const out = await chain.generate("cpu?");
+      expect(out.script).toContain("BEGIN");
+      expect(stub.requests).toHaveLength(1);
+      const body = stub.requests[0] as Record<string, unknown>;
+      expect(body["response_format"]).toEqual({ type: "json_object" });
+      expect(body).not.toHaveProperty("tools");
+      expect(body).not.toHaveProperty("tool_choice");
+      const messages = body["messages"] as Array<{ content: string }>;
+      expect(messages[0]?.content).toContain("JSON");
+    } finally {
+      await stub.close();
+      resetJsonDowngradeForTests();
+    }
+  });
+
+  it("tool sends one submit_probe tool with forced choice", async () => {
+    resetJsonDowngradeForTests();
+    const stub = await startJsonStub(() => ({
+      status: 200,
+      json: toolEnvelope(validArgs()),
+    }));
+    try {
+      const chain = chainFor(stub.baseUrl, "tool");
+      const out = await chain.generate("cpu?");
+      expect(out.script).toContain("BEGIN");
+      expect(stub.requests).toHaveLength(1);
+      const body = stub.requests[0] as Record<string, unknown>;
+      expect(body).not.toHaveProperty("response_format");
+      expect(body["tools"]).toEqual([
+        {
+          type: "function",
+          function: {
+            name: SUBMIT_PROBE_TOOL_NAME,
+            description: "Submit the generated bpftrace probe.",
+            parameters: SUBMIT_PROBE_PARAMETERS,
+          },
+        },
+      ]);
+      expect(body["tool_choice"]).toEqual({
+        type: "function",
+        function: { name: SUBMIT_PROBE_TOOL_NAME },
+      });
+    } finally {
+      await stub.close();
+      resetJsonDowngradeForTests();
+    }
+  });
+
+  it("none sends no shaping fields", async () => {
+    resetJsonDowngradeForTests();
+    const stub = await startJsonStub(() => ({
+      status: 200,
+      json: { choices: [{ message: { content: validArgs() } }] },
+    }));
+    try {
+      const chain = chainFor(stub.baseUrl, "none");
+      const out = await chain.generate("cpu?");
+      expect(out.script).toContain("BEGIN");
+      expect(stub.requests).toHaveLength(1);
+      const body = stub.requests[0] as Record<string, unknown>;
+      expect(body).not.toHaveProperty("response_format");
+      expect(body).not.toHaveProperty("tools");
+      expect(body).not.toHaveProperty("tool_choice");
+    } finally {
+      await stub.close();
+      resetJsonDowngradeForTests();
+    }
+  });
+
+  it("hand-written schema validates identically to zod", () => {
+    // Minimal reader for SUBMIT_PROBE_PARAMETERS (no new dependency).
+    const schemaValid = (value: unknown): boolean => {
+      if (typeof value !== "object" || value === null) return false;
+      const record = value as Record<string, unknown>;
+      if (
+        JSON.stringify(Object.keys(record).sort()) !==
+        JSON.stringify([
+          "chart_type",
+          "duration_s",
+          "explanation",
+          "refusal",
+          "script",
+        ])
+      ) {
+        return false;
+      }
+      if (
+        typeof record["script"] !== "string" ||
+        record["script"].length > 8 * 1024
+      ) {
+        return false;
+      }
+      if (
+        !["table", "bar", "histogram", "timeseries", "events"].includes(
+          record["chart_type"] as string,
+        )
+      ) {
+        return false;
+      }
+      if (
+        typeof record["explanation"] !== "string" ||
+        record["explanation"].length > 2048
+      ) {
+        return false;
+      }
+      if (
+        typeof record["duration_s"] !== "number" ||
+        !Number.isInteger(record["duration_s"]) ||
+        (record["duration_s"] as number) < 1 ||
+        (record["duration_s"] as number) > 60
+      ) {
+        return false;
+      }
+      const refusal = record["refusal"];
+      return (
+        refusal === null ||
+        (typeof refusal === "string" && refusal.length <= 2048)
+      );
+    };
+
+    const base = {
+      script: "BEGIN { @x = count(); }\n",
+      chart_type: "events",
+      explanation: "ok",
+      duration_s: 10,
+      refusal: null,
+    };
+    const samples: unknown[] = [
+      base,
+      { ...base, refusal: "nope" },
+      { ...base, duration_s: 1 },
+      { ...base, duration_s: 60 },
+      { ...base, chart_type: "nope" },
+      { ...base, duration_s: 0 },
+      { ...base, duration_s: 61 },
+      { ...base, duration_s: 1.5 },
+      { ...base, refusal: 42 },
+      { ...base, extra: true },
+      { ...base, script: "x".repeat(8 * 1024 + 1) },
+      { ...base, explanation: "x".repeat(2049) },
+      "just a string",
+      null,
+    ];
+    for (const sample of samples) {
+      expect(
+        schemaValid(sample),
+        `parity for ${JSON.stringify(sample)?.slice(0, 80)}`,
+      ).toBe(LlmOutputSchema.safeParse(sample).success);
+    }
+    expect(SUBMIT_PROBE_PARAMETERS).toEqual({
+      type: "object",
+      properties: {
+        script: { type: "string", maxLength: 8 * 1024 },
+        chart_type: {
+          type: "string",
+          enum: ["table", "bar", "histogram", "timeseries", "events"],
+        },
+        explanation: { type: "string", maxLength: 2048 },
+        duration_s: { type: "integer", minimum: 1, maximum: 60 },
+        refusal: { type: ["string", "null"], maxLength: 2048 },
+      },
+      required: [
+        "script",
+        "chart_type",
+        "explanation",
+        "duration_s",
+        "refusal",
+      ],
+      additionalProperties: false,
+    });
+  });
+
+  it("downgrades to none on a json-mode 400 and retries once", async () => {
+    resetJsonDowngradeForTests();
+    const warns: string[] = [];
+    const stub = await startJsonStub((body) => {
+      if ("response_format" in body || "tools" in body) {
+        return {
+          status: 400,
+          json: {
+            error: {
+              message: "response_format json_object is not supported",
+              code: "bad_request",
+            },
+          },
+        };
+      }
+      return {
+        status: 200,
+        json: { choices: [{ message: { content: validArgs() } }] },
+      };
+    });
+    try {
+      const chain = chainFor(stub.baseUrl, "json_object", warns);
+      const out = await chain.generate("cpu?");
+      expect(out.script).toContain("BEGIN");
+      expect(stub.requests).toHaveLength(2);
+      expect(stub.requests[0]).toHaveProperty("response_format");
+      expect(stub.requests[1]).not.toHaveProperty("response_format");
+      expect(stub.requests[1]).not.toHaveProperty("tools");
+      expect(warns).toHaveLength(1);
+
+      await chain.generate("cpu?");
+      expect(stub.requests).toHaveLength(3);
+      expect(stub.requests[2]).not.toHaveProperty("response_format");
+      expect(stub.requests[2]).not.toHaveProperty("tools");
+      expect(warns).toHaveLength(1);
+      expect(chain.health().providers).toMatchObject([
+        { name: "groq", state: "ready" },
+      ]);
+    } finally {
+      await stub.close();
+      resetJsonDowngradeForTests();
+    }
+  });
+
+  it("downgrades tool mode on a 422 mentioning tool", async () => {
+    resetJsonDowngradeForTests();
+    const warns: string[] = [];
+    const stub = await startJsonStub((body) => {
+      if ("tools" in body || "tool_choice" in body) {
+        return {
+          status: 422,
+          json: {
+            error: { message: "tool_choice is not supported", code: "bad" },
+          },
+        };
+      }
+      return {
+        status: 200,
+        json: { choices: [{ message: { content: validArgs() } }] },
+      };
+    });
+    try {
+      const chain = chainFor(stub.baseUrl, "tool", warns);
+      const out = await chain.generate("cpu?");
+      expect(out.script).toContain("BEGIN");
+      expect(stub.requests).toHaveLength(2);
+      expect(stub.requests[0]).toHaveProperty("tools");
+      expect(stub.requests[1]).not.toHaveProperty("tools");
+      expect(warns).toHaveLength(1);
+    } finally {
+      await stub.close();
+      resetJsonDowngradeForTests();
+    }
+  });
+
+  it("keeps other 400s on the model-fallback path", async () => {
+    resetJsonDowngradeForTests();
+    const warns: string[] = [];
+    const stub = await startJsonStub(() => ({
+      status: 400,
+      json: { error: { message: "unknown model id", code: "bad" } },
+    }));
+    try {
+      const chain = chainFor(stub.baseUrl, "json_object", warns);
+      await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+        LlmRequestError,
+      );
+      expect(stub.requests).toHaveLength(1);
+      expect(warns).toHaveLength(0);
+    } finally {
+      await stub.close();
+      resetJsonDowngradeForTests();
+    }
   });
 });

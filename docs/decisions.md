@@ -1,5 +1,36 @@
 # Decisions
 
+## R2-04 Slice 5: JSON modes and one-time downgrade (2026-11-10)
+
+- **`LLM_<NAME>_JSON_MODE` (`json_object` default | `tool` | `none`).**
+  `discoverJsonMode()` reads the per-provider var (trimmed, case-insensitive;
+  unknown or missing falls back to `json_object`). Stored per provider on
+  `ProviderRuntime.jsonMode`. Payloads: `json_object` as today
+  (`response_format: { type: "json_object" }`, system keeps the word "JSON");
+  `tool` sends one `submit_probe` function tool with hand-written
+  `SUBMIT_PROBE_PARAMETERS` plus forced
+  `tool_choice: { type: "function", function: { name: "submit_probe" } }` and
+  parses `choices[0].message.tool_calls[0].function.arguments` (string or
+  already-parsed object); `none` sends no shaping fields.
+- **Drift risk.** The hand-written schema mirrors `LlmOutputSchema`
+  (`api/src/llm.ts`); they can drift when the zod contract changes. Guarded
+  by a comment pointer at the constant plus a parity test that asserts 14
+  samples (valid, boundaries, each invalid dimension) validate identically
+  under zod `safeParse` and a dependency-free reader of the JSON Schema, and
+  asserts the constant's literal shape.
+- **One-time downgrade.** On a `400`/`422` whose response body matches
+  `/response_format|json_object|json mode|tool/i`, the provider's mode flips
+  to `none` (module-level set, so it holds for every chain in the process)
+  and the same call retries once without cooldown; anything else on
+  `400`/`404`/`422` keeps the model-fallback path. Downgrade warns once per
+  provider per process. `requestChat` failure results carry a best-effort
+  `errorBody` (capped 2000 chars) to support the match; unreadable bodies
+  stay `undefined`.
+- **Verified:** `tsc --noEmit` clean, eslint/prettier clean, `live-llm.test.ts`
+  44/44 (8 new: mode parsing, three stub-HTTP `127.0.0.1:0` mode cases,
+  schema parity, json_object-400 and tool-422 downgrade retries, non-JSON 400
+  no-downgrade), full api suite 152/152.
+
 ## R2-04 Slice 4: per-call logs and token usage (2026-11-10)
 
 - **Optional logger ctor param, pino child in `server.ts`.**

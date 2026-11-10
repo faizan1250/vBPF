@@ -29,6 +29,55 @@ const JSON_INSTRUCTION = [
   '"explanation" (string), "duration_s" (integer 1-60), "refusal" (string or null).',
 ].join("\n");
 
+/** Per-provider JSON shaping: `LLM_<NAME>_JSON_MODE`. Default `json_object`. */
+export type JsonMode = "json_object" | "tool" | "none";
+
+export const SUBMIT_PROBE_TOOL_NAME = "submit_probe";
+
+// Hand-written mirror of LlmOutputSchema for `tool` mode. Keep in sync with
+// `api/src/llm.ts`: script ≤ 8 KiB, chart_type enum, explanation ≤ 2048,
+// duration_s integer 1-60, refusal string ≤ 2048 or null, no extras.
+export const SUBMIT_PROBE_PARAMETERS = {
+  type: "object",
+  properties: {
+    script: { type: "string", maxLength: 8 * 1024 },
+    chart_type: {
+      type: "string",
+      enum: ["table", "bar", "histogram", "timeseries", "events"],
+    },
+    explanation: { type: "string", maxLength: 2048 },
+    duration_s: { type: "integer", minimum: 1, maximum: 60 },
+    refusal: { type: ["string", "null"], maxLength: 2048 },
+  },
+  required: ["script", "chart_type", "explanation", "duration_s", "refusal"],
+  additionalProperties: false,
+} as const;
+
+/** Read `LLM_<NAME>_JSON_MODE`; unknown values fall back to `json_object`. */
+export function discoverJsonMode(
+  provider: string,
+  env: NodeJS.ProcessEnv,
+): JsonMode {
+  const raw = (env[`LLM_${provider.toUpperCase()}_JSON_MODE`] ?? "")
+    .trim()
+    .toLowerCase();
+  if (raw === "tool" || raw === "none" || raw === "json_object") return raw;
+  return "json_object";
+}
+
+const DOWNGRADE_BODY_RE = /response_format|json_object|json mode|tool/i;
+
+// Per-process downgrade: once a provider rejects JSON shaping, it stays on
+// `none` for every chain in this process. Warned set keeps the log to one.
+const downgradedJsonProviders = new Set<string>();
+const downgradeWarnedProviders = new Set<string>();
+
+/** Test-only reset for the per-process JSON-mode downgrade. */
+export function resetJsonDowngradeForTests(): void {
+  downgradedJsonProviders.clear();
+  downgradeWarnedProviders.clear();
+}
+
 // Short system prompt for /api/explain. Only the script text is ever sent;
 // run output (process names, paths, command lines) is never included.
 export const EXPLAIN_SYSTEM = [
@@ -339,6 +388,7 @@ interface ProviderRuntime {
   active: number;
   models: string[];
   cooldownUntil: number;
+  jsonMode: JsonMode;
   reason?: string;
 }
 
@@ -378,12 +428,23 @@ interface ChatMessage {
   content: string;
 }
 
+interface ChatFunctionTool {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    parameters: unknown;
+  };
+}
+
 interface ChatCompletionPayload {
   model: string;
   messages: ChatMessage[];
   temperature: number;
   max_tokens: number;
   response_format?: { type: string };
+  tools?: ChatFunctionTool[];
+  tool_choice?: { type: string; function: { name: string } };
 }
 
 /** Single status classifier shared by generation and explain. */
@@ -454,6 +515,7 @@ async function requestChat(
       status: number;
       outcome: LlmCallOutcome;
       errorName?: string;
+      errorBody?: string;
     }
 > {
   const ctrl = new AbortController();
@@ -491,11 +553,20 @@ async function requestChat(
 
   const failure = classifyResponse(providerName, model, res, Date.now());
   if (failure !== null) {
+    // Best-effort body read so callers can match provider error text
+    // (JSON-mode downgrade); unreadable bodies stay undefined.
+    let errorBody: string | undefined;
+    try {
+      errorBody = (await readCappedText(res, opts.maxBodyBytes)).slice(0, 2000);
+    } catch {
+      errorBody = undefined;
+    }
     return {
       ok: false,
       failure,
       status: res.status,
       outcome: outcomeForStatus(res.status),
+      ...(errorBody !== undefined ? { errorBody } : {}),
     };
   }
 
@@ -647,6 +718,7 @@ export class LiveLlmChain implements LlmClient {
         ...(primary === null ? [] : [primary]),
         ...discoverFallbackModels(name, env),
       ];
+      const downgraded = downgradedJsonProviders.has(name.toLowerCase());
       return {
         name,
         baseUrl: resolved.baseUrl,
@@ -656,6 +728,7 @@ export class LiveLlmChain implements LlmClient {
         active: 0,
         models,
         cooldownUntil: 0,
+        jsonMode: downgraded ? "none" : discoverJsonMode(name, env),
         ...(resolved.reason !== undefined ? { reason: resolved.reason } : {}),
       } satisfies ProviderRuntime;
     });
@@ -1046,6 +1119,49 @@ export class LiveLlmChain implements LlmClient {
     }
   }
 
+  private buildChatPayload(
+    model: string,
+    sent: string,
+    mode: JsonMode,
+  ): ChatCompletionPayload {
+    const messages: ChatMessage[] = [
+      { role: "system", content: JSON_INSTRUCTION },
+      { role: "user", content: sent },
+    ];
+    if (mode === "json_object") {
+      return {
+        model,
+        messages,
+        temperature: 0.2,
+        max_tokens: 2000,
+        response_format: { type: "json_object" },
+      };
+    }
+    if (mode === "tool") {
+      return {
+        model,
+        messages,
+        temperature: 0.2,
+        max_tokens: 2000,
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: SUBMIT_PROBE_TOOL_NAME,
+              description: "Submit the generated bpftrace probe.",
+              parameters: SUBMIT_PROBE_PARAMETERS,
+            },
+          },
+        ],
+        tool_choice: {
+          type: "function",
+          function: { name: SUBMIT_PROBE_TOOL_NAME },
+        },
+      };
+    }
+    return { model, messages, temperature: 0.2, max_tokens: 2000 };
+  }
+
   private async postChat(
     p: ProviderRuntime,
     key: string | undefined,
@@ -1053,6 +1169,49 @@ export class LiveLlmChain implements LlmClient {
     model: string,
     prompt: string,
   ): Promise<ProviderOutcome> {
+    const first = await this.doPostChat(
+      p,
+      key,
+      keyIndex,
+      model,
+      prompt,
+      p.jsonMode,
+    );
+    if (first.outcome.ok) return first.outcome;
+    if (
+      p.jsonMode !== "none" &&
+      (first.status === 400 || first.status === 422) &&
+      DOWNGRADE_BODY_RE.test(first.errorBody ?? "")
+    ) {
+      p.jsonMode = "none";
+      downgradedJsonProviders.add(p.name.toLowerCase());
+      if (!downgradeWarnedProviders.has(p.name.toLowerCase())) {
+        downgradeWarnedProviders.add(p.name.toLowerCase());
+        this.logger.warn(
+          `live LLM provider "${p.name}" rejected JSON mode; downgraded to none for this process`,
+        );
+      }
+      const retry = await this.doPostChat(
+        p,
+        key,
+        keyIndex,
+        model,
+        prompt,
+        "none",
+      );
+      return retry.outcome;
+    }
+    return first.outcome;
+  }
+
+  private async doPostChat(
+    p: ProviderRuntime,
+    key: string | undefined,
+    keyIndex: number,
+    model: string,
+    prompt: string,
+    mode: JsonMode,
+  ): Promise<{ outcome: ProviderOutcome; status: number; errorBody?: string }> {
     const sent = prompt.slice(0, LIVE_MAX_PROMPT_CHARS);
     const started = Date.now();
     const result = await requestChat(
@@ -1061,19 +1220,7 @@ export class LiveLlmChain implements LlmClient {
       p.baseUrl,
       key,
       model,
-      {
-        model,
-        messages: [
-          { role: "system", content: JSON_INSTRUCTION },
-          {
-            role: "user",
-            content: sent,
-          },
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.2,
-        max_tokens: 2000,
-      },
+      this.buildChatPayload(model, sent, mode),
       { timeoutMs: this.timeoutMs, maxBodyBytes: this.maxBodyBytes },
     );
     const latency_ms = Date.now() - started;
@@ -1091,17 +1238,79 @@ export class LiveLlmChain implements LlmClient {
           : {}),
         error: sanitizeErrorMessage(result.failure.message),
       });
-      return result.failure;
+      return {
+        outcome: result.failure,
+        status: result.status,
+        ...(result.errorBody !== undefined
+          ? { errorBody: result.errorBody }
+          : {}),
+      };
     }
 
     let content: unknown;
+    let toolArgs: unknown;
     try {
       const envelope = JSON.parse(result.text) as {
-        choices?: Array<{ message?: { content?: unknown } }>;
+        choices?: Array<{
+          message?: {
+            content?: unknown;
+            tool_calls?: Array<{ function?: { arguments?: unknown } }>;
+          };
+        }>;
         usage?: unknown;
       };
       const usage = parseUsage(envelope);
-      content = envelope.choices?.[0]?.message?.content;
+      const message = envelope.choices?.[0]?.message;
+      if (mode === "tool") {
+        toolArgs = message?.tool_calls?.[0]?.function?.arguments;
+        if (toolArgs === undefined || toolArgs === null || toolArgs === "") {
+          this.logCall({
+            provider: p.name,
+            model,
+            key_index: keyIndex,
+            status: result.status,
+            outcome: "output_invalid",
+            latency_ms,
+            prompt_chars: sent.length,
+            ...(usage !== undefined ? { usage } : {}),
+            error: sanitizeErrorMessage(
+              `${p.name}/${model}: missing choices[0].message.tool_calls[0].function.arguments`,
+            ),
+          });
+          return {
+            outcome: {
+              ok: false,
+              kind: "model",
+              message: `${p.name}/${model}: missing choices[0].message.tool_calls[0].function.arguments`,
+            },
+            status: result.status,
+          };
+        }
+        const parsed =
+          typeof toolArgs === "string"
+            ? LlmOutputSchema.parse(JSON.parse(toolArgs) as unknown)
+            : LlmOutputSchema.parse(toolArgs);
+        this.logCall({
+          provider: p.name,
+          model,
+          key_index: keyIndex,
+          status: result.status,
+          outcome: "ok",
+          latency_ms,
+          prompt_chars: sent.length,
+          ...(usage !== undefined ? { usage } : {}),
+        });
+        return {
+          outcome: {
+            ok: true,
+            output: parsed,
+            model,
+            ...(usage !== undefined ? { usage } : {}),
+          },
+          status: result.status,
+        };
+      }
+      content = message?.content;
       if (content === undefined) {
         this.logCall({
           provider: p.name,
@@ -1117,9 +1326,12 @@ export class LiveLlmChain implements LlmClient {
           ),
         });
         return {
-          ok: false,
-          kind: "provider",
-          message: `${p.name}/${model}: missing choices[0].message.content`,
+          outcome: {
+            ok: false,
+            kind: "provider",
+            message: `${p.name}/${model}: missing choices[0].message.content`,
+          },
+          status: result.status,
         };
       }
       const parsed = LlmOutputSchema.parse(extractJsonPayload(content));
@@ -1134,10 +1346,13 @@ export class LiveLlmChain implements LlmClient {
         ...(usage !== undefined ? { usage } : {}),
       });
       return {
-        ok: true,
-        output: parsed,
-        model,
-        ...(usage !== undefined ? { usage } : {}),
+        outcome: {
+          ok: true,
+          output: parsed,
+          model,
+          ...(usage !== undefined ? { usage } : {}),
+        },
+        status: result.status,
       };
     } catch (err) {
       const reason = err instanceof Error ? err.message : "invalid payload";
@@ -1153,9 +1368,12 @@ export class LiveLlmChain implements LlmClient {
         error: sanitizeErrorMessage(`${p.name}/${model}: ${reason}`),
       });
       return {
-        ok: false,
-        kind: "model",
-        message: `${p.name}/${model}: ${reason}`,
+        outcome: {
+          ok: false,
+          kind: "model",
+          message: `${p.name}/${model}: ${reason}`,
+        },
+        status: result.status,
       };
     }
   }
