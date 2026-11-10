@@ -148,21 +148,10 @@ export function ScriptPanel({ validating }: { validating: boolean }) {
     (validationProbes.some((p) => p.includes("*")) ||
       expandedCount > validationProbes.length);
 
-  const combinedWarnings = Array.from(
-    new Set(
-      validationWarnings.length > 0 || script !== generation.script
-        ? validationWarnings.length > 0
-          ? validationWarnings
-          : []
-        : generation.warnings,
-    ),
-  );
-  // Preserve generation warnings before debounced validation returns for unmodified scripts,
-  // and always include any generation warnings not duplicated in live validation warnings.
-  const allWarnings =
+  const combinedWarnings =
     script === generation.script
       ? Array.from(new Set([...generation.warnings, ...validationWarnings]))
-      : combinedWarnings;
+      : validationWarnings;
 
   return (
     <Card>
@@ -212,11 +201,11 @@ export function ScriptPanel({ validating }: { validating: boolean }) {
         </div>
         <ExplainSection script={script} />
 
-        {allWarnings.length > 0 && (
+        {combinedWarnings.length > 0 && (
           <div>
             <h3 className="mb-1 text-xs font-semibold">Warnings</h3>
             <ul className="flex flex-col gap-1">
-              {allWarnings.map((w) => (
+              {combinedWarnings.map((w) => (
                 <li key={w} className="text-xs text-amber-400">
                   {w}
                 </li>

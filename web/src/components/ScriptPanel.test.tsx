@@ -79,4 +79,47 @@ describe("ScriptPanel", () => {
       screen.getByText(/Mount debugfs\/tracefs and retry\./i),
     ).toBeInTheDocument();
   });
+
+  it("merges and deduplicates generation and validation warnings while script is unmodified", () => {
+    useAppStore.setState({
+      generation: {
+        generation_id: "gen_2",
+        script: "tracepoint:sched:* { @c[probe] = count(); }",
+        chart_type: "bar",
+        explanation: "Counts scheduler tracepoints.",
+        duration_s: 10,
+        warnings: ["Shared warning", "Generation-only warning"],
+        validation: { status: "ok", attempts: 1, errors: [] },
+        based_on_recipe: null,
+      },
+      script: "tracepoint:sched:* { @c[probe] = count(); }",
+      validationWarnings: ["Shared warning", "Live-only warning"],
+    });
+    render(<ScriptPanel validating={false} />);
+    expect(screen.getAllByText("Shared warning")).toHaveLength(1);
+    expect(screen.getByText("Generation-only warning")).toBeInTheDocument();
+    expect(screen.getByText("Live-only warning")).toBeInTheDocument();
+  });
+
+  it("drops stale generation warnings once the script is edited", () => {
+    useAppStore.setState({
+      generation: {
+        generation_id: "gen_3",
+        script: "tracepoint:sched:* { @c[probe] = count(); }",
+        chart_type: "bar",
+        explanation: "Counts scheduler tracepoints.",
+        duration_s: 10,
+        warnings: ["Stale generation warning"],
+        validation: { status: "ok", attempts: 1, errors: [] },
+        based_on_recipe: null,
+      },
+      script: "BEGIN { @c = count(); }",
+      validationWarnings: [],
+    });
+    render(<ScriptPanel validating={false} />);
+    expect(
+      screen.queryByText("Stale generation warning"),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Warnings")).not.toBeInTheDocument();
+  });
 });
