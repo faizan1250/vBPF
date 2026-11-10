@@ -3,7 +3,12 @@
 FROM node:22-slim AS builder
 
 RUN npm install -g pnpm@9 \
-  && apt-get update \
+  && for i in 1 2 3 4 5; do \
+    if apt-get update; then break; fi; \
+    if [ "$i" -eq 5 ]; then exit 1; fi; \
+    echo "apt-get update failed (attempt $i/5), retrying in 10s..."; \
+    sleep 10; \
+  done \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
 
