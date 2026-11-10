@@ -1,5 +1,29 @@
 # Decisions
 
+## R2-04 Slice 2: base-URL validation (2026-11-10)
+
+- **Exported `validateBaseUrl()` in `api/src/live-llm.ts`.** `https:`, or
+  `http:` only for `127.0.0.1`/`localhost`/`::1` (`[::1]` form included) plus
+  `host.docker.internal`; rejects credentials, query, fragment, non-http(s)
+  schemes, and unparseable input; strips trailing slashes. Failure reasons
+  name only the host so they are safe for health/logs.
+- **Override, don't replace.** `LLM_<NAME>_BASE_URL` overrides a known
+  preset only when valid; otherwise that provider gets `baseUrl: ""`
+  (existing `isConfigured` marks it `unconfigured`, so no `Authorization`
+  header can reach the network) plus one construction-time `warn` and a
+  host-only `reason` on `LiveProviderSnapshot`. `LLM_CUSTOM_BASE_URL` keeps
+  its keyless (`needsKey = keys.length > 0`) behavior under the same rule.
+- **Minimal logger seam.** `ChainOptions.logger` is `{ warn }`-only with a
+  no-op default (tests stay quiet); `server.ts` passes
+  `{ warn: (msg) => app.log.warn(msg) }`. The per-call pino logger of slice
+  (d) can widen this without conflict. `LlmProviderHealthSchema` gains an
+  optional `reason` (max 300 chars); ready providers omit the key, so
+  existing exact-match health assertions still pass.
+- **Verified:** `tsc --noEmit` clean, eslint/prettier clean, full api suite
+  131/131 (28 in `live-llm.test.ts` incl. the validation table, override,
+  and credential-hygiene cases; 2 in `keys-hygiene.test.ts` incl. the new
+  credentialed-URL rejection probe).
+
 ## R2-04 Slice 1: shared live-LLM transport (2026-11-10)
 
 - **One request path.** `postChat()` and `postExplain()` duplicated fetch,

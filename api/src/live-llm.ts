@@ -43,6 +43,7 @@ export interface LiveProviderSnapshot {
   name: string;
   state: LiveProviderState;
   keys: number;
+  reason?: string;
 }
 
 export interface LiveHealth {
@@ -61,6 +62,72 @@ interface ProviderPreset {
   needsKey: boolean;
 }
 
+export type BaseUrlValidation =
+  { ok: true; url: string } | { ok: false; reason: string };
+
+// Hosts where plain http is tolerated (loopback plus Docker's host alias).
+const LOOPBACK_HTTP_HOSTS = new Set([
+  "127.0.0.1",
+  "localhost",
+  "::1",
+  "[::1]",
+  "host.docker.internal",
+]);
+
+/**
+ * Validate a custom or per-provider base-URL override. Returns the URL with
+ * any trailing slash stripped, or a safe reason naming only the host (never
+ * credentials, query, or fragment) so it can go into health/logs as-is.
+ */
+export function validateBaseUrl(
+  raw: string | undefined | null,
+): BaseUrlValidation {
+  const trimmed = (raw ?? "").trim();
+  if (trimmed === "") {
+    return { ok: false, reason: "invalid base URL: missing value" };
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return { ok: false, reason: "invalid base URL: unparseable" };
+  }
+  if (parsed.username !== "" || parsed.password !== "") {
+    return {
+      ok: false,
+      reason: `invalid base URL (host "${parsed.hostname}"): credentials not allowed`,
+    };
+  }
+  if (parsed.search !== "" || parsed.hash !== "") {
+    return {
+      ok: false,
+      reason: `invalid base URL (host "${parsed.hostname}"): query and fragment not allowed`,
+    };
+  }
+  if (parsed.protocol === "https:") {
+    return { ok: true, url: trimmed.replace(/\/+$/, "") };
+  }
+  if (parsed.protocol === "http:") {
+    if (LOOPBACK_HTTP_HOSTS.has(parsed.hostname.toLowerCase())) {
+      return { ok: true, url: trimmed.replace(/\/+$/, "") };
+    }
+    return {
+      ok: false,
+      reason: `invalid base URL (host "${parsed.hostname}"): http only allowed for loopback`,
+    };
+  }
+  return {
+    ok: false,
+    reason: `invalid base URL (host "${parsed.hostname}"): scheme must be https`,
+  };
+}
+
+interface ChainLogger {
+  warn: (message: string) => void;
+}
+
+const NOOP_LOGGER: ChainLogger = { warn: () => {} };
+
 const PRESETS: Record<string, ProviderPreset> = {
   groq: { baseUrl: "https://api.groq.com/openai/v1", needsKey: true },
   cerebras: { baseUrl: "https://api.cerebras.ai/v1", needsKey: true },
@@ -74,17 +141,34 @@ const PRESETS: Record<string, ProviderPreset> = {
   },
 };
 
-function presetFor(
+function resolveBaseUrl(
   name: string,
   env: NodeJS.ProcessEnv,
-): ProviderPreset | null {
+  logger: ChainLogger,
+): { baseUrl: string; reason?: string } {
+  const invalid = (reason: string): { baseUrl: string; reason: string } => {
+    const safe = `provider "${name}": ${reason}`;
+    logger.warn(`live LLM base URL rejected (${safe}); marking unconfigured`);
+    return { baseUrl: "", reason: safe };
+  };
   if (name === "custom") {
-    const base = env["LLM_CUSTOM_BASE_URL"]?.trim().replace(/\/$/, "");
-    return base === undefined || base === ""
-      ? null
-      : { baseUrl: base, needsKey: discoverKeys(name, env).length > 0 };
+    const raw = (env["LLM_CUSTOM_BASE_URL"] ?? "").trim();
+    if (raw === "") return { baseUrl: "" };
+    const checked = validateBaseUrl(raw);
+    return checked.ok ? { baseUrl: checked.url } : invalid(checked.reason);
   }
-  return PRESETS[name] ?? null;
+  const preset = PRESETS[name] ?? null;
+  if (preset === null) return { baseUrl: "" };
+  const override = (env[`LLM_${name.toUpperCase()}_BASE_URL`] ?? "").trim();
+  if (override === "") return { baseUrl: preset.baseUrl };
+  const checked = validateBaseUrl(override);
+  return checked.ok ? { baseUrl: checked.url } : invalid(checked.reason);
+}
+
+function presetNeedsKey(name: string, env: NodeJS.ProcessEnv): boolean {
+  if (name === "custom") return discoverKeys(name, env).length > 0;
+  const preset = PRESETS[name] ?? null;
+  return preset?.needsKey ?? true;
 }
 
 /** Ordered chain from LLM_PROVIDER_CHAIN (default: groq). */
@@ -157,6 +241,7 @@ interface ProviderRuntime {
   active: number;
   models: string[];
   cooldownUntil: number;
+  reason?: string;
 }
 
 function nextEnabledIndex(p: ProviderRuntime, from: number): number {
@@ -406,6 +491,7 @@ interface ChainOptions {
   timeoutMs?: number;
   maxBodyBytes?: number;
   maxConcurrency?: number;
+  logger?: ChainLogger;
 }
 
 export class LiveLlmChain implements LlmClient {
@@ -418,13 +504,14 @@ export class LiveLlmChain implements LlmClient {
 
   constructor(opts: ChainOptions = {}) {
     const env = opts.env ?? process.env;
+    const logger = opts.logger ?? NOOP_LOGGER;
     const names = parseChain(opts.chain, env);
     this.fetchFn = opts.fetchFn ?? fetch;
     this.timeoutMs = opts.timeoutMs ?? LIVE_TIMEOUT_MS;
     this.maxBodyBytes = opts.maxBodyBytes ?? LIVE_MAX_BODY_BYTES;
     this.semaphore = new Semaphore(opts.maxConcurrency ?? LIVE_MAX_CONCURRENCY);
     this.providers = names.map((name) => {
-      const preset = presetFor(name, env);
+      const resolved = resolveBaseUrl(name, env, logger);
       const primary = discoverModel(name, env);
       const models = [
         ...(primary === null ? [] : [primary]),
@@ -432,13 +519,14 @@ export class LiveLlmChain implements LlmClient {
       ];
       return {
         name,
-        baseUrl: preset?.baseUrl ?? "",
-        needsKey: preset?.needsKey ?? true,
+        baseUrl: resolved.baseUrl,
+        needsKey: presetNeedsKey(name, env),
         keys: discoverKeys(name, env),
         disabled: [],
         active: 0,
         models,
         cooldownUntil: 0,
+        ...(resolved.reason !== undefined ? { reason: resolved.reason } : {}),
       } satisfies ProviderRuntime;
     });
     const first = this.providers.find((p) => p.models.length > 0);
@@ -465,7 +553,12 @@ export class LiveLlmChain implements LlmClient {
         if (!isConfigured(p)) state = "unconfigured";
         else if (p.cooldownUntil > now) state = "cooldown";
         else if (!hasUsableKey(p)) state = "exhausted";
-        return { name: p.name, state, keys: p.keys.length };
+        return {
+          name: p.name,
+          state,
+          keys: p.keys.length,
+          ...(p.reason !== undefined ? { reason: p.reason } : {}),
+        };
       }),
     };
   }
