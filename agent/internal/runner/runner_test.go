@@ -2,12 +2,14 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -208,4 +210,114 @@ func main() { _ = os.WriteFile(%q, []byte(strings.Join(os.Environ(), "\n")), 0o6
 	require.Contains(t, got, "BPFTRACE_MAX_PROBES=50")
 	require.Contains(t, got, "BPFTRACE_MAP_KEYS_MAX=4096")
 	require.Contains(t, got, "BPFTRACE_STRLEN=64")
+}
+
+func TestFastExitCapturesStdoutAndStderr(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "main.go")
+	binPath := filepath.Join(dir, "fast-exit")
+	if runtime.GOOS == "windows" {
+		binPath += ".exe"
+	}
+	src := `package main
+
+import "os"
+
+func main() {
+	_, _ = os.Stdout.WriteString("{\"type\":\"printf\",\"data\":\"hello\\n\"}\n")
+	_, _ = os.Stderr.WriteString("fast boom\n")
+	os.Exit(3)
+}
+`
+	require.NoError(t, os.WriteFile(srcPath, []byte(src), 0o600))
+	build := exec.Command("go", "build", "-o", binPath, srcPath)
+	out, err := build.CombinedOutput()
+	require.NoError(t, err, "build helper: %s", out)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 4*15)
+	for w := range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range 15 {
+				var events []parser.Event
+				err := Run(context.Background(), Options{
+					BPFtracePath: binPath,
+					Script:       "BEGIN {}",
+					Duration:     10 * time.Second,
+					RunID:        fmt.Sprintf("run_fast_%d_%d", w, i),
+				}, func(ev parser.Event) error {
+					events = append(events, ev)
+					return nil
+				})
+				if err == nil {
+					errs <- fmt.Errorf("w=%d i=%d: expected error", w, i)
+					return
+				}
+				if len(events) == 0 || events[len(events)-1].Kind != parser.KindSummary {
+					errs <- fmt.Errorf("w=%d i=%d: missing summary event: %+v", w, i, events)
+					return
+				}
+				s, ok := events[len(events)-1].Data.(parser.Summary)
+				if !ok || s.ExitReason != ReasonFailed || s.Events != 1 {
+					errs <- fmt.Errorf("w=%d i=%d: bad summary: %+v", w, i, events[len(events)-1])
+					return
+				}
+				var sawPrintf, sawStderr bool
+				for _, ev := range events {
+					if ev.Kind == parser.KindPrintf {
+						sawPrintf = true
+					}
+					if ev.Kind == parser.KindStderr {
+						if text, ok := ev.Data.(map[string]string)["text"]; ok && strings.Contains(text, "fast boom") {
+							sawStderr = true
+						}
+					}
+				}
+				if !sawPrintf || !sawStderr {
+					errs <- fmt.Errorf("w=%d i=%d: sawPrintf=%v sawStderr=%v events=%+v", w, i, sawPrintf, sawStderr, events)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+}
+
+func TestStatusEmitErrorStopsChild(t *testing.T) {
+	dir := t.TempDir()
+	srcPath := filepath.Join(dir, "main.go")
+	binPath := filepath.Join(dir, "sleeper")
+	if runtime.GOOS == "windows" {
+		binPath += ".exe"
+	}
+	src := `package main
+
+import "time"
+
+func main() {
+	time.Sleep(30 * time.Second)
+}
+`
+	require.NoError(t, os.WriteFile(srcPath, []byte(src), 0o600))
+	build := exec.Command("go", "build", "-o", binPath, srcPath)
+	out, err := build.CombinedOutput()
+	require.NoError(t, err, "build helper: %s", out)
+
+	start := time.Now()
+	err = Run(context.Background(), Options{
+		BPFtracePath: binPath,
+		Script:       "BEGIN {}",
+		Duration:     10 * time.Second,
+		RunID:        "run_emit_err",
+	}, func(ev parser.Event) error {
+		return errors.New("sink closed")
+	})
+	require.EqualError(t, err, "sink closed")
+	require.Less(t, time.Since(start), 5*time.Second)
 }

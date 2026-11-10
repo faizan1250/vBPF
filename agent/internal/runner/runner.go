@@ -101,17 +101,33 @@ func Run(ctx context.Context, opts Options, emit func(parser.Event) error) error
 	cmd.Env = limits.ChildEnv(true)
 	cmd.SysProcAttr = sysProcAttr()
 
-	stdout, err := cmd.StdoutPipe()
+	// Own OS pipes directly instead of StdoutPipe/StderrPipe so concurrent
+	// cmd.Wait() never closes read ends before readers drain them.
+	stdout, stdoutW, err := os.Pipe()
 	if err != nil {
 		return fmt.Errorf("runner: stdout pipe: %w", err)
 	}
-	stderr, err := cmd.StderrPipe()
+	stderr, stderrW, err := os.Pipe()
 	if err != nil {
+		_ = stdout.Close()
+		_ = stdoutW.Close()
 		return fmt.Errorf("runner: stderr pipe: %w", err)
 	}
+	cmd.Stdout = stdoutW
+	cmd.Stderr = stderrW
 	if err := cmd.Start(); err != nil {
+		_ = stdout.Close()
+		_ = stdoutW.Close()
+		_ = stderr.Close()
+		_ = stderrW.Close()
 		return fmt.Errorf("runner: start bpftrace: %w", err)
 	}
+	_ = stdoutW.Close()
+	_ = stderrW.Close()
+	defer func() {
+		_ = stdout.Close()
+		_ = stderr.Close()
+	}()
 	logger.Info().Dur("duration", opts.Duration).Msg("bpftrace started")
 	// Group kill on every exit path; harmless if the group is already reaped.
 	defer func() {
@@ -122,6 +138,8 @@ func Run(ctx context.Context, opts Options, emit func(parser.Event) error) error
 	nextSeq := func() uint64 { return seq.Add(1) - 1 }
 
 	if err := emit(parser.Status(opts.RunID, nextSeq(), "running")); err != nil {
+		_ = killGroup(cmd.Process.Pid, killSignal())
+		_ = cmd.Wait()
 		return err
 	}
 
