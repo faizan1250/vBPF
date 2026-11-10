@@ -123,7 +123,7 @@ You are asking a language model to write code that runs in your kernel with root
 | Agent re-validation     | Repeats the checks independently and dry-run compiles against your actual kernel. The agent never trusts the API                                                                                                                         |
 | Kernel verifier         | Rejects unsafe BPF programs                                                                                                                                                                                                              |
 | Runtime guards          | Duration, output rate, output size, map keys, probe count, concurrency (defaults below)                                                                                                                                                  |
-| Human confirmation      | You see the exact script. The script that runs is the one you confirmed (hash-checked)                                                                                                                                                   |
+| Human confirmation      | You see the exact script. The API stores its SHA-256 and whether it differs from the generated version, and the agent independently re-validates every script before it runs.                                                            |
 
 **Privileged execution flags are never passed to bpftrace.** Probes cannot execute commands, send signals, or override return values.
 
@@ -240,27 +240,31 @@ Stop the agent with `./scripts/dev-agent.sh stop`.
 
 Configuration is via environment variables (`.env` for local development). Never commit `.env`.
 
-| Variable                | Default                 | Description                                                                   |
-| ----------------------- | ----------------------- | ----------------------------------------------------------------------------- |
-| `LLM_MODEL`             | `claude-sonnet-5-5`     | Default model; per-provider `LLM_<NAME>_MODEL` takes precedence               |
-| `LLM_MODE`              | `mock`                  | `mock` (CI-safe, no secrets) or live (requires a provider key, never in CI)   |
-| `LLM_PROVIDER_CHAIN`    | `groq`                  | Comma-separated live providers tried in order (see below)                     |
-| `LLM_TIMEOUT_MS`        | `45000`                 | Per-request deadline, shared across headers and body                          |
-| `LLM_TOTAL_TIMEOUT_MS`  | `90000`                 | Overall budget per generate/explain call                                      |
-| `LLM_MAX_WAITERS`       | `10`                    | Queued requests allowed behind the concurrent slots                           |
-| `LLM_WAIT_TIMEOUT_MS`   | `10000`                 | How long a queued request waits for a slot                                    |
-| `AGENT_URL`             | `http://127.0.0.1:8787` | Where the API reaches the agent                                               |
-| `AGENT_TOKEN_FILE`      | `./run/agent.token`     | Bearer token file (mode `0600`), created by the agent on first start          |
-| `AGENT_ALLOWED_ORIGINS` | _(none)_                | Comma-separated WebSocket origin allowlist; empty refuses all browser origins |
-| `PORT` / `HOST`         | `8080` / `127.0.0.1`    | Where the API listens                                                         |
-| `WEB_ORIGIN`            | `http://localhost:5173` | Allowed web origin (CORS)                                                     |
-| `DATABASE_PATH`         | `./run/api.sqlite3`     | SQLite database file                                                          |
-| `RECIPES_DIR`           | `./recipes`             | Recipe library directory                                                      |
-| `DEFAULT_DURATION_S`    | `10`                    | Default probe duration                                                        |
-| `MAX_DURATION_S`        | `60`                    | Hard maximum duration                                                         |
-| `BPFTRACE_MAP_KEYS_MAX` | `4096`                  | Cap on map keys per probe                                                     |
-| `BPFTRACE_MAX_PROBES`   | `50`                    | Cap on attached probes (limits wildcard expansion)                            |
-| `BPFTRACE_STRLEN`       | `64`                    | Maximum string length captured                                                |
+| Variable                     | Default                 | Description                                                                               |
+| ---------------------------- | ----------------------- | ----------------------------------------------------------------------------------------- |
+| `LLM_MODE`                   | `mock`                  | `mock` (CI-safe, no secrets) or live (requires a provider key, never in CI)               |
+| `LLM_PROVIDER_CHAIN`         | `groq`                  | Comma-separated live providers tried in order (see below)                                 |
+| `LLM_<NAME>_MODEL`           | _(required in live)_    | Primary model for provider `NAME`; a provider without one is `unconfigured`               |
+| `LLM_<NAME>_FALLBACK_MODELS` | _(none)_                | Comma-separated models of the same provider, retried on `429` or model-specific `4xx`     |
+| `LLM_<NAME>_JSON_MODE`       | `json_object`           | `json_object` (default) \| `tool` \| `none`; unknown values use `json_object` (see below) |
+| `LLM_<NAME>_BASE_URL`        | _(preset)_              | Overrides the provider preset when valid; an invalid value leaves it `unconfigured`       |
+| `LLM_CUSTOM_BASE_URL`        | _(none)_                | Base URL for the `custom` chain entry, validated like the overrides                       |
+| `LLM_TIMEOUT_MS`             | `45000`                 | Per-request deadline, shared across headers and body                                      |
+| `LLM_TOTAL_TIMEOUT_MS`       | `90000`                 | Overall budget per generate/explain call                                                  |
+| `LLM_MAX_WAITERS`            | `10`                    | Queued requests allowed behind the concurrent slots                                       |
+| `LLM_WAIT_TIMEOUT_MS`        | `10000`                 | How long a queued request waits for a slot                                                |
+| `AGENT_URL`                  | `http://127.0.0.1:8787` | Where the API reaches the agent                                                           |
+| `AGENT_TOKEN_FILE`           | `./run/agent.token`     | Bearer token file (mode `0600`), created by the agent on first start                      |
+| `AGENT_ALLOWED_ORIGINS`      | _(none)_                | Comma-separated WebSocket origin allowlist; empty refuses all browser origins             |
+| `PORT` / `HOST`              | `8080` / `127.0.0.1`    | Where the API listens                                                                     |
+| `WEB_ORIGIN`                 | `http://localhost:5173` | Allowed web origin (CORS)                                                                 |
+| `DATABASE_PATH`              | `./run/api.sqlite3`     | SQLite database file                                                                      |
+| `RECIPES_DIR`                | `./recipes`             | Recipe library directory                                                                  |
+| `DEFAULT_DURATION_S`         | `10`                    | Default probe duration                                                                    |
+| `MAX_DURATION_S`             | `60`                    | Hard maximum duration                                                                     |
+| `BPFTRACE_MAP_KEYS_MAX`      | `4096`                  | Cap on map keys per probe                                                                 |
+| `BPFTRACE_MAX_PROBES`        | `50`                    | Cap on attached probes (limits wildcard expansion)                                        |
+| `BPFTRACE_STRLEN`            | `64`                    | Maximum string length captured                                                            |
 
 Duration and `BPFTRACE_*` values above are the caps enforced by the agent/API on every run; the `.env` entries document the current defaults. Tighter in-kernel aggregation lowers overhead; looser caps increase it.
 
@@ -271,7 +275,9 @@ Set `LLM_MODE=live` and at least one provider key (local `.env` only, never CI).
 - **Chain.** `LLM_PROVIDER_CHAIN` lists providers in fallback order (default `groq`). The first ready provider answers; `generations.model` records `provider/model`.
 - **Keys.** For provider `NAME` the client collects `LLM_<NAME>_API_KEY`, `<NAME>_API_KEY`, then `<NAME>_API_KEY1`..`5` (stops at the first numbering gap). Multiple keys provide resilience if one is revoked; they do not increase your quota. Provider limits normally apply per account or organization. Check your provider's terms.
 - **Key failure.** A `401/403` disables that key for the process lifetime and moves to the next key. A `429` cools the whole provider down (honoring `Retry-After`) and moves to the next provider or model — never to another key of the same provider.
-- **Models.** Set `LLM_<NAME>_MODEL`; free model IDs change, so list current ones via the provider's models endpoint. `LLM_<NAME>_FALLBACK_MODELS` (comma-separated) retries other models of the same provider with the same key on `429` or model-specific `4xx`.
+- **Models.** Set `LLM_<NAME>_MODEL`; free model IDs change, so list current ones via the provider's models endpoint. `LLM_<NAME>_FALLBACK_MODELS` (comma-separated) retries other models of the same provider with the same key on `429` or model-specific `4xx`. The old generic `LLM_MODEL` is deprecated and ignored in live mode (mock-mode label only); setting it with `LLM_MODE=live` logs one warning.
+- **JSON modes.** `LLM_<NAME>_JSON_MODE` is `json_object` (default, sends `response_format`), `tool` (one `submit_probe` function tool with a forced tool choice), or `none` (no shaping fields). If a provider answers `400`/`422` with an error naming JSON shaping, that provider drops to `none` for the rest of the process and the call is retried once.
+- **Base URLs.** Presets cover `groq`, `cerebras`, `openrouter`, `ollama`, and `gemini`; `LLM_<NAME>_BASE_URL` overrides one preset, and `LLM_CUSTOM_BASE_URL` supplies the `custom` entry. Overrides must parse as `https`, or `http` only for loopback (`127.0.0.1`, `localhost`, `::1`, `host.docker.internal`), with no credentials, query string, or fragment. An invalid value marks that provider `unconfigured` (nothing is ever sent to it); unknown provider names are `unconfigured` too.
 - **Health.** `GET /api/health` reports `llm.providers` with per-provider state (`ready`, `cooldown`, `unconfigured`, `exhausted`) and key counts only — never key material.
 - **Caps.** At most 4 concurrent provider requests (up to 10 queued, 10 s wait), 256 KB response bodies, 45 s per request (`LLM_TIMEOUT_MS`), 90 s overall budget per generate/explain call (`LLM_TOTAL_TIMEOUT_MS`, each attempt uses `min(per-request, remaining)`). Budget exhaustion returns `503 LLM_UNAVAILABLE` with `retry_after_s: 90` and a `Retry-After: 90` header.
 - **Timeouts.** `LLM_TIMEOUT_MS` (default `45000`), `LLM_TOTAL_TIMEOUT_MS` (default `90000`), `LLM_MAX_WAITERS` (default `10`), `LLM_WAIT_TIMEOUT_MS` (default `10000`).
@@ -351,27 +357,33 @@ Per-environment recipe notes and fallbacks: [`docs/environment.md`](docs/environ
 
 ## Evaluation
 
-Generation quality is measured, not assumed. CI stays **mock-only by design**: `make eval` runs with `LLM_MODE=mock`, reads no secrets, and needs no root (see [`docs/ci.md`](docs/ci.md)). Live scores come from explicit local runs: `make -C eval run-live` (or `pnpm -C api run eval -- --live --delay-ms 15000`) reads provider keys from the repo-root `.env`, paces calls for free-tier limits, and stubs agent validation on stock runners (compile = static validator only; scripts never executed).
+Generation quality is measured, not assumed. CI stays **mock-only by design**: `make eval` runs with `LLM_MODE=mock`, reads no secrets, and needs no root (see [`docs/ci.md`](docs/ci.md)). Live scores come from explicit local runs that read provider keys from the repo-root `.env` and pace calls for free-tier limits:
 
-Quality targets for the full harness:
+- `make -C eval run-live` (`pnpm -C api run eval -- --live --delay-ms 15000`): live generation with stubbed agent validation (stock runners, no root). Compile means the static validator only; scripts are never compiled or executed.
+- `make -C eval run-live-real` (`--live --agent --delay-ms 15000`): live generation against the real agent API — real probe catalog, dry-run compile of every generated script, and 5 s runs of each validated script (root agent with BTF required).
 
-| Metric                                  | Target       | Latest (live, groq/openai/gpt-oss-120b, 2026-11-09)   |
-| --------------------------------------- | ------------ | ----------------------------------------------------- |
-| Compiles on first try                   | at least 80% | 26/26 (100% of generatable)                           |
-| Compiles within retries                 | at least 95% | 26/26 (100% of generatable)                           |
-| Produces output when run                | TBD          | 9/10 recipes produced events in 5 s agent runs (R-07) |
-| Correct view type selected              | TBD          | 26/26 view-match, 26/26 probe-match                   |
-| Adversarial prompts refused or rejected | 100%         | 4/4 (30/30 refusal-correct overall)                   |
+Latest real-kernel numbers (live+agent, model `groq/openai/gpt-oss-120b`, kernel `6.6.87.2-microsoft-standard-WSL2`, bpftrace `v0.20.2`, 2026-11-10):
 
-Full report: [`eval/reports/2026-11-09-live.md`](eval/reports/2026-11-09-live.md). Adversarial
-cases (4) are correctly refused, not generated, so generation metrics cover the
-remaining 26. The mock baseline is kept at [`eval/reports/2026-11-09.md`](eval/reports/2026-11-09.md).
+| Metric                                              | Target                | Latest (live+agent)          |
+| --------------------------------------------------- | --------------------- | ---------------------------- |
+| Passes static validation (first try / retries)      | —                     | 26/26 / 26/26                |
+| Compiles on a real kernel, dry-run (first try)      | at least 80%          | 20/26 (76.9%, target missed) |
+| Compiles on a real kernel, dry-run (within retries) | at least 95%          | 23/26 (88.5%, target missed) |
+| Produces events when run (generated scripts)        | at least 80% of valid | 20/23 (87.0%)                |
+| Correct view type selected                          | —                     | 22/23                        |
+| Probe-match against the real catalog                | —                     | 23/23                        |
+| Adversarial prompts refused or rejected             | 100%                  | 4/4 (30/30 refusal-correct)  |
+
+Full report: [`eval/reports/2026-11-10-live-real.md`](eval/reports/2026-11-10-live-real.md) (generated scripts: [`2026-11-10-live-real-scripts.ndjson`](eval/reports/2026-11-10-live-real-scripts.ndjson)). The two dry-run targets were published as-is after the tuning budget ran out; the report's gap analysis traces the misses to the agent catalog rejecting uprobe scripts, noisy dry-run error feedback on retries, and model probe-invention variance.
+
+Static-only history is kept for reference: [`eval/reports/2026-11-09-live.md`](eval/reports/2026-11-09-live.md) (stubbed agent validation, header-noted as superseded) and the mock baseline [`eval/reports/2026-11-09.md`](eval/reports/2026-11-09.md). Static-only modes report "passes static validation" only — never "compiles".
 
 Run it yourself:
 
 ```bash
-make eval            # mock mode, no root, no secrets (CI-safe)
-make -C eval run-live  # live mode, local keys only, ~8 min paced run
+make eval              # mock mode, no root, no secrets (CI-safe)
+make -C eval run-live  # live mode, stubbed agent validation, local keys only, ~8 min paced run
+make -C eval run-live-real  # live mode against the real agent (root agent + BTF), local keys only
 ```
 
 Real bpftrace runs need root and BTF: `sudo make test-integration` (manual workflow, expected to SKIP on stock runners).
@@ -466,7 +478,7 @@ Being explicit about what the project does not (yet) do:
 - **bpftrace only.** No libbpf/CO-RE backend yet, so very long-running low-overhead probes are out of scope.
 - **Kernel-dependent.** Some tracepoints and functions differ between kernels and WSL builds. Recipes include fallbacks where possible.
 - **Container quickstart is single-host demo grade.** `docker compose up` publishes only the web port; production needs (TLS, multi-host agents, published API) are out of scope.
-- **Live eval is local-only.** Real-LLM generation scores are published above from a paced local run; CI stays mock-only and agent validation is stubbed without root.
+- **Live eval is local-only.** Real-LLM generation scores are published above from paced local runs (latest: real-kernel live+agent); CI stays mock-only, and the stubbed-agent `run-live` mode never compiles or executes scripts.
 - **The LLM can be wrong.** Generated probes may compile but measure the wrong thing. Read the explanation and the script before trusting a result.
 - **Overhead is real.** Tracing hot paths (for example every syscall) costs CPU. Limits reduce but do not eliminate this.
 - **Root agent.** Treat the host accordingly.
