@@ -3,18 +3,20 @@
 `ci.yml` runs on push/PR to `main` (ubuntu-24.04 only) and stays green with
 no service code: every `make` target prints SKIP when its dir is absent.
 
-| Job          | What it does                                                      |
-| ------------ | ----------------------------------------------------------------- |
-| lint         | go vet + golangci-lint, tsc, ESLint/Prettier, shellcheck          |
-| test-unit    | `go test ./...` + `go test -race ./...`, api/web vitest — no root |
-| vuln         | `govulncheck ./...` via `make vuln` — no root, no secrets         |
-| secrets      | gitleaks secret scan (R-22 keys hygiene) — no secrets             |
-| contract     | API contract vs fake agent fixture                                |
-| e2e-mocked   | Playwright, chromium only, mock fixtures                          |
-| eval-mock    | `make eval` with `LLM_MODE=mock`, no secrets                      |
-| docker-build | Image build only — no push, no privileged run                     |
+| Job           | What it does                                                                                     |
+| ------------- | ------------------------------------------------------------------------------------------------ |
+| lint          | go vet + golangci-lint, tsc, ESLint/Prettier, shellcheck                                         |
+| test-unit     | `go test ./...` + `go test -race ./...` on latest verified Go (1.27.x), api/web vitest — no root |
+| test-unit-min | `go test -race ./...` on the minimum Go from `agent/go.mod` — no root                            |
+| vuln          | `govulncheck ./...` via `make vuln` — no root, no secrets                                        |
+| secrets       | gitleaks secret scan (R-22 keys hygiene) — no secrets                                            |
+| contract      | API contract vs fake agent fixture                                                               |
+| e2e-mocked    | Playwright, chromium only, mock fixtures                                                         |
+| eval-mock     | `make eval` with `LLM_MODE=mock`, no secrets                                                     |
+| docker-build  | Image build only — no push, no privileged run                                                    |
 
-Pinned: Go 1.27.x, Node 22 LTS, pnpm 9.x.
+Go floor: `agent/go.mod` (`go 1.26`, resolved to latest 1.26.x by
+`setup-go`); latest verified: Go 1.27.x. Node 22 LTS, pnpm 9.x pinned.
 
 ## Secrets policy: mock-only
 

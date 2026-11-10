@@ -1,6 +1,6 @@
 module github.com/faizan1250/vBPF/agent
 
-go 1.27
+go 1.26
 
 require (
 	github.com/coder/websocket v1.8.15
