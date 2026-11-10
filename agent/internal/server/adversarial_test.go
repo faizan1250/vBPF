@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -174,14 +175,22 @@ func TestStaticValidateStringAndSlashInvariants(t *testing.T) {
 }
 
 func TestCommentBypassRunsRejectedAndValidRawScriptPreserved(t *testing.T) {
-	var dryScript, runScript string
+	var (
+		mu         sync.Mutex
+		dryScripts []string
+		runScripts []string
+	)
 	s := testServer(t, Config{
 		DryRun: func(ctx context.Context, script string) []string {
-			dryScript = script
+			mu.Lock()
+			dryScripts = append(dryScripts, script)
+			mu.Unlock()
 			return nil
 		},
 		RunFn: func(ctx context.Context, opts runner.Options, emit func(parser.Event) error) error {
-			runScript = opts.Script
+			mu.Lock()
+			runScripts = append(runScripts, opts.Script)
+			mu.Unlock()
 			_ = emit(parser.Status(opts.RunID, 0, "running"))
 			_ = emit(parser.Summarize(opts.RunID, 1, parser.Summary{ExitReason: runner.ReasonCompleted}))
 			return nil
@@ -196,11 +205,29 @@ func TestCommentBypassRunsRejectedAndValidRawScriptPreserved(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, status)
 	require.Equal(t, "VALIDATION_FAILED", code)
 
+	mu.Lock()
+	gotDry := append([]string(nil), dryScripts...)
+	gotRun := append([]string(nil), runScripts...)
+	mu.Unlock()
+	require.Empty(t, gotDry)
+	require.Empty(t, gotRun)
+
 	valid := "// header comment\nBEGIN { @x = count(); }"
 	w := httptest.NewRecorder()
 	body, _ := json.Marshal(map[string]any{"script": valid, "duration_s": 5})
 	s.Handler().ServeHTTP(w, authReq(t, s, "POST", "/v1/runs", string(body)))
 	require.Equal(t, http.StatusCreated, w.Code)
-	require.Equal(t, valid, dryScript)
-	require.Eventually(t, func() bool { return runScript == valid }, 2*time.Second, 10*time.Millisecond)
+	mu.Lock()
+	gotDry = append([]string(nil), dryScripts...)
+	mu.Unlock()
+	require.Equal(t, []string{valid}, gotDry)
+	require.Eventually(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(runScripts) > 0
+	}, 2*time.Second, 10*time.Millisecond)
+	mu.Lock()
+	gotRun = append([]string(nil), runScripts...)
+	mu.Unlock()
+	require.Equal(t, []string{valid}, gotRun)
 }
