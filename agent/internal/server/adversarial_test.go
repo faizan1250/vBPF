@@ -371,7 +371,7 @@ func TestStaticValidateHeaderSyntaxAndSpoofing(t *testing.T) {
 		{"unclosed paren in predicate", "BEGIN /(pid == 1/ {}", "invalid probe syntax: unclosed predicate"},
 		{"unexpected token after predicate", "BEGIN /1/ extra {}", "invalid probe header: unexpected token after predicate"},
 		{"missing action block after probe", "BEGIN {} fentry:evil", "invalid probe header: missing action block"},
-		{"trailing flag after probe", "BEGIN {} --unsafe", "invalid probe header: missing action block"},
+		{"trailing flag after probe", "BEGIN {} --flag", "invalid probe header: missing action block"},
 		{"missing action block after predicate", "BEGIN /1/", "invalid probe header: missing action block"},
 		{"unclosed quote in target", "uprobe:/bin/app:\"unclosed\n{}", "invalid probe header: unclosed quote"},
 		{"spoofed BEGIN in string", `fentry:vfs_read { printf("BEGIN"); }`, "provider not allowed: fentry"},
