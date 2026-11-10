@@ -18,6 +18,7 @@ import {
   discoverKeys,
   discoverModel,
   parseChain,
+  parseUsage,
   resetDeprecatedGenericModelWarnForTests,
   validateBaseUrl,
 } from "./live-llm.js";
@@ -708,5 +709,238 @@ describe("live server wiring", () => {
     } finally {
       await unconfigured.close();
     }
+  });
+});
+
+describe("parseUsage", () => {
+  it("parses numeric usage", () => {
+    expect(
+      parseUsage({ usage: { prompt_tokens: 12, completion_tokens: 34 } }),
+    ).toEqual({ prompt_tokens: 12, completion_tokens: 34 });
+  });
+
+  it("ignores missing, partial-garbage, and non-object usage", () => {
+    expect(parseUsage({})).toBeUndefined();
+    expect(parseUsage({ choices: [] })).toBeUndefined();
+    expect(parseUsage({ usage: null })).toBeUndefined();
+    expect(parseUsage({ usage: "tokens" })).toBeUndefined();
+    expect(parseUsage({ usage: { prompt_tokens: "many" } })).toBeUndefined();
+    expect(
+      parseUsage({ usage: { prompt_tokens: 7, completion_tokens: -1 } }),
+    ).toEqual({ prompt_tokens: 7 });
+  });
+});
+
+describe("structured per-call logs and usage", () => {
+  type Logged = { obj: Record<string, unknown>; msg?: string };
+
+  const makeLogger = (): {
+    infos: Logged[];
+    warns: string[];
+    logger: {
+      warn: (msg: string) => void;
+      info: (obj: Record<string, unknown>, msg?: string) => void;
+    };
+  } => {
+    const infos: Logged[] = [];
+    const warns: string[] = [];
+    return {
+      infos,
+      warns,
+      logger: {
+        warn: (msg: string) => warns.push(msg),
+        info: (obj: Record<string, unknown>, msg?: string) => {
+          infos.push({ obj, msg });
+        },
+      },
+    };
+  };
+
+  const PROMPT_SENTINEL = "PROMPT-SENTINEL-9z9z";
+  const RESPONSE_SENTINEL = "RESPONSE-SENTINEL-8y8y";
+
+  const baseEnv = (): NodeJS.ProcessEnv =>
+    ({
+      LLM_PROVIDER_CHAIN: "groq",
+      GROQ_API_KEY: "k-secret-1",
+      LLM_GROQ_MODEL: "m1",
+    }) as NodeJS.ProcessEnv;
+
+  const chatWithUsage = (content: string, usage?: unknown): Response => {
+    const body: Record<string, unknown> = {
+      choices: [{ message: { content } }],
+    };
+    if (usage !== undefined) body["usage"] = usage;
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const validContentWith = (explanation: string): string =>
+    JSON.stringify(
+      LlmOutputSchema.parse({
+        script: "BEGIN { @x = count(); }\n",
+        chart_type: "events",
+        explanation,
+        duration_s: 10,
+        refusal: null,
+      }),
+    );
+
+  it("emits startup and per-call lines with usage, never secrets", async () => {
+    const { infos, logger } = makeLogger();
+    const seen: Seen[] = [];
+    const fetchFn = stubFetch(
+      () =>
+        chatWithUsage(validContentWith(`probe ok ${RESPONSE_SENTINEL}`), {
+          prompt_tokens: 12,
+          completion_tokens: 34,
+        }),
+      seen,
+    );
+    const chain = new LiveLlmChain({
+      env: baseEnv(),
+      fetchFn,
+      logger,
+    });
+    const detailed = await chain.generateDetailed(`cpu? ${PROMPT_SENTINEL}`);
+    expect(detailed.usage).toEqual({
+      prompt_tokens: 12,
+      completion_tokens: 34,
+    });
+    expect(detailed.model).toBe("groq/m1");
+    // Startup line plus exactly one per-call line.
+    expect(infos).toHaveLength(2);
+    expect(infos[0]?.msg).toBe("live llm chain ready");
+    expect(infos[0]?.obj).toMatchObject({ mode: "live" });
+    const call = infos[1]?.obj;
+    expect(infos[1]?.msg).toBe("live llm call");
+    expect(call).toMatchObject({
+      provider: "groq",
+      model: "m1",
+      key_index: 0,
+      status: 200,
+      outcome: "ok",
+      usage: { prompt_tokens: 12, completion_tokens: 34 },
+    });
+    expect(typeof call?.["latency_ms"]).toBe("number");
+    expect(typeof call?.["prompt_chars"]).toBe("number");
+    const text = JSON.stringify(infos);
+    for (const secret of ["k-secret-1", PROMPT_SENTINEL, RESPONSE_SENTINEL]) {
+      expect(text).not.toContain(secret);
+    }
+  });
+
+  it("omits usage when the provider reports none", async () => {
+    const { infos, logger } = makeLogger();
+    const chain = new LiveLlmChain({
+      env: baseEnv(),
+      fetchFn: stubFetch(() => chatOk(), []),
+      logger,
+    });
+    const detailed = await chain.generateDetailed("cpu?");
+    expect(detailed.usage).toBeUndefined();
+    const call = infos.find((l) => l.msg === "live llm call")?.obj;
+    expect(call?.["outcome"]).toBe("ok");
+    expect("usage" in (call ?? {})).toBe(false);
+  });
+
+  it("logs key_index per attempt, never the key", async () => {
+    const { infos, logger } = makeLogger();
+    const seen: Seen[] = [];
+    const fetchFn = stubFetch((url) => {
+      const last = seen[seen.length - 1];
+      if (last?.auth === "Bearer good-key-xyz") return chatOk();
+      expect(url).toBe(GROQ_URL);
+      return new Response(null, { status: 401 });
+    }, seen);
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY1: "bad-key-xyz",
+        GROQ_API_KEY2: "good-key-xyz",
+        LLM_GROQ_MODEL: "m1",
+      },
+      fetchFn,
+      logger,
+    });
+    await chain.generate("cpu?");
+    const calls = infos
+      .filter((l) => l.msg === "live llm call")
+      .map((l) => l.obj);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({
+      key_index: 0,
+      status: 401,
+      outcome: "auth",
+    });
+    expect(calls[1]).toMatchObject({
+      key_index: 1,
+      status: 200,
+      outcome: "ok",
+    });
+    const text = JSON.stringify(infos);
+    expect(text).not.toContain("bad-key-xyz");
+    expect(text).not.toContain("good-key-xyz");
+  });
+
+  it("maps transport outcomes without leaking raw errors", async () => {
+    const probe = async (
+      respond: (
+        url: string,
+        init: RequestInit,
+        seen: Seen[],
+      ) => Response | Promise<Response>,
+      opts?: { maxBodyBytes?: number },
+    ): Promise<Record<string, unknown>> => {
+      const { infos, logger } = makeLogger();
+      const seen: Seen[] = [];
+      const chain = new LiveLlmChain({
+        env: baseEnv(),
+        fetchFn: stubFetch(respond, seen),
+        logger,
+        ...(opts?.maxBodyBytes !== undefined
+          ? { maxBodyBytes: opts.maxBodyBytes }
+          : {}),
+      });
+      await expect(chain.generateDetailed("cpu?")).rejects.toThrow();
+      const call = infos.find((l) => l.msg === "live llm call")?.obj;
+      expect(call).toBeDefined();
+      return call as Record<string, unknown>;
+    };
+    await expect(
+      probe(() => new Response(null, { status: 429 })),
+    ).resolves.toMatchObject({ status: 429, outcome: "rate_limited" });
+    await expect(
+      probe(() => new Response(null, { status: 401 })),
+    ).resolves.toMatchObject({ status: 401, outcome: "auth" });
+    await expect(
+      probe(() => new Response(null, { status: 400 })),
+    ).resolves.toMatchObject({ status: 400, outcome: "bad_request" });
+    await expect(
+      probe(() => new Response(null, { status: 500 })),
+    ).resolves.toMatchObject({ status: 500, outcome: "server" });
+    await expect(
+      probe(() => new Response(null, { status: 302 })),
+    ).resolves.toMatchObject({ status: 302, outcome: "redirect" });
+    await expect(
+      probe(() => chatWithUsage(JSON.stringify({ bogus: true }))),
+    ).resolves.toMatchObject({ status: 200, outcome: "output_invalid" });
+    await expect(
+      probe(() => chatWithUsage("x".repeat(1024)), { maxBodyBytes: 64 }),
+    ).resolves.toMatchObject({ outcome: "too_large" });
+    const timeoutCall = await probe(() => {
+      throw new DOMException("aborted", "AbortError");
+    });
+    expect(timeoutCall).toMatchObject({
+      status: 0,
+      outcome: "timeout",
+      error_name: "AbortError",
+    });
+    // Sanitized message only: short, single-line, no serialized error object.
+    expect(typeof timeoutCall["error"]).toBe("string");
+    expect((timeoutCall["error"] as string).length).toBeLessThanOrEqual(200);
+    expect(timeoutCall).not.toHaveProperty("stack");
   });
 });

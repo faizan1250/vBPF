@@ -13,7 +13,7 @@ import {
   runEval,
   summarize,
 } from "./eval.js";
-import { LlmOutputSchema, isRefusalPrompt } from "./llm.js";
+import { LlmOutputSchema, isRefusalPrompt, type LlmClient } from "./llm.js";
 
 const PROMPTS_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -226,5 +226,115 @@ describe("eval --live wiring", () => {
     expect(parseEvalArgs(["--live"], root).delayMs).toBe(2000);
     expect(() => parseEvalArgs(["--limit", "0"], root)).toThrow();
     expect(() => parseEvalArgs(["--bogus"], root)).toThrow();
+  });
+});
+
+describe("eval token usage", () => {
+  const validOutput = (script: string): object => ({
+    script,
+    chart_type: "bar",
+    explanation: "ok",
+    duration_s: 10,
+    refusal: null,
+  });
+
+  it("uses real usage when the LLM reports it", async () => {
+    const entries = loadPrompts(PROMPTS_PATH).filter(
+      (e) => e.id === "direct-01",
+    );
+    const stub = {
+      model: "stub",
+      generate: async () => LlmOutputSchema.parse(validOutput("unused")),
+      generateDetailed: async () =>
+        Promise.resolve({
+          output: LlmOutputSchema.parse(
+            validOutput("profile:hz:99 { @x = count(); }\n"),
+          ),
+          model: "stub/m",
+          usage: { prompt_tokens: 10, completion_tokens: 20 },
+        }),
+    } as unknown as LlmClient;
+    const { cases, summary, db } = await runEval(entries, {
+      recipesDir: RECIPES_DIR,
+      model: "stub",
+      llmFactory: () => stub,
+    });
+    try {
+      expect(cases).toHaveLength(1);
+      expect(cases[0]?.ok).toBe(true);
+      expect(cases[0]?.usage).toEqual({
+        prompt_tokens: 10,
+        completion_tokens: 20,
+      });
+      expect(summary.tokens_real_total).toBe(30);
+      const md = renderMarkdown("2026-11-10", "stub", summary, cases, "live");
+      expect(md).toContain("| tokens real total | 30 |");
+      expect(md).toContain("else approximate");
+    } finally {
+      db.close();
+    }
+  });
+
+  it("sums usage across retries", async () => {
+    const entries = loadPrompts(PROMPTS_PATH).filter(
+      (e) => e.id === "direct-01",
+    );
+    let calls = 0;
+    const stub = {
+      model: "stub",
+      generate: async () => LlmOutputSchema.parse(validOutput("unused")),
+      generateDetailed: async () => {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            output: LlmOutputSchema.parse(validOutput("not valid bpf{{{{")),
+            model: "stub/m",
+            usage: { prompt_tokens: 1, completion_tokens: 1 },
+          };
+        }
+        return {
+          output: LlmOutputSchema.parse(
+            validOutput("profile:hz:99 { @x = count(); }\n"),
+          ),
+          model: "stub/m",
+          usage: { prompt_tokens: 2, completion_tokens: 3 },
+        };
+      },
+    } as unknown as LlmClient;
+    const { cases, db } = await runEval(entries, {
+      recipesDir: RECIPES_DIR,
+      model: "stub",
+      llmFactory: () => stub,
+    });
+    try {
+      expect(cases[0]?.ok).toBe(true);
+      expect(cases[0]?.attempts).toBe(2);
+      expect(cases[0]?.usage).toEqual({
+        prompt_tokens: 3,
+        completion_tokens: 4,
+      });
+    } finally {
+      db.close();
+    }
+  });
+
+  it("falls back to approx without usage", async () => {
+    const entries = loadPrompts(PROMPTS_PATH).filter(
+      (e) => e.id === "direct-01",
+    );
+    const { cases, summary, db } = await runEval(entries, {
+      recipesDir: RECIPES_DIR,
+      model: "mock",
+    });
+    try {
+      expect(cases[0]?.usage).toBeUndefined();
+      expect(summary.tokens_real_total).toBe(0);
+      expect(summary.tokens_approx_total).toBeGreaterThan(0);
+      const md = renderMarkdown("2026-11-10", "mock", summary, cases);
+      expect(md).toContain("| tokens approx total |");
+      expect(md).not.toContain("tokens real total");
+    } finally {
+      db.close();
+    }
   });
 });

@@ -18,6 +18,7 @@ import {
   type LlmDetailedResult,
   type LlmFeedback,
   type LlmOutput,
+  type LlmUsage,
 } from "./llm.js";
 import { buildGeneratePrompt, type RecipeWithBody } from "./prompts.js";
 import { extractKeywords } from "./retrieval.js";
@@ -46,11 +47,15 @@ async function generateWithAttribution(
   llm: LlmClient,
   prompt: string,
   feedback?: LlmFeedback,
-): Promise<{ out: LlmOutput; model: string }> {
+): Promise<{ out: LlmOutput; model: string; usage?: LlmUsage }> {
   const detailed = (llm as PossiblyDetailedLlm).generateDetailed;
   if (typeof detailed === "function") {
     const result = await detailed.call(llm, prompt, feedback);
-    return { out: result.output, model: result.model };
+    return {
+      out: result.output,
+      model: result.model,
+      ...(result.usage !== undefined ? { usage: result.usage } : {}),
+    };
   }
   return { out: await llm.generate(prompt, feedback), model: llm.model };
 }
@@ -165,7 +170,11 @@ function newSessionId(): string {
 
 export async function runGenerate(
   prompt: string,
-  opts: { sessionId?: string; deps: GenerateDeps },
+  opts: {
+    sessionId?: string;
+    deps: GenerateDeps;
+    onUsage?: (usage: LlmUsage) => void;
+  },
 ): Promise<GenerateResponse> {
   const { db, recipesDir, agentUrl, tokenFile, llm } = opts.deps;
   const searchFn = opts.deps.searchProbesFn ?? searchProbes;
@@ -237,6 +246,7 @@ export async function runGenerate(
     );
     const out = generated.out;
     modelUsed = generated.model;
+    if (generated.usage !== undefined) opts.onUsage?.(generated.usage);
     if (out.refusal !== null && out.refusal !== "") {
       const latencyMs = Date.now() - started;
       insertGeneration(db, {

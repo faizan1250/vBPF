@@ -26,10 +26,17 @@ export interface LlmClient {
   generate(prompt: string, feedback?: LlmFeedback): Promise<LlmOutput>;
 }
 
+/** Token counts reported by the provider, when present. No prompt or text. */
+export interface LlmUsage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+}
+
 /** Per-request result with provider/model attribution (live chains). */
 export interface LlmDetailedResult {
   output: LlmOutput;
   model: string;
+  usage?: LlmUsage;
 }
 
 const REFUSAL_PATTERNS = [
