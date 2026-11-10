@@ -22,7 +22,10 @@ export function useDebouncedValidate(): { validating: boolean } {
     if (fixtureMode()) {
       useAppStore
         .getState()
-        .setValidation(true, [], ["tracepoint:raw_syscalls:sys_enter"]);
+        .setValidation(true, [], ["tracepoint:raw_syscalls:sys_enter"], {
+          warnings: [],
+          probeCount: 1,
+        });
       return;
     }
     if (script.trim() === "") {
@@ -36,7 +39,12 @@ export function useDebouncedValidate(): { validating: boolean } {
         onSuccess: (result) => {
           useAppStore
             .getState()
-            .setValidation(result.ok, result.errors, result.probes);
+            .setValidation(result.ok, result.errors, result.probes, {
+              warnings: result.warnings,
+              probeCount: result.probe_count,
+              code: null,
+              fixHint: null,
+            });
           setValidating(false);
         },
         onError: (err) => {
@@ -44,7 +52,17 @@ export function useDebouncedValidate(): { validating: boolean } {
             err instanceof ApiError
               ? `${err.code}: ${err.message}`
               : "validation request failed";
-          useAppStore.getState().setValidation(false, [message], []);
+          useAppStore.getState().setValidation(false, [message], [], {
+            warnings: [],
+            probeCount: 0,
+            code: err instanceof ApiError ? err.code : null,
+            fixHint: err instanceof ApiError ? (err.fixHint ?? null) : null,
+          });
+          if (err instanceof ApiError && err.code === "AGENT_NOT_READY") {
+            useAppStore
+              .getState()
+              .setAgentStatus(false, "loading", err.fixHint ?? err.message);
+          }
           setValidating(false);
         },
       });

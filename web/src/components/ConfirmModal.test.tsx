@@ -28,6 +28,11 @@ describe("ConfirmModal", () => {
       generation: null,
       validationOk: false,
       validationErrors: ["probe not found: tracepoint:foo:bar"],
+      validationWarnings: [],
+      validationCode: null,
+      validationFixHint: null,
+      agentReady: null,
+      agentStatusHint: null,
     });
   });
 
@@ -48,5 +53,28 @@ describe("ConfirmModal", () => {
   it("shows the exact script under review", () => {
     renderModal();
     expect(screen.getByText("BEGIN { }")).toBeDefined();
+  });
+
+  it("blocks run when agent is AGENT_NOT_READY", () => {
+    useAppStore.setState({
+      validationOk: true,
+      validationProbes: ["BEGIN"],
+      agentReady: false,
+      agentStatusHint: "Mount tracefs and retry",
+    });
+    renderModal();
+    const run = screen.getByRole("button", { name: /run this probe/i });
+    expect(run).toBeDisabled();
+    expect(screen.getByText(/AGENT_NOT_READY/)).toBeDefined();
+  });
+
+  it("displays live validation warnings in the confirm modal", () => {
+    useAppStore.setState({
+      validationOk: true,
+      validationProbes: ["uprobe:libc:malloc"],
+      validationWarnings: ['Hot libc symbol "malloc" fires at high frequency.'],
+    });
+    renderModal();
+    expect(screen.getByText(/Hot libc symbol "malloc"/)).toBeDefined();
   });
 });

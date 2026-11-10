@@ -16,7 +16,15 @@ export function ConfirmModal() {
   const script = useAppStore((s) => s.script);
   const durationS = useAppStore((s) => s.durationS);
   const generation = useAppStore((s) => s.generation);
-  const warnings = generation?.warnings ?? [];
+  const validationWarnings = useAppStore((s) => s.validationWarnings);
+  const validationCode = useAppStore((s) => s.validationCode);
+  const validationFixHint = useAppStore((s) => s.validationFixHint);
+  const agentReady = useAppStore((s) => s.agentReady);
+  const agentStatusHint = useAppStore((s) => s.agentStatusHint);
+  const setAgentStatus = useAppStore((s) => s.setAgentStatus);
+  const warnings = Array.from(
+    new Set([...(generation?.warnings ?? []), ...validationWarnings]),
+  );
   const request = { script, durationS, warnings };
   const setRunId = useAppStore((s) => s.setRunId);
   const setRunPhase = useAppStore((s) => s.setRunPhase);
@@ -40,9 +48,12 @@ export function ConfirmModal() {
       setConfirmOpen(false);
     },
     onError: (err) => {
+      if (err instanceof ApiError && err.code === "AGENT_NOT_READY") {
+        setAgentStatus(false, "loading", err.fixHint ?? err.message);
+      }
       const message =
         err instanceof ApiError
-          ? `${err.code}: ${err.message}`
+          ? `${err.code}: ${err.message}${err.fixHint ? ` — ${err.fixHint}` : ""}`
           : "failed to start run";
       setRunError(message);
       setRunPhase("failed");
@@ -50,7 +61,9 @@ export function ConfirmModal() {
     },
   });
 
-  const canRun = validationOk === true && !start.isPending;
+  const agentNotReady =
+    agentReady === false || validationCode === "AGENT_NOT_READY";
+  const canRun = validationOk === true && !agentNotReady && !start.isPending;
 
   return (
     <Dialog
@@ -86,10 +99,19 @@ export function ConfirmModal() {
         ) : (
           <p className="text-xs text-muted-foreground">No warnings.</p>
         )}
-        {validationOk !== true && (
+        {agentNotReady ? (
           <Badge tone="bad" role="alert" className="self-start">
-            Validation must be ok before running
+            AGENT_NOT_READY:{" "}
+            {validationFixHint ??
+              agentStatusHint ??
+              "Agent probe catalog is not ready"}
           </Badge>
+        ) : (
+          validationOk !== true && (
+            <Badge tone="bad" role="alert" className="self-start">
+              Validation must be ok before running
+            </Badge>
+          )
         )}
         <div className="flex justify-end gap-2">
           <Button intent="ghost" onClick={() => setConfirmOpen(false)}>

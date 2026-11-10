@@ -39,6 +39,9 @@ export function PromptPanel() {
   const sessionId = useAppStore((s) => s.sessionId);
   const generation = useAppStore((s) => s.generation);
   const validationOk = useAppStore((s) => s.validationOk);
+  const agentReady = useAppStore((s) => s.agentReady);
+  const agentStatusHint = useAppStore((s) => s.agentStatusHint);
+  const setAgentStatus = useAppStore((s) => s.setAgentStatus);
 
   const [recipeQuery, setRecipeQuery] = useState("");
   const recipes = useQuery({
@@ -85,9 +88,12 @@ export function PromptPanel() {
       setRunError(null);
     },
     onError: (err) => {
+      if (err instanceof ApiError && err.code === "AGENT_NOT_READY") {
+        setAgentStatus(false, "loading", err.fixHint ?? err.message);
+      }
       const message =
         err instanceof ApiError
-          ? `${err.code}: ${err.message}`
+          ? `${err.code}: ${err.message}${err.fixHint ? ` — ${err.fixHint}` : ""}`
           : "generation failed";
       setRunError(message);
       setRunPhase("failed");
@@ -96,6 +102,7 @@ export function PromptPanel() {
 
   const promptLen = prompt.length;
   const overCap = promptLen > MAX_PROMPT_CHARS;
+  const agentNotReady = agentReady === false;
 
   return (
     <Card>
@@ -154,6 +161,7 @@ export function PromptPanel() {
               aria-label="Insert recipe prompt"
               className="mt-2"
               defaultValue=""
+              disabled={agentNotReady}
               onChange={(e) => {
                 if (e.target.value !== "") setPrompt(e.target.value);
               }}
@@ -187,9 +195,22 @@ export function PromptPanel() {
           />
         </div>
 
+        {agentNotReady && (
+          <p role="alert" className="text-xs text-amber-400">
+            AGENT_NOT_READY:{" "}
+            {agentStatusHint ??
+              "Agent probe catalog is not ready; recipes and generation are disabled until ready."}
+          </p>
+        )}
+
         <Button
           intent="primary"
-          disabled={generate.isPending || prompt.trim() === "" || overCap}
+          disabled={
+            generate.isPending ||
+            prompt.trim() === "" ||
+            overCap ||
+            agentNotReady
+          }
           onClick={() => generate.mutate({ p: prompt, sid: sessionId })}
         >
           {generate.isPending ? (

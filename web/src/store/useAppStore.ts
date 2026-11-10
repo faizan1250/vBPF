@@ -1,3 +1,4 @@
+import type { CatalogState } from "@vbpf/schemas";
 import { create } from "zustand";
 
 import type { EventEnvelope, GenerateResponse } from "../lib/api.js";
@@ -23,6 +24,13 @@ export interface ConfirmRequest {
   warnings: string[];
 }
 
+export interface ValidationMeta {
+  warnings?: string[];
+  probeCount?: number | null;
+  code?: string | null;
+  fixHint?: string | null;
+}
+
 interface AppState {
   prompt: string;
   durationS: number;
@@ -32,6 +40,13 @@ interface AppState {
   validationOk: boolean | null;
   validationErrors: string[];
   validationProbes: string[];
+  validationWarnings: string[];
+  validationProbeCount: number | null;
+  validationCode: string | null;
+  validationFixHint: string | null;
+  agentReady: boolean | null;
+  agentCatalogState: CatalogState | null;
+  agentStatusHint: string | null;
   confirmOpen: boolean;
   runPhase: RunPhase;
   runId: string | null;
@@ -52,6 +67,12 @@ interface AppState {
     ok: boolean | null,
     errors: string[],
     probes: string[],
+    meta?: ValidationMeta,
+  ) => void;
+  setAgentStatus: (
+    ready: boolean | null,
+    catalogState?: CatalogState | null,
+    hint?: string | null,
   ) => void;
   setConfirmOpen: (open: boolean) => void;
   setRunPhase: (phase: RunPhase) => void;
@@ -81,6 +102,13 @@ export const useAppStore = create<AppState>()((set) => ({
   validationOk: null,
   validationErrors: [],
   validationProbes: [],
+  validationWarnings: [],
+  validationProbeCount: null,
+  validationCode: null,
+  validationFixHint: null,
+  agentReady: null,
+  agentCatalogState: null,
+  agentStatusHint: null,
   confirmOpen: false,
   runPhase: "idle",
   runId: null,
@@ -103,13 +131,27 @@ export const useAppStore = create<AppState>()((set) => ({
       validationOk: generation ? generation.validation.status === "ok" : null,
       validationErrors: generation?.validation.errors ?? [],
       validationProbes: [],
+      validationWarnings: [],
+      validationProbeCount: null,
+      validationCode: null,
+      validationFixHint: null,
     }),
   setScript: (script) => set({ script }),
-  setValidation: (ok, errors, probes) =>
+  setValidation: (ok, errors, probes, meta) =>
     set({
       validationOk: ok,
       validationErrors: errors,
       validationProbes: probes,
+      validationWarnings: meta?.warnings ?? [],
+      validationProbeCount: meta?.probeCount ?? null,
+      validationCode: meta?.code ?? null,
+      validationFixHint: meta?.fixHint ?? null,
+    }),
+  setAgentStatus: (ready, catalogState = null, hint = null) =>
+    set({
+      agentReady: ready,
+      agentCatalogState: catalogState,
+      agentStatusHint: hint,
     }),
   setConfirmOpen: (open) => set({ confirmOpen: open }),
   setRunPhase: (phase) => set({ runPhase: phase }),

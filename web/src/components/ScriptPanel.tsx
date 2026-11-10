@@ -122,6 +122,9 @@ export function ScriptPanel({ validating }: { validating: boolean }) {
   const validationOk = useAppStore((s) => s.validationOk);
   const validationErrors = useAppStore((s) => s.validationErrors);
   const validationProbes = useAppStore((s) => s.validationProbes);
+  const validationWarnings = useAppStore((s) => s.validationWarnings);
+  const validationProbeCount = useAppStore((s) => s.validationProbeCount);
+  const validationFixHint = useAppStore((s) => s.validationFixHint);
 
   if (!generation) {
     return (
@@ -137,6 +140,29 @@ export function ScriptPanel({ validating }: { validating: boolean }) {
       </Card>
     );
   }
+
+  const expandedCount = validationProbeCount;
+  const hasWildcardExpansion =
+    expandedCount !== null &&
+    expandedCount > 0 &&
+    (validationProbes.some((p) => p.includes("*")) ||
+      expandedCount > validationProbes.length);
+
+  const combinedWarnings = Array.from(
+    new Set(
+      validationWarnings.length > 0 || script !== generation.script
+        ? validationWarnings.length > 0
+          ? validationWarnings
+          : []
+        : generation.warnings,
+    ),
+  );
+  // Preserve generation warnings before debounced validation returns for unmodified scripts,
+  // and always include any generation warnings not duplicated in live validation warnings.
+  const allWarnings =
+    script === generation.script
+      ? Array.from(new Set([...generation.warnings, ...validationWarnings]))
+      : combinedWarnings;
 
   return (
     <Card>
@@ -166,9 +192,15 @@ export function ScriptPanel({ validating }: { validating: boolean }) {
             ))}
           </ul>
         )}
+        {validationFixHint && validationErrors.length > 0 && (
+          <p className="text-xs text-amber-400">{validationFixHint}</p>
+        )}
         {validationProbes.length > 0 && (
           <p className="text-[11px] text-muted-foreground">
             probes: {validationProbes.join(", ")}
+            {hasWildcardExpansion
+              ? ` (expands to ${expandedCount} ${expandedCount === 1 ? "probe" : "probes"})`
+              : ""}
           </p>
         )}
 
@@ -180,11 +212,11 @@ export function ScriptPanel({ validating }: { validating: boolean }) {
         </div>
         <ExplainSection script={script} />
 
-        {generation.warnings.length > 0 && (
+        {allWarnings.length > 0 && (
           <div>
             <h3 className="mb-1 text-xs font-semibold">Warnings</h3>
             <ul className="flex flex-col gap-1">
-              {generation.warnings.map((w) => (
+              {allWarnings.map((w) => (
                 <li key={w} className="text-xs text-amber-400">
                   {w}
                 </li>
