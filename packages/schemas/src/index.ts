@@ -111,6 +111,7 @@ export const LlmProviderHealthSchema = z
     name: z.string().min(1).max(64),
     state: z.enum(["ready", "cooldown", "unconfigured", "exhausted"]),
     keys: z.number().int().min(0),
+    reason: z.string().min(1).max(300).optional(),
   })
   .strict();
 

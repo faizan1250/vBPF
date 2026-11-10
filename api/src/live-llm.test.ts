@@ -18,6 +18,7 @@ import {
   discoverKeys,
   discoverModel,
   parseChain,
+  validateBaseUrl,
 } from "./live-llm.js";
 import { LlmOutputSchema } from "./llm.js";
 
@@ -124,6 +125,165 @@ describe("chain and model discovery", () => {
         LLM_GROQ_FALLBACK_MODELS: "m1, m2,, ",
       }),
     ).toEqual(["m1", "m2"]);
+  });
+});
+
+describe("validateBaseUrl", () => {
+  it("accepts https and strips a trailing slash", () => {
+    expect(validateBaseUrl("https://api.groq.com/openai/v1/")).toEqual({
+      ok: true,
+      url: "https://api.groq.com/openai/v1",
+    });
+    expect(validateBaseUrl("https://api.groq.com/openai/v1")).toEqual({
+      ok: true,
+      url: "https://api.groq.com/openai/v1",
+    });
+  });
+
+  it("accepts http only for loopback and host.docker.internal", () => {
+    for (const host of [
+      "127.0.0.1",
+      "localhost",
+      "::1",
+      "host.docker.internal",
+    ]) {
+      const raw =
+        host === "::1" ? "http://[::1]:11434/v1" : `http://${host}:11434/v1`;
+      const checked = validateBaseUrl(raw);
+      expect(checked).toEqual({ ok: true, url: raw });
+    }
+    expect(validateBaseUrl("http://localhost:11434/v1/")).toEqual({
+      ok: true,
+      url: "http://localhost:11434/v1",
+    });
+  });
+
+  it("rejects http to a public host", () => {
+    const checked = validateBaseUrl("http://example.com/v1");
+    expect(checked.ok).toBe(false);
+    if (!checked.ok) expect(checked.reason).toContain("example.com");
+  });
+
+  it("rejects credentials, query, fragment, and garbage", () => {
+    for (const raw of [
+      "https://user:pass@example.com/v1",
+      "https://user@example.com/v1",
+      "https://example.com/v1?key=x",
+      "https://example.com/v1#frag",
+      "not a url",
+      "ftp://example.com/v1",
+      "",
+    ]) {
+      expect(validateBaseUrl(raw).ok).toBe(false);
+    }
+  });
+});
+
+describe("base URL overrides", () => {
+  it("overrides a preset only when valid", async () => {
+    const seen: Seen[] = [];
+    const fetchFn = stubFetch((url) => {
+      if (url.startsWith("https://override.example/v1/")) return chatOk();
+      return new Response(null, { status: 500 });
+    }, seen);
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "m1",
+        LLM_GROQ_BASE_URL: "https://override.example/v1/",
+      },
+      fetchFn,
+    });
+    await chain.generate("cpu?");
+    expect(chain.model).toBe("groq/m1");
+    expect(seen[0]?.url).toBe("https://override.example/v1/chat/completions");
+    expect(chain.health().providers).toEqual([
+      { name: "groq", state: "ready", keys: 1 },
+    ]);
+  });
+
+  it("marks the provider unconfigured on an invalid override", async () => {
+    const seen: Seen[] = [];
+    const warns: string[] = [];
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "m1",
+        LLM_GROQ_BASE_URL: "http://example.com/v1",
+      },
+      fetchFn: stubFetch(() => chatOk(), seen),
+      logger: { warn: (msg) => warns.push(msg) },
+    });
+    expect(chain.configured).toBe(false);
+    expect(chain.health().providers).toMatchObject([
+      { name: "groq", state: "unconfigured", keys: 1 },
+    ]);
+    const reason = chain.health().providers[0]?.reason ?? "";
+    expect(reason).toContain("example.com");
+    await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+      LlmUnavailableError,
+    );
+    expect(seen).toHaveLength(0);
+    expect(warns).toHaveLength(1);
+  });
+
+  it("rejects credentials without leaking them", () => {
+    const warns: string[] = [];
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "custom",
+        LLM_CUSTOM_BASE_URL: "https://user:s3cret-t0k@example.com/v1?k=v",
+        LLM_CUSTOM_MODEL: "m1",
+        CUSTOM_API_KEY: "k",
+      },
+      fetchFn: stubFetch(() => chatOk(), []),
+      logger: { warn: (msg) => warns.push(msg) },
+    });
+    expect(chain.configured).toBe(false);
+    const snapshot = JSON.stringify(chain.health());
+    for (const secret of ["s3cret-t0k", "user", "?k=v", "k=v"]) {
+      expect(snapshot).not.toContain(secret);
+      for (const w of warns) expect(w).not.toContain(secret);
+    }
+    expect(snapshot).toContain("example.com");
+    expect(warns).toHaveLength(1);
+  });
+
+  it("custom keeps keyless behavior with a valid URL", async () => {
+    const seen: Seen[] = [];
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "custom",
+        LLM_CUSTOM_BASE_URL: "http://127.0.0.1:11434/v1",
+        LLM_CUSTOM_MODEL: "m1",
+      },
+      fetchFn: stubFetch((url) => {
+        if (url.startsWith("http://127.0.0.1:11434/v1/")) return chatOk();
+        return new Response(null, { status: 500 });
+      }, seen),
+    });
+    expect(chain.configured).toBe(true);
+    await chain.generate("cpu?");
+    expect(seen[0]?.auth).toBeNull();
+  });
+
+  it("invalid custom URL unconfigures even with keys", () => {
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "custom",
+        LLM_CUSTOM_BASE_URL: "http://example.com/v1",
+        LLM_CUSTOM_MODEL: "m1",
+        CUSTOM_API_KEY: "k",
+      },
+      fetchFn: stubFetch(() => chatOk(), []),
+    });
+    expect(chain.configured).toBe(false);
+    expect(chain.health().providers[0]).toMatchObject({
+      name: "custom",
+      state: "unconfigured",
+    });
   });
 });
 

@@ -115,4 +115,38 @@ describe("keys hygiene", () => {
       expect(captured).not.toContain(secret.slice(0, 16));
     }
   });
+
+  it("rejects a credentialed base URL without leaking it", async () => {
+    const cred = `u${"c".repeat(15)}:p${"d".repeat(15)}`;
+    const bad = await buildApp({
+      agentUrl: fakeUrl,
+      tokenFile,
+      dbPath: ":memory:",
+      recipesDir,
+      webOrigin: "http://localhost:5173",
+      llmMode: "live",
+      llmChain: "groq",
+      llmEnv: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: FAKE_GROQ_KEY,
+        LLM_GROQ_MODEL: "fake-model",
+        LLM_GROQ_BASE_URL: `https://${cred}@example.com/v1`,
+      } as NodeJS.ProcessEnv,
+    });
+    const addr = await bad.listen({ host: "127.0.0.1", port: 0 });
+    try {
+      const res = await fetch(
+        `${addr.replace("[::1]", "127.0.0.1")}/api/health`,
+      );
+      expect(res.status).toBe(200);
+      const text = await res.text();
+      expect(text).not.toContain(cred);
+      expect(text).toContain("unconfigured");
+      expect(text).toContain("example.com");
+    } finally {
+      await bad.close();
+    }
+    await new Promise((r) => setTimeout(r, 250));
+    expect(captured).not.toContain(cred);
+  });
 });

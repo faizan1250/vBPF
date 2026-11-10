@@ -309,6 +309,7 @@ export async function buildApp(
           env: opts.llmEnv ?? process.env,
           fetchFn: opts.llmFetch,
           chain: opts.llmChain,
+          logger: { warn: (msg) => app.log.warn(msg) },
         })
       : null;
   const liveLlm = liveChain !== null && liveChain.configured ? liveChain : null;
@@ -319,6 +320,7 @@ export async function buildApp(
       name: string;
       state: "ready" | "cooldown" | "unconfigured" | "exhausted";
       keys: number;
+      reason?: string;
     }>;
   } => liveChain?.health() ?? { mode: llmMode, providers: [] };
 
