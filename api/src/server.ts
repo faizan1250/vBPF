@@ -91,7 +91,9 @@ function hostIsLoopback(host: string | undefined): boolean {
     name.includes(":") &&
     name.indexOf(":") === name.lastIndexOf(":")
   ) {
-    name = name.slice(0, name.indexOf(":"));
+    const colon = name.indexOf(":");
+    if (!/^\d+$/.test(name.slice(colon + 1))) return false;
+    name = name.slice(0, colon);
   }
   return (
     name === "127.0.0.1" ||
@@ -323,8 +325,38 @@ export async function buildApp(
     closeDb(database);
   });
 
-  await app.register(cors, { origin: opts.webOrigin, credentials: false });
   await app.register(websocket);
+
+  // Register before cors so rejected requests never get ACAO or 204 preflight
+  // answers, and after websocket so rejected upgrades still mark req.ws for teardown.
+  app.addHook("onRequest", async (req, reply) => {
+    if (!hostIsLoopback(req.headers.host)) {
+      return reply
+        .code(403)
+        .send({ error: "forbidden host", code: "FORBIDDEN" });
+    }
+    const origin = req.headers.origin;
+    if (origin !== undefined && origin !== opts.webOrigin) {
+      return reply
+        .code(403)
+        .send({ error: "forbidden origin", code: "FORBIDDEN" });
+    }
+    const fetchSite = req.headers["sec-fetch-site"];
+    if (
+      Array.isArray(fetchSite) ||
+      (typeof fetchSite === "string" &&
+        fetchSite
+          .toLowerCase()
+          .split(",")
+          .some((v) => v.trim() === "cross-site"))
+    ) {
+      return reply
+        .code(403)
+        .send({ error: "forbidden fetch site", code: "FORBIDDEN" });
+    }
+  });
+
+  await app.register(cors, { origin: opts.webOrigin, credentials: false });
 
   const checkGenerateRate = createRouteLimiter(
     opts.generateRateLimit?.max ?? GENERATE_RATE_MAX,
@@ -362,20 +394,6 @@ export async function buildApp(
       reason?: string;
     }>;
   } => liveChain?.health() ?? { mode: llmMode, providers: [] };
-
-  app.addHook("onRequest", async (req, reply) => {
-    if (!hostIsLoopback(req.headers.host)) {
-      return reply
-        .code(403)
-        .send({ error: "forbidden host", code: "FORBIDDEN" });
-    }
-    const origin = req.headers.origin;
-    if (typeof origin === "string" && origin !== opts.webOrigin) {
-      return reply
-        .code(403)
-        .send({ error: "forbidden origin", code: "FORBIDDEN" });
-    }
-  });
 
   app.get("/api/health", async (_req, reply) => {
     try {
