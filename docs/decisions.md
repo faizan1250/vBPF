@@ -1,5 +1,13 @@
 # Decisions
 
+## R-19: SQLite hygiene (2026-11-10)
+
+- **Pragmas on every connection (`applyPragmas`, called by both `openDb` and `migrate`).** `journal_mode=WAL` (kept), `foreign_keys=ON`, `busy_timeout=5000`, `synchronous=NORMAL`, `trusted_schema=OFF`. `migrate` re-applies them so test/raw handles get them too; scope is the two API entry points (`openDb` in `server.ts`/`eval.ts`), no pooling layer exists to update.
+- **`PRAGMA user_version` steps 1→3, no try/catch `ALTER`.** Fresh databases build the v1 baseline then walk the same steps as legacy files; each step runs in its own transaction and stamps the version. A `user_version` newer than `SCHEMA_VERSION` throws instead of silently running (fail fast on downgrade).
+- **FK constraints only on fresh tables.** `generations.session_id REFERENCES sessions(id)` and `runs.generation_id REFERENCES generations(id)` are in the baseline `CREATE TABLE`; pre-existing files keep their shape (SQLite cannot `ADD CONSTRAINT`, and a rebuild risks data for no gain — the API already rejects unknown `generation_id` before insert). Enforcement is pragma-level for legacy DBs, constraint-level for new ones.
+- **`PRAGMA optimize` on shutdown.** New `closeDb` runs `optimize` then closes; `server.ts` `onClose` uses it. `eval.ts` never closed its handle (unchanged, out of scope).
+- **Tests.** v0.1.0-file migration (exact v0.1.0 DDL, rows preserved, defaults backfilled, idempotent), FK rejection on both child tables plus a valid-insert control, pragma-value assertions, newer-schema rejection; the R-18 test now seeds parent rows for the new constraint.
+
 ## R-18: Bind runs to confirmed generations (2026-11-10)
 
 - **Unknown `generation_id` rejected before the agent call (404 `NOT_FOUND`).** Failing fast avoids occupying the agent's single-run slot on bad input. The agent still independently re-validates every script on run creation; the binding never bypasses it (covered by a `bad-probe` proxy test).
