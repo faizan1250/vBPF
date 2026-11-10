@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/faizan1250/vBPF/actions/workflows/ci.yml/badge.svg)](https://github.com/faizan1250/vBPF/actions/workflows/ci.yml)
 ![Linux](https://img.shields.io/badge/platform-Linux%20%7C%20WSL2-lightgrey)
-![Go](https://img.shields.io/badge/Go-1.27%2B-00ADD8)
+![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8)
 ![Node](https://img.shields.io/badge/Node-22%2B-339933)
 
 ![vBPF demo: prompt, review, run, and live charts for three fixture scenarios](docs/assets/demo.gif)
@@ -151,7 +151,7 @@ Default limits:
 | Kernel      | 5.8+ with BTF (`/sys/kernel/btf/vmlinux` must exist)                                                    |
 | bpftrace    | 0.20+ recommended                                                                                       |
 | Privileges  | Root for the agent only                                                                                 |
-| Node / Go   | Node 22+ with pnpm 9+, Go 1.27+ (native development only)                                               |
+| Node / Go   | Node 22+ with pnpm 9+, Go 1.26+ (native development only)                                               |
 | LLM access  | A provider API key (Groq by default; optional: recipe-only mode works without it)                       |
 
 Quick check on your machine:
@@ -426,7 +426,7 @@ CI ([`ci.yml`](.github/workflows/ci.yml)) runs the same checks mock-only on ever
 
 **Testing without root.** `scripts/fake-bpftrace.sh` replays recorded output from `fixtures/` (all 10 recipes have captured fixtures), so the parser, API, and UI can be developed and tested without a privileged environment.
 
-**Stack:** Go 1.27+, Node 22+, pnpm 9, Fastify, zod, SQLite, React, Vite, Tailwind, Monaco, Recharts, Playwright.
+**Stack:** Go 1.26+, Node 22+, pnpm 9, Fastify, zod, SQLite, React, Vite, Tailwind, Monaco, Recharts, Playwright.
 
 **Conventions:** Conventional Commits, `gofmt` and `golangci-lint`, strict TypeScript, `shellcheck` for scripts, and `go test -race` in CI.
 

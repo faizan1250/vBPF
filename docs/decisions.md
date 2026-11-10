@@ -498,3 +498,34 @@ after <ms>`, `cooldownMs: LIVE_DEFAULT_COOLDOWN_MS`) with log outcome
 - **Eval table (D-42).** README shows the real-agent numbers (model `groq/openai/gpt-oss-120b`, kernel `6.6.87.2-microsoft-standard-WSL2`, bpftrace `v0.20.2`) with static validation split from dry-run compile and the two missed dry-run targets labelled as missed (per D-39, published as-is; no round 3). Links cover both reports plus the scripts ndjson; static-only modes are described as reporting "passes static validation" only, never "compiles". `run-live-real` is added to the run-it-yourself block and verified present in `eval/Makefile`.
 - **Scope (D-43).** Launch drafts (`docs/launch.md`) still quote the old static `26/26 compiled first try` lines, and the Go-minimum / CHANGELOG / local-tag work stay with the release re-prep slice (versions in Slice 17). This slice touches README, `.env.example`, and this file only — no logic, so no test-sync item.
 - **Verified:** all 15 relative README links resolve to files in the repo; every `make` target named in the README (`setup`, `lint`, `test`, `test-integration`, `api-dev`, `web-dev`, `eval`, `eval run-live`, `eval run-live-real`) exists in `Makefile` / `eval/Makefile`; `prettier --check` clean on edited files.
+
+## R2-05 Slice 16: Go minimum 1.26 (2026-11-10)
+
+- **Probe (D-44).** Real toolchain downloads via `GOTOOLCHAIN=go1.X.Y` in WSL
+  (go1.24.13, go1.25.14, go1.26.10, go1.27.3), each running `go build ./...`,
+  `go vet ./...`, `go test -race -count=1 ./...`, `govulncheck ./...` against
+  a scratch copy of `agent/` plus `fixtures/`. go1.24 FAILS hard:
+  `golang.org/x/sys@v0.44.0 requires go >= 1.25.0` (downgrading x/sys to
+  chase 1.24 rejected: dep churn, and older x/sys predates current vuln
+  fixes). go1.25.14 passes build/vet/test but FAILS govulncheck (exit 3):
+  8 stdlib findings (GO-2026-6809, GO-2026-6617/6613/6612/6611, GO-2026-6608,
+  GO-2026-6607, GO-2026-6603), all fixed only in go1.26.9/1.26.10 — no fix
+  available on the 1.25 line, so 1.25 cannot satisfy `make vuln`. go1.26.10
+  and go1.27.3 pass all four checks with `govulncheck` clean. Floor is
+  `go 1.26`: `go mod tidy` under go1.26.10 is a go.mod no-op and only drops
+  two stale `x/sys v0.29.0` hash lines from `go.sum`.
+- **Builder tracks the floor.** `agent/Dockerfile` uses
+  `golang:1.26-bookworm` (active tag, verified via the Docker Hub API), so
+  the release artifact builds on the minimum toolchain.
+- **CI covers floor and latest, no drift.** `lint` and `vuln` read the floor
+  from `agent/go.mod` via `go-version-file`; new `test-unit-min` job runs
+  `go test -race ./...` on the floor; `test-unit` keeps the `1.27.x` pin for
+  the latest verified toolchain. `integration-manual.yml` keeps `1.27.x`
+  (privileged kernel runs want latest, not the floor).
+- **Docs.** README badge/requirements/stack and both `docs/environment.md`
+  tool lines now say Go 1.26+. `CONTRIBUTING.md` carries no Go version, so
+  nothing changed there. `docs/security.md` history (R-21: 1.23 to 1.27) and
+  `docs/launch.md` stay untouched for the release re-prep slice (D-43).
+- **Verified:** in-repo `go build`, `go vet`, `gofmt -l` (clean),
+  `go test -race -count=1` (all 5 packages ok), and `govulncheck` (clean)
+  under `GOTOOLCHAIN=go1.26.10`; `ci.yml` parses as valid YAML.
