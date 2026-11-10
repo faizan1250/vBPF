@@ -46,7 +46,7 @@ services:
       AGENT_TOKEN_FILE: /token/agent.token
       DATABASE_PATH: /data/api.sqlite3
       RECIPES_DIR: /app/recipes
-      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:5173}
+      WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:${WEB_PORT:-5173}}
     volumes:
       - agent-token:/token:ro
       - api-data:/data
@@ -71,7 +71,7 @@ services:
       context: .
       dockerfile: ./web/Dockerfile
     ports:
-      - "${WEB_PORT:-5173}:80"
+      - "127.0.0.1:${WEB_PORT:-5173}:80"
     depends_on:
       api:
         condition: service_healthy
