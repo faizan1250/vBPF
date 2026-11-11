@@ -32,7 +32,18 @@ import {
   readAgentToken,
   type AgentHealth,
 } from "./agent-client.js";
-import { closeDb, indexRecipes, migrate, openDb, searchRecipes } from "./db.js";
+import {
+  closeDb,
+  generationExists,
+  getGeneration,
+  indexRecipes,
+  insertRun,
+  markRunFailedIfActive,
+  migrate,
+  openDb,
+  persistRunSummary,
+  searchRecipes,
+} from "./db.js";
 import { ExplainValidationError, explainScriptText } from "./explain.js";
 import {
   RefusalError,
@@ -115,6 +126,15 @@ function agentWsUrl(agentUrl: string, path: string): string {
 // Loopback-only Host gate (DNS-rebinding protection). The API binds
 // loopback, so a non-loopback Host means a rebinding or proxy attack.
 // WEB_ORIGIN's host is loopback too, so legit browser traffic passes.
+export function isSafeId(id: unknown): id is string {
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    id.length <= 128 &&
+    /^[a-zA-Z0-9_-]+$/.test(id)
+  );
+}
+
 function hostIsLoopback(host: string | undefined): boolean {
   if (typeof host !== "string" || host === "") return false;
   let name = host.toLowerCase();
@@ -257,15 +277,6 @@ function agentDelete(
     .finally(() => clearTimeout(timer));
 }
 
-// Maps an agent exit_reason to the stored run state, mirroring the agent's
-// finalState: completed/timeout are terminal-ok, cancelled is user-stopped,
-// everything else (failed, limit_bytes, unknown) is failed.
-function stateForExitReason(reason: string): string {
-  if (reason === "completed" || reason === "timeout") return "completed";
-  if (reason === "cancelled") return "stopping";
-  return "failed";
-}
-
 // All LLM_UNAVAILABLE 503s carry a fixed retry hint (D-24): 90 s matches
 // the default total LLM budget, so clients back off one budget window.
 function sendLlmUnavailable(reply: FastifyReply): FastifyReply {
@@ -332,26 +343,15 @@ export async function buildApp(
   migrate(database);
   indexRecipes(database, loadRecipes(opts.recipesDir));
 
+  const activeObservers = new Set<WebSocket>();
+
   // Persists the terminal summary from the agent's summary event. One update
   // per termination; stream end covers natural completion and timeout.
-  const persistRunSummary = (runId: string, data: unknown): void => {
+  const recordRunSummary = (runId: string, data: unknown): void => {
     const parsed = AgentRunSummarySchema.safeParse(data);
     if (!parsed.success) return;
-    const s = parsed.data;
     try {
-      database
-        .prepare(
-          "UPDATE runs SET state = ?, ended_at = ?, events_count = ?, bytes = ?, dropped = ?, exit_reason = ? WHERE id = ?",
-        )
-        .run(
-          stateForExitReason(s.exit_reason),
-          Date.now(),
-          s.events,
-          s.bytes,
-          s.dropped,
-          s.exit_reason,
-          runId,
-        );
+      persistRunSummary(database, runId, parsed.data);
     } catch (err) {
       app.log.error({ err }, "run summary update failed");
     }
@@ -370,7 +370,90 @@ export async function buildApp(
     }
   };
 
+  const startRunObserver = (runId: string): void => {
+    let token: string;
+    try {
+      token = readAgentToken(opts.tokenFile);
+    } catch (err) {
+      app.log.warn({ err, runId }, "run observer failed to read agent token");
+      return;
+    }
+
+    const target = agentWsUrl(
+      opts.agentUrl,
+      `/v1/runs/${encodeURIComponent(runId)}/stream`,
+    );
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(target, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch (err) {
+      app.log.warn({ err, runId }, "failed to initialize run observer socket");
+      return;
+    }
+
+    activeObservers.add(ws);
+    let receivedSummary = false;
+
+    const cleanup = (): void => {
+      activeObservers.delete(ws);
+    };
+
+    ws.on("message", (data) => {
+      try {
+        const envelope = EventEnvelopeSchema.parse(JSON.parse(data.toString()));
+        if (envelope.kind === "summary") {
+          const parsed = AgentRunSummarySchema.safeParse(envelope.data);
+          if (parsed.success) {
+            receivedSummary = true;
+            try {
+              persistRunSummary(database, runId, parsed.data);
+            } catch (err) {
+              app.log.error({ err, runId }, "run summary update failed");
+            }
+            cleanup();
+            try {
+              ws.close();
+            } catch {
+              /* already closed */
+            }
+          }
+        }
+      } catch {
+        // Non-envelope or unparseable event: ignore
+      }
+    });
+
+    ws.on("close", () => {
+      cleanup();
+      if (!receivedSummary) {
+        try {
+          markRunFailedIfActive(database, runId);
+        } catch (err) {
+          app.log.error(
+            { err, runId },
+            "failed to transition disconnected run to failed",
+          );
+        }
+      }
+    });
+
+    ws.on("error", (err) => {
+      cleanup();
+      app.log.debug({ err, runId }, "run observer websocket error");
+    });
+  };
+
   app.addHook("onClose", async () => {
+    for (const ws of activeObservers) {
+      try {
+        ws.terminate();
+      } catch {
+        /* already closed */
+      }
+    }
+    activeObservers.clear();
     closeDb(database);
   });
 
@@ -665,15 +748,13 @@ export async function buildApp(
     const generationId = parsed.data.generation_id ?? null;
     let edited = false;
     if (generationId !== null) {
-      const gen = database
-        .prepare("SELECT script FROM generations WHERE id = ?")
-        .get(generationId) as { script: string } | undefined;
-      if (gen === undefined) {
+      if (!generationExists(database, generationId)) {
         return reply
-          .code(404)
-          .send({ error: "unknown generation", code: "NOT_FOUND" });
+          .code(400)
+          .send({ error: "Invalid generation ID", code: "VALIDATION_FAILED" });
       }
-      edited = script !== gen.script;
+      const gen = getGeneration(database, generationId);
+      edited = gen !== undefined && script !== gen.script;
     }
     const duration = durationS ?? DEFAULT_DURATION_S;
     let created: { run_id: string; state: string };
@@ -713,23 +794,33 @@ export async function buildApp(
       throw err;
     }
     try {
-      database
-        .prepare(
-          "INSERT INTO runs (id, generation_id, script_sha256, script_text, edited, duration_s, state, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .run(
-          created.run_id,
-          generationId,
-          createHash("sha256").update(script).digest("hex"),
-          script,
-          edited ? 1 : 0,
-          duration,
-          created.state,
-          Date.now(),
-        );
+      insertRun(database, {
+        id: created.run_id,
+        generation_id: generationId,
+        script_sha256: createHash("sha256").update(script).digest("hex"),
+        script_text: script,
+        edited,
+        duration_s: duration,
+        state: created.state,
+        started_at: Date.now(),
+      });
     } catch (err) {
-      app.log.error({ err }, "run insert failed");
+      app.log.error({ err, runId: created.run_id }, "run insert failed");
+      agentDelete(
+        opts.agentUrl,
+        opts.tokenFile,
+        `/v1/runs/${encodeURIComponent(created.run_id)}`,
+      ).catch((delErr: unknown) => {
+        app.log.warn(
+          { err: delErr, runId: created.run_id },
+          "best-effort run abort failed",
+        );
+      });
+      return reply
+        .code(500)
+        .send({ error: "failed to persist run", code: "INTERNAL_ERROR" });
     }
+    startRunObserver(created.run_id);
     return reply.code(201).send(created);
   });
 
@@ -823,7 +914,18 @@ export async function buildApp(
 
   app.get(
     "/ws/runs/:id",
-    { websocket: true },
+    {
+      websocket: true,
+      preHandler: async (req, reply) => {
+        const { id } = req.params as { id: string };
+        if (!isSafeId(id)) {
+          return reply.code(400).send({
+            error: "Invalid run ID format",
+            code: "VALIDATION_FAILED",
+          });
+        }
+      },
+    },
     (socket: WebSocket, req: FastifyRequest) => {
       const { id } = req.params as { id: string };
       let token: string;
@@ -855,7 +957,7 @@ export async function buildApp(
         try {
           const envelope = EventEnvelopeSchema.parse(JSON.parse(text));
           if (envelope.kind === "summary") {
-            persistRunSummary(id, envelope.data);
+            recordRunSummary(id, envelope.data);
           }
         } catch {
           return;

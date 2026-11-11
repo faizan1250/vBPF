@@ -5,7 +5,17 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 
-import { closeDb, migrate, openDb, SCHEMA_VERSION } from "./db.js";
+import {
+  closeDb,
+  generationExists,
+  getGeneration,
+  insertRun,
+  markRunFailedIfActive,
+  migrate,
+  openDb,
+  persistRunSummary,
+  SCHEMA_VERSION,
+} from "./db.js";
 
 describe("runs migration", () => {
   it("adds edited to a pre-r18 runs table", () => {
@@ -190,6 +200,161 @@ describe("foreign keys", () => {
       ).not.toThrow();
     } finally {
       db.close();
+    }
+  });
+});
+
+describe("run and generation helpers", () => {
+  it("checks generation existence and retrieves generation script", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      expect(generationExists(db, "gen_missing")).toBe(false);
+      expect(getGeneration(db, "gen_missing")).toBeUndefined();
+
+      db.prepare(
+        "INSERT INTO sessions (id, title, created_at) VALUES (?, '', ?)",
+      ).run("sess1", 1);
+      db.prepare(
+        "INSERT INTO generations (id, session_id, script, created_at) VALUES (?, ?, ?, ?)",
+      ).run("gen_1", "sess1", "BEGIN { @x = count(); }", 1);
+
+      expect(generationExists(db, "gen_1")).toBe(true);
+      expect(getGeneration(db, "gen_1")).toEqual({
+        id: "gen_1",
+        script: "BEGIN { @x = count(); }",
+      });
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("inserts run record correctly", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      insertRun(db, {
+        id: "run_abc",
+        generation_id: null,
+        script_sha256: "hash123",
+        script_text: "BEGIN {}",
+        edited: false,
+        duration_s: 15,
+        state: "running",
+        started_at: 1000,
+      });
+
+      const row = db
+        .prepare("SELECT * FROM runs WHERE id = ?")
+        .get("run_abc") as {
+        id: string;
+        script_sha256: string;
+        script_text: string;
+        duration_s: number;
+        state: string;
+        edited: number;
+      };
+      expect(row).toMatchObject({
+        id: "run_abc",
+        script_sha256: "hash123",
+        script_text: "BEGIN {}",
+        duration_s: 15,
+        state: "running",
+        edited: 0,
+      });
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("persists run summary and maps exit reasons to states", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      insertRun(db, {
+        id: "run_sum",
+        generation_id: null,
+        script_sha256: "h",
+        script_text: "BEGIN {}",
+        edited: false,
+        duration_s: 10,
+        state: "running",
+        started_at: 100,
+      });
+
+      persistRunSummary(db, "run_sum", {
+        events: 10,
+        bytes: 200,
+        dropped: 1,
+        exit_reason: "completed",
+      });
+
+      const row = db
+        .prepare("SELECT * FROM runs WHERE id = ?")
+        .get("run_sum") as {
+        state: string;
+        events_count: number;
+        bytes: number;
+        dropped: number;
+        exit_reason: string;
+        ended_at: number;
+      };
+      expect(row).toMatchObject({
+        state: "completed",
+        events_count: 10,
+        bytes: 200,
+        dropped: 1,
+        exit_reason: "completed",
+      });
+      expect(row.ended_at).toBeGreaterThan(0);
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("marks active runs as failed and is idempotent", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      insertRun(db, {
+        id: "run_fail",
+        generation_id: null,
+        script_sha256: "h",
+        script_text: "BEGIN {}",
+        edited: false,
+        duration_s: 10,
+        state: "running",
+        started_at: 100,
+      });
+
+      expect(markRunFailedIfActive(db, "run_fail")).toBe(true);
+      const row = db
+        .prepare("SELECT state, ended_at FROM runs WHERE id = ?")
+        .get("run_fail") as { state: string; ended_at: number };
+      expect(row.state).toBe("failed");
+      expect(row.ended_at).toBeGreaterThan(0);
+
+      // Idempotent: second call returns false because state is not 'running'
+      expect(markRunFailedIfActive(db, "run_fail")).toBe(false);
+
+      // Does not alter completed runs
+      insertRun(db, {
+        id: "run_done",
+        generation_id: null,
+        script_sha256: "h",
+        script_text: "BEGIN {}",
+        edited: false,
+        duration_s: 10,
+        state: "completed",
+        started_at: 100,
+      });
+      expect(markRunFailedIfActive(db, "run_done")).toBe(false);
+      const doneRow = db
+        .prepare("SELECT state FROM runs WHERE id = ?")
+        .get("run_done") as { state: string };
+      expect(doneRow.state).toBe("completed");
+    } finally {
+      closeDb(db);
     }
   });
 });

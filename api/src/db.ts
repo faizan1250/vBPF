@@ -310,3 +310,88 @@ export function insertGeneration(
     Date.now(),
   );
 }
+
+export function generationExists(db: Database.Database, id: string): boolean {
+  const row = db.prepare("SELECT 1 FROM generations WHERE id = ?").get(id);
+  return row !== undefined;
+}
+
+export function getGeneration(
+  db: Database.Database,
+  id: string,
+): { id: string; script: string } | undefined {
+  return db
+    .prepare("SELECT id, script FROM generations WHERE id = ?")
+    .get(id) as { id: string; script: string } | undefined;
+}
+
+export interface RunInsertRow {
+  id: string;
+  generation_id: string | null;
+  script_sha256: string;
+  script_text: string;
+  edited: boolean | number;
+  duration_s: number;
+  state: string;
+  started_at: number;
+}
+
+export function insertRun(db: Database.Database, run: RunInsertRow): void {
+  db.prepare(
+    "INSERT INTO runs (id, generation_id, script_sha256, script_text, edited, duration_s, state, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    run.id,
+    run.generation_id,
+    run.script_sha256,
+    run.script_text,
+    run.edited ? 1 : 0,
+    run.duration_s,
+    run.state,
+    run.started_at,
+  );
+}
+
+export interface RunSummaryUpdate {
+  events: number;
+  bytes: number;
+  dropped: number;
+  exit_reason: string;
+}
+
+export function persistRunSummary(
+  db: Database.Database,
+  runId: string,
+  summary: RunSummaryUpdate,
+): void {
+  if (!db.open) return;
+  const state =
+    summary.exit_reason === "completed" || summary.exit_reason === "timeout"
+      ? "completed"
+      : summary.exit_reason === "cancelled"
+        ? "stopping"
+        : "failed";
+  db.prepare(
+    "UPDATE runs SET state = ?, ended_at = ?, events_count = ?, bytes = ?, dropped = ?, exit_reason = ? WHERE id = ?",
+  ).run(
+    state,
+    Date.now(),
+    summary.events,
+    summary.bytes,
+    summary.dropped,
+    summary.exit_reason,
+    runId,
+  );
+}
+
+export function markRunFailedIfActive(
+  db: Database.Database,
+  runId: string,
+): boolean {
+  if (!db.open) return false;
+  const res = db
+    .prepare(
+      "UPDATE runs SET state = 'failed', ended_at = ? WHERE id = ? AND state = 'running'",
+    )
+    .run(Date.now(), runId);
+  return res.changes > 0;
+}
