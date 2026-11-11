@@ -346,3 +346,39 @@ func TestRegistryShutdownStopsTimersAndActiveRuns(t *testing.T) {
 	_, err = reg.Start(context.Background(), "after", 5*time.Second)
 	require.Error(t, err)
 }
+
+func TestBurstDoesNotDropTerminalSummary(t *testing.T) {
+	run := &Run{id: "run_burst", state: "running", subs: make(map[*subscriber]struct{}), rateWin: time.Now()}
+	sub, _ := run.subscribe()
+	defer run.unsubscribe(sub)
+
+	// Saturate the per-second budget, then overflow it within the same window.
+	for i := 0; i < maxPerSecond+100; i++ {
+		run.publish(parser.Event{RunID: run.id, Seq: uint64(i + 1), Ts: parser.NowMillis(), Kind: parser.KindPrintf, Data: fmt.Sprintf("line %d", i)})
+	}
+	run.publish(parser.Summarize(run.id, uint64(maxPerSecond+101), parser.Summary{Events: uint64(maxPerSecond + 100), ExitReason: runner.ReasonCompleted}))
+
+	// Non-terminal overflow is still shed.
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	require.Positive(t, run.dropped)
+	require.NotNil(t, run.summary)
+	require.Equal(t, runner.ReasonCompleted, run.summary.ExitReason)
+	require.NotEmpty(t, run.history)
+	require.Equal(t, parser.KindSummary, run.history[len(run.history)-1].Kind)
+	require.Equal(t, "completed", finalState(run))
+
+	// Subscriber fan-out also delivers the terminal summary.
+	found := false
+	for {
+		select {
+		case ev := <-sub.ch:
+			if ev.Kind == parser.KindSummary {
+				found = true
+			}
+		default:
+			require.True(t, found, "subscriber never received terminal summary under burst")
+			return
+		}
+	}
+}
