@@ -5,7 +5,15 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { describe, expect, it } from "vitest";
 
-import { closeDb, migrate, openDb, SCHEMA_VERSION } from "./db.js";
+import {
+  closeDb,
+  generationExists,
+  getGeneration,
+  insertRun,
+  migrate,
+  openDb,
+  SCHEMA_VERSION,
+} from "./db.js";
 
 describe("runs migration", () => {
   it("adds edited to a pre-r18 runs table", () => {
@@ -190,6 +198,70 @@ describe("foreign keys", () => {
       ).not.toThrow();
     } finally {
       db.close();
+    }
+  });
+});
+
+describe("run and generation helpers", () => {
+  it("checks generation existence and retrieves generation script", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      expect(generationExists(db, "gen_missing")).toBe(false);
+      expect(getGeneration(db, "gen_missing")).toBeUndefined();
+
+      db.prepare(
+        "INSERT INTO sessions (id, title, created_at) VALUES (?, '', ?)",
+      ).run("sess1", 1);
+      db.prepare(
+        "INSERT INTO generations (id, session_id, script, created_at) VALUES (?, ?, ?, ?)",
+      ).run("gen_1", "sess1", "BEGIN { @x = count(); }", 1);
+
+      expect(generationExists(db, "gen_1")).toBe(true);
+      expect(getGeneration(db, "gen_1")).toEqual({
+        id: "gen_1",
+        script: "BEGIN { @x = count(); }",
+      });
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("inserts run record correctly", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      insertRun(db, {
+        id: "run_abc",
+        generation_id: null,
+        script_sha256: "hash123",
+        script_text: "BEGIN {}",
+        edited: false,
+        duration_s: 15,
+        state: "running",
+        started_at: 1000,
+      });
+
+      const row = db
+        .prepare("SELECT * FROM runs WHERE id = ?")
+        .get("run_abc") as {
+        id: string;
+        script_sha256: string;
+        script_text: string;
+        duration_s: number;
+        state: string;
+        edited: number;
+      };
+      expect(row).toMatchObject({
+        id: "run_abc",
+        script_sha256: "hash123",
+        script_text: "BEGIN {}",
+        duration_s: 15,
+        state: "running",
+        edited: 0,
+      });
+    } finally {
+      closeDb(db);
     }
   });
 });

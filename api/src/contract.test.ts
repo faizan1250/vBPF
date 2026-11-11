@@ -423,6 +423,45 @@ describe("runs proxy", () => {
     await fetch(`${base}/api/runs/${second.run_id}/stop`, { method: "POST" });
   });
 
+  it("propagates insertRun failure as 500 and releases agent slot", async () => {
+    const { default: Database } = await import("better-sqlite3");
+    const testDb = new Database(join(dir, "api.sqlite3"));
+    try {
+      testDb.exec(
+        "CREATE TRIGGER fail_runs BEFORE INSERT ON runs BEGIN SELECT RAISE(FAIL, 'simulated disk failure'); END;",
+      );
+      const res = await fetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+      });
+      expect(res.status).toBe(500);
+      expect(await res.json()).toEqual({
+        error: "failed to persist run",
+        code: "INTERNAL_ERROR",
+      });
+      testDb.exec("DROP TRIGGER fail_runs;");
+
+      const next = await fetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+      });
+      expect(next.status).toBe(201);
+      const created = (await next.json()) as { run_id: string };
+      await fetch(`${base}/api/runs/${created.run_id}/stop`, {
+        method: "POST",
+      });
+    } finally {
+      try {
+        testDb.exec("DROP TRIGGER IF EXISTS fail_runs;");
+      } catch {
+        /* ignore */
+      }
+      testDb.close();
+    }
+  });
+
   it("proxies unknown stop id as 404", async () => {
     const res = await fetch(`${base}/api/runs/nope/stop`, { method: "POST" });
     expect(res.status).toBe(404);
@@ -590,8 +629,11 @@ describe("run generation links", () => {
         generation_id: "gen_nope",
       }),
     });
-    expect(res.status).toBe(404);
-    expect(await res.json()).toMatchObject({ code: "NOT_FOUND" });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: "Invalid generation ID",
+      code: "VALIDATION_FAILED",
+    });
     const retry = await fetch(`${base}/api/runs`, {
       method: "POST",
       headers: { "content-type": "application/json" },

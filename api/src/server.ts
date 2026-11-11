@@ -32,7 +32,16 @@ import {
   readAgentToken,
   type AgentHealth,
 } from "./agent-client.js";
-import { closeDb, indexRecipes, migrate, openDb, searchRecipes } from "./db.js";
+import {
+  closeDb,
+  generationExists,
+  getGeneration,
+  indexRecipes,
+  insertRun,
+  migrate,
+  openDb,
+  searchRecipes,
+} from "./db.js";
 import { ExplainValidationError, explainScriptText } from "./explain.js";
 import {
   RefusalError,
@@ -674,15 +683,13 @@ export async function buildApp(
     const generationId = parsed.data.generation_id ?? null;
     let edited = false;
     if (generationId !== null) {
-      const gen = database
-        .prepare("SELECT script FROM generations WHERE id = ?")
-        .get(generationId) as { script: string } | undefined;
-      if (gen === undefined) {
+      if (!generationExists(database, generationId)) {
         return reply
-          .code(404)
-          .send({ error: "unknown generation", code: "NOT_FOUND" });
+          .code(400)
+          .send({ error: "Invalid generation ID", code: "VALIDATION_FAILED" });
       }
-      edited = script !== gen.script;
+      const gen = getGeneration(database, generationId);
+      edited = gen !== undefined && script !== gen.script;
     }
     const duration = durationS ?? DEFAULT_DURATION_S;
     let created: { run_id: string; state: string };
@@ -722,22 +729,31 @@ export async function buildApp(
       throw err;
     }
     try {
-      database
-        .prepare(
-          "INSERT INTO runs (id, generation_id, script_sha256, script_text, edited, duration_s, state, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .run(
-          created.run_id,
-          generationId,
-          createHash("sha256").update(script).digest("hex"),
-          script,
-          edited ? 1 : 0,
-          duration,
-          created.state,
-          Date.now(),
-        );
+      insertRun(database, {
+        id: created.run_id,
+        generation_id: generationId,
+        script_sha256: createHash("sha256").update(script).digest("hex"),
+        script_text: script,
+        edited,
+        duration_s: duration,
+        state: created.state,
+        started_at: Date.now(),
+      });
     } catch (err) {
-      app.log.error({ err }, "run insert failed");
+      app.log.error({ err, runId: created.run_id }, "run insert failed");
+      agentDelete(
+        opts.agentUrl,
+        opts.tokenFile,
+        `/v1/runs/${encodeURIComponent(created.run_id)}`,
+      ).catch((delErr: unknown) => {
+        app.log.warn(
+          { err: delErr, runId: created.run_id },
+          "best-effort run abort failed",
+        );
+      });
+      return reply
+        .code(500)
+        .send({ error: "failed to persist run", code: "INTERNAL_ERROR" });
     }
     return reply.code(201).send(created);
   });

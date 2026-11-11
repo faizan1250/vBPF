@@ -310,3 +310,43 @@ export function insertGeneration(
     Date.now(),
   );
 }
+
+export function generationExists(db: Database.Database, id: string): boolean {
+  const row = db.prepare("SELECT 1 FROM generations WHERE id = ?").get(id);
+  return row !== undefined;
+}
+
+export function getGeneration(
+  db: Database.Database,
+  id: string,
+): { id: string; script: string } | undefined {
+  return db
+    .prepare("SELECT id, script FROM generations WHERE id = ?")
+    .get(id) as { id: string; script: string } | undefined;
+}
+
+export interface RunInsertRow {
+  id: string;
+  generation_id: string | null;
+  script_sha256: string;
+  script_text: string;
+  edited: boolean | number;
+  duration_s: number;
+  state: string;
+  started_at: number;
+}
+
+export function insertRun(db: Database.Database, run: RunInsertRow): void {
+  db.prepare(
+    "INSERT INTO runs (id, generation_id, script_sha256, script_text, edited, duration_s, state, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    run.id,
+    run.generation_id,
+    run.script_sha256,
+    run.script_text,
+    run.edited ? 1 : 0,
+    run.duration_s,
+    run.state,
+    run.started_at,
+  );
+}
