@@ -25,7 +25,7 @@ no `OPENCODE_API_KEY` in workflows — unevaluated LLM paths take the
 `LLM_UNAVAILABLE` fallback. Provider keys are local-only (`.env`,
 gitignored), never committed, never added to Actions secrets.
 
-The `secrets` job runs `gitleaks/gitleaks-action@v2` (default rules, full
+The `secrets` job runs `gitleaks/gitleaks-action@v3` (default rules, full
 history via `fetch-depth: 0`) on every push/PR. Run it locally with
 `make secrets` once [gitleaks](https://github.com/gitleaks/gitleaks) is
 installed; `api/src/keys-hygiene.test.ts` additionally asserts
