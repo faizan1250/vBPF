@@ -1,7 +1,7 @@
 # vBPF agent: privileged bpftrace runner. Must run as root with host PID
 # namespace and debugfs/tracefs mounts (see docker-compose.yml). The port is
 # never published to the host; the API reaches it over the compose network.
-FROM golang:1.26-bookworm AS builder
+FROM golang:1.26-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0 AS builder
 
 WORKDIR /src
 COPY agent/go.mod agent/go.sum ./
@@ -10,7 +10,7 @@ COPY agent/cmd ./cmd
 COPY agent/internal ./internal
 RUN CGO_ENABLED=0 go build -trimpath -o /out/agent ./cmd/agent
 
-FROM ubuntu:24.04
+FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 
 RUN for i in 1 2 3 4 5; do \
     if apt-get update; then break; fi; \
