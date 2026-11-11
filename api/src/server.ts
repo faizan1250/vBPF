@@ -115,6 +115,15 @@ function agentWsUrl(agentUrl: string, path: string): string {
 // Loopback-only Host gate (DNS-rebinding protection). The API binds
 // loopback, so a non-loopback Host means a rebinding or proxy attack.
 // WEB_ORIGIN's host is loopback too, so legit browser traffic passes.
+export function isSafeId(id: unknown): id is string {
+  return (
+    typeof id === "string" &&
+    id.length > 0 &&
+    id.length <= 128 &&
+    /^[a-zA-Z0-9_-]+$/.test(id)
+  );
+}
+
 function hostIsLoopback(host: string | undefined): boolean {
   if (typeof host !== "string" || host === "") return false;
   let name = host.toLowerCase();
@@ -823,7 +832,18 @@ export async function buildApp(
 
   app.get(
     "/ws/runs/:id",
-    { websocket: true },
+    {
+      websocket: true,
+      preHandler: async (req, reply) => {
+        const { id } = req.params as { id: string };
+        if (!isSafeId(id)) {
+          return reply.code(400).send({
+            error: "Invalid run ID format",
+            code: "VALIDATION_FAILED",
+          });
+        }
+      },
+    },
     (socket: WebSocket, req: FastifyRequest) => {
       const { id } = req.params as { id: string };
       let token: string;

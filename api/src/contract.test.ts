@@ -18,7 +18,7 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 
-import { buildApp, healthWarnings } from "./server.js";
+import { buildApp, healthWarnings, isSafeId } from "./server.js";
 
 const TOKEN = "test-token-123";
 const HEALTH = {
@@ -656,6 +656,52 @@ describe("websocket relay", () => {
     expect(runId).toBe(created.run_id);
     expect(kinds).toEqual(["status", "printf", "summary"]);
     await fetch(`${base}/api/runs/${created.run_id}/stop`, { method: "POST" });
+  });
+
+  it("validates run IDs with isSafeId", () => {
+    expect(isSafeId("run_123")).toBe(true);
+    expect(isSafeId("run_1700000000_abc")).toBe(true);
+    expect(isSafeId("valid-id_42")).toBe(true);
+    expect(isSafeId("")).toBe(false);
+    expect(isSafeId(null)).toBe(false);
+    expect(isSafeId(undefined)).toBe(false);
+    expect(isSafeId(123)).toBe(false);
+    expect(isSafeId("../escape")).toBe(false);
+    expect(isSafeId("run with spaces")).toBe(false);
+    expect(isSafeId("run$evil")).toBe(false);
+    expect(isSafeId("run\0")).toBe(false);
+    expect(isSafeId("a".repeat(129))).toBe(false);
+  });
+
+  it("rejects unsafe run ID before websocket upgrade with 400", async () => {
+    const wsBase = base.replace(/^http/, "ws");
+    const httpRes = await fetch(`${base}/ws/runs/invalid..id`, {
+      headers: { origin: "http://localhost:5173" },
+    });
+    expect(httpRes.status).toBe(400);
+    expect(await httpRes.json()).toEqual({
+      error: "Invalid run ID format",
+      code: "VALIDATION_FAILED",
+    });
+
+    const rejected = await wsUpgradeRejected(`${wsBase}/ws/runs/invalid..id`, {
+      origin: "http://localhost:5173",
+    });
+    expect(rejected.status).toBe(400);
+  });
+
+  it("ensures host and origin checks precede run ID validation on ws routes", async () => {
+    const wsBase = base.replace(/^http/, "ws");
+    const badHost = await wsUpgradeRejected(`${wsBase}/ws/runs/invalid..id`, {
+      host: "evil.example",
+      origin: "http://localhost:5173",
+    });
+    expect(badHost.status).toBe(403);
+
+    const badOrigin = await wsUpgradeRejected(`${wsBase}/ws/runs/invalid..id`, {
+      origin: "http://evil.example",
+    });
+    expect(badOrigin.status).toBe(403);
   });
 });
 
