@@ -51,6 +51,12 @@ func summaryOf(t *testing.T, events []parser.Event) parser.Summary {
 }
 
 func TestReplayFixture(t *testing.T) {
+	// Isolate os.TempDir so the leak glob below sees only this test's files,
+	// not other packages' in-flight vbpf-*.bt files during parallel runs.
+	isolated := t.TempDir()
+	t.Setenv("TMPDIR", isolated)
+	t.Setenv("TMP", isolated)
+	t.Setenv("TEMP", isolated)
 	fake := fakePath(t)
 	t.Setenv("FAKE_MODE", "replay")
 	t.Setenv("FAKE_FIXTURE", filepath.Join("..", "..", "..", "fixtures", "syscall-counts-by-process.ndjson"))
@@ -352,8 +358,12 @@ func main() {
 		}
 		time.Sleep(30 * time.Second)
 	case "printf_then_sleep":
-		_, _ = os.Stdout.WriteString("{\"type\":\"printf\",\"data\":\"hello\\n\"}\n")
+		// Stderr first: Run kills the child as soon as the stdout printf
+		// triggers the emit error, so stderr must already be in the pipe.
+		// Writing stdout first races the kill against the child's second
+		// write and flakes the stderr-drain assertion (PR #88).
 		_, _ = os.Stderr.WriteString("before-sleep stderr\n")
+		_, _ = os.Stdout.WriteString("{\"type\":\"printf\",\"data\":\"hello\\n\"}\n")
 		time.Sleep(30 * time.Second)
 	case "close_stdout_sleep":
 		_, _ = os.Stdout.WriteString("{\"type\":\"printf\",\"data\":\"early\\n\"}\n")
