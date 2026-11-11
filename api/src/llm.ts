@@ -14,9 +14,18 @@ export const PROMPT_BUDGET_CHARS = 24_000;
  */
 export class PromptBudgetError extends Error {}
 
+export const MAX_SCRIPT_BYTES = 8 * 1024;
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
 export const LlmOutputSchema = z
   .object({
-    script: z.string().max(8 * 1024),
+    // UTF-8 bytes to match validator.ts MAX_SCRIPT_BYTES (not UTF-16 length).
+    script: z.string().refine((s) => utf8ByteLength(s) <= MAX_SCRIPT_BYTES, {
+      message: `Too big: expected string to have <=${MAX_SCRIPT_BYTES} UTF-8 bytes`,
+    }),
     chart_type: ChartTypeSchema,
     explanation: z.string().max(2048),
     duration_s: DurationSchema,

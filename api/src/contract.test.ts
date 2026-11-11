@@ -1353,3 +1353,77 @@ describe("agent offline", () => {
     }
   });
 });
+
+describe("run id length cap (128) and same-host origin", () => {
+  it("rejects overlong run ids with 404 on HTTP and 400 on WS", async () => {
+    const long129 = `r${"a".repeat(128)}`;
+    expect(long129.length).toBe(129);
+    expect(isSafeId(long129)).toBe(false);
+
+    const getLong = await fetch(`${base}/api/runs/${long129}`);
+    expect(getLong.status).toBe(404);
+
+    const stopLong = await fetch(`${base}/api/runs/${long129}/stop`, {
+      method: "POST",
+    });
+    expect(stopLong.status).toBe(404);
+
+    const wsBase = base.replace(/^http/, "ws");
+    const rejected = await wsUpgradeRejected(`${wsBase}/ws/runs/${long129}`, {
+      origin: "http://localhost:5173",
+    });
+    expect(rejected.status).toBe(400);
+  });
+
+  it("allows same-host origin", async () => {
+    const res = await fetch(`${base}/api/health`, {
+      headers: { origin: "http://localhost:5173" },
+    });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("access-control-allow-origin")).toBe(
+      "http://localhost:5173",
+    );
+  });
+});
+
+describe("catalog-unavailable scope (code-only)", () => {
+  it("forwards 503 with other code verbatim instead of AGENT_NOT_READY", async () => {
+    let otherServer: Server | null = null;
+    const otherUrl = await new Promise<string>((resolve) => {
+      otherServer = createServer((req, res) => {
+        res.writeHead(503, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({ error: "overloaded", code: "LIMIT_EXCEEDED" }),
+        );
+        void req;
+      });
+      otherServer.listen(0, "127.0.0.1", () => {
+        const addr = otherServer?.address();
+        const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+        resolve(`http://127.0.0.1:${port}`);
+      });
+    });
+    const otherApp = await buildApp({
+      agentUrl: otherUrl,
+      tokenFile,
+      dbPath: ":memory:",
+      recipesDir,
+      webOrigin: "http://localhost:5173",
+      llmMode: "mock",
+    });
+    const addr = await otherApp.listen({ host: "127.0.0.1", port: 0 });
+    const url = addr.replace("[::1]", "127.0.0.1");
+    try {
+      const vRes = await fetch(`${url}/api/validate`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+      });
+      expect(vRes.status).toBe(503);
+      expect(await vRes.json()).toMatchObject({ code: "LIMIT_EXCEEDED" });
+    } finally {
+      await otherApp.close();
+      await new Promise<void>((resolve) => otherServer?.close(() => resolve()));
+    }
+  });
+});

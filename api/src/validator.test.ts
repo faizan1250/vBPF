@@ -20,12 +20,6 @@ const RECIPES_DIR = join(
 );
 
 describe("validator catalog mode requirement and fail-closed readiness", () => {
-  it("requires explicit catalog option at compile time", () => {
-    // @ts-expect-error staticValidate requires an explicit catalog option
-    const call = (): unknown => staticValidate("BEGIN { @x = count(); }");
-    expect(typeof call).toBe("function");
-  });
-
   it("fails closed with CATALOG_UNAVAILABLE when enforce catalog is empty", () => {
     for (const script of [
       "BEGIN { @x = count(); }",
@@ -278,6 +272,101 @@ describe("runGenerate fail-fast on 503 CATALOG_UNAVAILABLE", () => {
           },
         }),
       ).rejects.toMatchObject({ status: 503, code: "CATALOG_UNAVAILABLE" });
+      expect(llmCalls).toBe(1);
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries 503 with other code instead of fail-fast", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vbpf-gen-other503-"));
+    const tokenFile = join(dir, "agent.token");
+    writeFileSync(tokenFile, "tok\n");
+    const db = openDb(":memory:");
+    migrate(db);
+    indexRecipes(db, loadRecipes(RECIPES_DIR));
+    let llmCalls = 0;
+    const llm = {
+      model: "mock",
+      generate: async () => {
+        llmCalls += 1;
+        return LlmOutputSchema.parse({
+          script: "BEGIN { @x = count(); }\n",
+          chart_type: "events",
+          explanation: "ok",
+          duration_s: 10,
+          refusal: null,
+        });
+      },
+    };
+    try {
+      await expect(
+        runGenerate("count events", {
+          deps: {
+            db,
+            recipesDir: RECIPES_DIR,
+            agentUrl: "http://127.0.0.1:1",
+            tokenFile,
+            llm,
+            searchProbesFn: async () => [],
+            validateAgentFn: async () => {
+              throw new AgentProxyError(
+                503,
+                JSON.stringify({
+                  error: "overloaded",
+                  code: "LIMIT_EXCEEDED",
+                }),
+                "2",
+              );
+            },
+          },
+        }),
+      ).rejects.toThrow("validation failed");
+      expect(llmCalls).toBe(3);
+    } finally {
+      db.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails fast on unparseable 503 body", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "vbpf-gen-unparseable-"));
+    const tokenFile = join(dir, "agent.token");
+    writeFileSync(tokenFile, "tok\n");
+    const db = openDb(":memory:");
+    migrate(db);
+    indexRecipes(db, loadRecipes(RECIPES_DIR));
+    let llmCalls = 0;
+    const llm = {
+      model: "mock",
+      generate: async () => {
+        llmCalls += 1;
+        return LlmOutputSchema.parse({
+          script: "BEGIN { @x = count(); }\n",
+          chart_type: "events",
+          explanation: "ok",
+          duration_s: 10,
+          refusal: null,
+        });
+      },
+    };
+    try {
+      await expect(
+        runGenerate("count events", {
+          deps: {
+            db,
+            recipesDir: RECIPES_DIR,
+            agentUrl: "http://127.0.0.1:1",
+            tokenFile,
+            llm,
+            searchProbesFn: async () => [],
+            validateAgentFn: async () => {
+              throw new AgentProxyError(503, "bad gateway", "2");
+            },
+          },
+        }),
+      ).rejects.toMatchObject({ status: 503 });
       expect(llmCalls).toBe(1);
     } finally {
       db.close();

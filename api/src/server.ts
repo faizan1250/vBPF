@@ -84,18 +84,30 @@ const AGENT_NOT_READY_HINT =
   "Agent probe catalog is not ready yet. Mount debugfs/tracefs, verify BTF support, or restart the agent.";
 
 function isCatalogUnavailableResponse(
-  status: number,
+  _status: number,
   json: unknown,
 ): { unavailable: boolean; error?: string } {
   const rec =
     typeof json === "object" && json !== null
       ? (json as { code?: unknown; error?: unknown })
       : null;
-  const unavailable = status === 503 || rec?.code === "CATALOG_UNAVAILABLE";
+  // Code-only: a 503 with any other code is not catalog-unready. Unparseable
+  // bodies fall back to status in the caller's catch path (see proxyVerbatim).
+  const unavailable = rec?.code === "CATALOG_UNAVAILABLE";
   return {
     unavailable,
     ...(typeof rec?.error === "string" ? { error: rec.error } : {}),
   };
+}
+
+function isCatalogUnavailableProxyError(err: AgentProxyError): boolean {
+  if (err.code !== undefined) return err.code === "CATALOG_UNAVAILABLE";
+  try {
+    JSON.parse(err.body) as unknown;
+    return false;
+  } catch {
+    return err.status === 503;
+  }
 }
 
 function sendAgentNotReady(
@@ -342,6 +354,9 @@ export async function buildApp(
       },
     },
     bodyLimit: BODY_LIMIT,
+    // Route params longer than this never reach handlers (414). Set above the
+    // 128 run-id cap so the handlers return 404 for overlong ids.
+    routerOptions: { maxParamLength: 256 },
   });
 
   const database = db ?? openDb(opts.dbPath);
@@ -468,12 +483,14 @@ export async function buildApp(
   // answers, and after websocket so rejected upgrades still mark req.ws for teardown.
   app.addHook("onRequest", async (req, reply) => {
     if (!hostIsLoopback(req.headers.host)) {
+      req.log.warn({ host: req.headers.host, url: req.url }, "forbidden host");
       return reply
         .code(403)
         .send({ error: "forbidden host", code: "FORBIDDEN" });
     }
     const origin = req.headers.origin;
     if (origin !== undefined && origin !== opts.webOrigin) {
+      req.log.warn({ origin, url: req.url }, "forbidden origin");
       return reply
         .code(403)
         .send({ error: "forbidden origin", code: "FORBIDDEN" });
@@ -487,6 +504,7 @@ export async function buildApp(
           .split(",")
           .some((v) => v.trim() === "cross-site"))
     ) {
+      req.log.warn({ fetchSite, url: req.url }, "forbidden fetch site");
       return reply
         .code(403)
         .send({ error: "forbidden fetch site", code: "FORBIDDEN" });
@@ -632,7 +650,7 @@ export async function buildApp(
         }
         if (
           err instanceof AgentProxyError &&
-          (err.status === 503 || err.code === "CATALOG_UNAVAILABLE")
+          isCatalogUnavailableProxyError(err)
         ) {
           return sendAgentNotReady(
             reply,
@@ -833,7 +851,8 @@ export async function buildApp(
     "/api/runs/:id/stop",
     async (req: FastifyRequest, reply: FastifyReply) => {
       const { id } = req.params as { id: string };
-      if (typeof id !== "string" || id === "" || id.length > 256) {
+      // Same 128 cap as WS isSafeId: HTTP returns 404 to avoid run-id probing.
+      if (typeof id !== "string" || id === "" || id.length > 128) {
         return reply
           .code(404)
           .send({ error: "unknown run", code: "NOT_FOUND" });
@@ -869,7 +888,8 @@ export async function buildApp(
 
   app.get("/api/runs/:id", async (req: FastifyRequest, reply: FastifyReply) => {
     const { id } = req.params as { id: string };
-    if (typeof id !== "string" || id === "" || id.length > 256) {
+    // Same 128 cap as WS isSafeId: HTTP returns 404 to avoid run-id probing.
+    if (typeof id !== "string" || id === "" || id.length > 128) {
       return reply.code(404).send({ error: "unknown run", code: "NOT_FOUND" });
     }
     const row = database

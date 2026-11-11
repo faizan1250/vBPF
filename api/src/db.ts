@@ -183,7 +183,11 @@ export function indexRecipes(db: Database.Database, recipes: Recipe[]): void {
 }
 
 function escapeFts(query: string): string {
-  return query.replace(/["*]/g, " ").trim().replace(/\s+/g, " ");
+  return query
+    .replace(/\0/g, " ")
+    .replace(/["*]/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
 }
 
 function toRecipe(row: Omit<Recipe, "tags"> & { tags: string }): Recipe {

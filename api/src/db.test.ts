@@ -45,7 +45,7 @@ describe("runs migration", () => {
     expect(row).toEqual({ generation_id: "gen_x", edited: 1 });
     // Idempotent: second migrate is a no-op.
     migrate(db);
-    db.close();
+    closeDb(db);
   });
 });
 
@@ -61,7 +61,7 @@ describe("connection pragmas", () => {
       expect(db.pragma("trusted_schema", { simple: true })).toBe(0);
       expect(db.pragma("journal_mode", { simple: true })).toBe("wal");
     } finally {
-      db.close();
+      closeDb(db);
     }
   });
 
@@ -123,7 +123,7 @@ describe("versioned migrations", () => {
       INSERT INTO runs (id, generation_id, script_text, started_at)
         VALUES ('r1', 'g1', 'BEGIN {}', 1);
     `);
-    legacy.close();
+    closeDb(legacy);
 
     const db = openDb(path);
     try {
@@ -154,7 +154,7 @@ describe("versioned migrations", () => {
       migrate(db);
       expect(db.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
     } finally {
-      db.close();
+      closeDb(db);
     }
   });
 
@@ -162,7 +162,7 @@ describe("versioned migrations", () => {
     const db = new Database(":memory:");
     db.pragma(`user_version = ${SCHEMA_VERSION + 1}`);
     expect(() => migrate(db)).toThrow(/unsupported schema version/);
-    db.close();
+    closeDb(db);
   });
 });
 
@@ -199,7 +199,7 @@ describe("foreign keys", () => {
           .run("r1", "g1", 1),
       ).not.toThrow();
     } finally {
-      db.close();
+      closeDb(db);
     }
   });
 });
@@ -353,6 +353,18 @@ describe("run and generation helpers", () => {
         .prepare("SELECT state FROM runs WHERE id = ?")
         .get("run_done") as { state: string };
       expect(doneRow.state).toBe("completed");
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("strips NUL bytes from FTS queries", async () => {
+    const { searchRecipes } = await import("./db.js");
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      expect(() => searchRecipes(db, 'cpu\0"*')).not.toThrow();
+      expect(searchRecipes(db, "\0")).toEqual(searchRecipes(db, ""));
     } finally {
       closeDb(db);
     }
