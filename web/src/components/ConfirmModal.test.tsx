@@ -1,11 +1,25 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, cleanup } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  fireEvent,
+  render,
+  screen,
+  cleanup,
+  waitFor,
+} from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ConfirmModal } from "./ConfirmModal.js";
+import { createRun } from "../lib/api.js";
 import { useAppStore } from "../store/useAppStore.js";
+
+vi.mock("../lib/api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/api.js")>();
+  return { ...actual, fixtureMode: () => false, createRun: vi.fn() };
+});
+
+const createRunMock = vi.mocked(createRun);
 
 function renderModal(): void {
   const client = new QueryClient();
@@ -19,6 +33,7 @@ function renderModal(): void {
 describe("ConfirmModal", () => {
   afterEach(() => {
     cleanup();
+    createRunMock.mockReset();
   });
   beforeEach(() => {
     useAppStore.setState({
@@ -76,5 +91,81 @@ describe("ConfirmModal", () => {
     });
     renderModal();
     expect(screen.getByText(/Hot libc symbol "malloc"/)).toBeDefined();
+  });
+
+  it("forwards generation_id when starting a run", async () => {
+    createRunMock.mockResolvedValue({ run_id: "run_1", state: "running" });
+    useAppStore.setState({
+      script: "BEGIN { }",
+      durationS: 10,
+      generation: {
+        generation_id: "gen_123",
+        script: "BEGIN { }",
+        chart_type: "events",
+        explanation: "Counts.",
+        duration_s: 10,
+        warnings: [],
+        validation: { status: "ok", attempts: 1, errors: [] },
+        based_on_recipe: null,
+      },
+      validationOk: true,
+      validationProbes: ["BEGIN"],
+      validationWarnings: [],
+      agentReady: null,
+    });
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: /run this probe/i }));
+    await waitFor(() =>
+      expect(createRunMock).toHaveBeenCalledWith("BEGIN { }", 10, "gen_123"),
+    );
+  });
+
+  it("forwards generation_id when the script was edited", async () => {
+    createRunMock.mockResolvedValue({ run_id: "run_1", state: "running" });
+    useAppStore.setState({
+      script: "BEGIN { @b = 2; }",
+      durationS: 10,
+      generation: {
+        generation_id: "gen_123",
+        script: "BEGIN { @a = 1; }",
+        chart_type: "events",
+        explanation: "Counts.",
+        duration_s: 10,
+        warnings: [],
+        validation: { status: "ok", attempts: 1, errors: [] },
+        based_on_recipe: null,
+      },
+      validationOk: true,
+      validationProbes: ["BEGIN"],
+      validationWarnings: [],
+      agentReady: null,
+    });
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: /run this probe/i }));
+    await waitFor(() =>
+      expect(createRunMock).toHaveBeenCalledWith(
+        "BEGIN { @b = 2; }",
+        10,
+        "gen_123",
+      ),
+    );
+  });
+
+  it("omits generation_id when there is no generation", async () => {
+    createRunMock.mockResolvedValue({ run_id: "run_1", state: "running" });
+    useAppStore.setState({
+      script: "BEGIN { }",
+      durationS: 10,
+      generation: null,
+      validationOk: true,
+      validationProbes: ["BEGIN"],
+      validationWarnings: [],
+      agentReady: null,
+    });
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: /run this probe/i }));
+    await waitFor(() =>
+      expect(createRunMock).toHaveBeenCalledWith("BEGIN { }", 10, undefined),
+    );
   });
 });
