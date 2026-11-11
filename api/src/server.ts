@@ -34,10 +34,12 @@ import {
 } from "./agent-client.js";
 import {
   closeDb,
+  failRunWithReason,
   generationExists,
   getGeneration,
   indexRecipes,
   insertRun,
+  listUnfinishedRuns,
   markRunFailedIfActive,
   migrate,
   openDb,
@@ -72,6 +74,9 @@ export interface AppOptions {
   llmEnv?: NodeJS.ProcessEnv;
   llmFetch?: typeof fetch;
   generateRateLimit?: { max: number; windowMs: number };
+  // Server-owned run monitor deadline slack past duration_s. Override in
+  // tests to keep the monitor-timeout case fast; production default 15 s.
+  monitorGraceMs?: number;
 }
 
 const BODY_LIMIT = 64 * 1024;
@@ -80,6 +85,14 @@ const DEFAULT_DURATION_S = 10;
 // generation is the most expensive handler; per-route limiter only.
 const GENERATE_RATE_MAX = 10;
 const GENERATE_RATE_WINDOW_MS = 60_000;
+// Hard deadline slack for the server-owned run monitor: a run must report
+// its summary by duration_s + grace or it is failed as monitor_timeout.
+// The monitor keeps no event buffers (counters and the summary only), so its
+// memory stays bounded regardless of run length.
+const MONITOR_GRACE_MS_DEFAULT = 15_000;
+// A restarted API gives each orphaned row at least this long to hear the
+// agent's retained summary before failing it as api_restart.
+const RECONCILE_MIN_WAIT_MS = 2_000;
 const AGENT_NOT_READY_HINT =
   "Agent probe catalog is not ready yet. Mount debugfs/tracefs, verify BTF support, or restart the agent.";
 
@@ -379,30 +392,84 @@ export async function buildApp(
   };
 
   // Marks a run stopping when termination is requested (stop endpoint or a
-  // stop message over the run's websocket). The later summary event, if a
-  // stream is attached, fills in the counts.
+  // stop message over the run's websocket). Only a running row transitions;
+  // a late stop after the summary landed must not regress a terminal row.
+  // The later summary event, if a stream is attached, fills in the counts.
   const markRunStopping = (runId: string): void => {
     try {
       database
-        .prepare("UPDATE runs SET state = ?, ended_at = ? WHERE id = ?")
+        .prepare(
+          "UPDATE runs SET state = ?, ended_at = ? WHERE id = ? AND state = 'running'",
+        )
         .run("stopping", Date.now(), runId);
     } catch (err) {
       app.log.error({ err }, "run stop update failed");
     }
   };
 
-  const startRunObserver = (runId: string): void => {
+  // Server-owned monitor: finalizes one run independent of any browser
+  // viewer. Connects to the agent stream (which replays the retained
+  // summary for finished runs), persists the terminal summary, and enforces
+  // a hard deadline of duration_s + grace. The browser WebSocket is a second
+  // optional consumer of the same stream, not the finalization owner.
+  const startRunObserver = (
+    runId: string,
+    durationS: number,
+    monOpts?: { startedAt?: number },
+  ): void => {
+    const graceMs = opts.monitorGraceMs ?? MONITOR_GRACE_MS_DEFAULT;
+    const reconciling = monOpts?.startedAt !== undefined;
+    // Live runs start now; orphaned rows from before a restart keep their
+    // original start so an already-expired deadline fails fast (with a
+    // short floor so the agent still gets one chance to answer).
+    const deadlineAt =
+      (monOpts?.startedAt ?? Date.now()) + durationS * 1000 + graceMs;
+    const delay = reconciling
+      ? Math.max(
+          deadlineAt - Date.now(),
+          Math.min(graceMs, RECONCILE_MIN_WAIT_MS),
+        )
+      : Math.max(deadlineAt - Date.now(), 0);
+    const finalExitReason = reconciling ? "api_restart" : "monitor_timeout";
     const target = agentWsUrl(
       opts.agentUrl,
       `/v1/runs/${encodeURIComponent(runId)}/stream`,
     );
     const maxRetries = 3;
     let receivedSummary = false;
+    let exhausted = false;
     let attempts = 0;
+    let current: WebSocket | null = null;
+    let deadline: NodeJS.Timeout | null = null;
 
-    const markFailed = (): void => {
+    const clearDeadline = (): void => {
+      if (deadline !== null) {
+        clearTimeout(deadline);
+        observerTimers.delete(deadline);
+        deadline = null;
+      }
+    };
+
+    const failExpired = (): void => {
+      // Hard deadline hit: record the reason so the row tells why it died.
       try {
-        markRunFailedIfActive(database, runId);
+        failRunWithReason(database, runId, finalExitReason);
+      } catch (err) {
+        app.log.error(
+          { err, runId },
+          "failed to transition expired run to failed",
+        );
+      }
+    };
+
+    const failDisconnected = (): void => {
+      try {
+        if (reconciling) {
+          failRunWithReason(database, runId, finalExitReason);
+        } else {
+          // Historical outcome: failed with no summary.
+          markRunFailedIfActive(database, runId);
+        }
       } catch (err) {
         app.log.error(
           { err, runId },
@@ -411,18 +478,41 @@ export async function buildApp(
       }
     };
 
+    const onDeadline = (): void => {
+      if (deadline !== null) {
+        observerTimers.delete(deadline);
+        deadline = null;
+      }
+      if (receivedSummary || exhausted || !database.open) return;
+      exhausted = true;
+      try {
+        current?.close();
+      } catch {
+        /* already closed */
+      }
+      failExpired();
+    };
+
+    deadline = setTimeout(onDeadline, delay);
+    observerTimers.add(deadline);
+    if (typeof deadline.unref === "function") deadline.unref();
+
     const scheduleRetry = (): void => {
-      if (receivedSummary || !database.open) return;
+      if (receivedSummary || exhausted || !database.open) return;
       if (attempts >= maxRetries) {
-        markFailed();
+        exhausted = true;
+        clearDeadline();
+        // Live path keeps the historical outcome (failed, no summary);
+        // reconcile records api_restart via failDisconnected.
+        failDisconnected();
         return;
       }
       attempts += 1;
-      const delay = Math.min(100 * 2 ** (attempts - 1), 1000);
+      const backoff = Math.min(100 * 2 ** (attempts - 1), 1000);
       const timer = setTimeout(() => {
         observerTimers.delete(timer);
         connect();
-      }, delay);
+      }, backoff);
       observerTimers.add(timer);
       if (typeof timer.unref === "function") timer.unref();
     };
@@ -449,11 +539,13 @@ export async function buildApp(
         return;
       }
       activeObservers.add(ws);
+      current = ws;
       let settled = false;
       const settle = (): void => {
         if (settled) return;
         settled = true;
         activeObservers.delete(ws);
+        if (current === ws) current = null;
         if (!receivedSummary) scheduleRetry();
       };
 
@@ -466,6 +558,7 @@ export async function buildApp(
             const parsed = AgentRunSummarySchema.safeParse(envelope.data);
             if (parsed.success) {
               receivedSummary = true;
+              clearDeadline();
               try {
                 persistRunSummary(database, runId, parsed.data);
               } catch (err) {
@@ -473,6 +566,7 @@ export async function buildApp(
               }
               activeObservers.delete(ws);
               settled = true;
+              if (current === ws) current = null;
               try {
                 ws.close();
               } catch {
@@ -518,6 +612,26 @@ export async function buildApp(
     activeObservers.clear();
     closeDb(database);
   });
+
+  // Startup reconcile: rows left running/stopping by a previous process
+  // (crash, restart, deploy) get a monitor each. A retained agent summary
+  // finalizes them; a lost agent fails them as api_restart.
+  try {
+    const orphans = listUnfinishedRuns(database);
+    for (const orphan of orphans) {
+      startRunObserver(orphan.id, orphan.duration_s, {
+        startedAt: orphan.started_at,
+      });
+    }
+    if (orphans.length > 0) {
+      app.log.info(
+        { count: orphans.length },
+        "reconciling unfinished runs from previous process",
+      );
+    }
+  } catch (err) {
+    app.log.error({ err }, "run reconcile sweep failed");
+  }
 
   await app.register(websocket);
 
@@ -885,7 +999,7 @@ export async function buildApp(
         .code(500)
         .send({ error: "failed to persist run", code: "INTERNAL_ERROR" });
     }
-    startRunObserver(created.run_id);
+    startRunObserver(created.run_id, duration);
     return reply.code(201).send(created);
   });
 
