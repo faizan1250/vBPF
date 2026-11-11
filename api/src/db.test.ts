@@ -10,8 +10,10 @@ import {
   generationExists,
   getGeneration,
   insertRun,
+  markRunFailedIfActive,
   migrate,
   openDb,
+  persistRunSummary,
   SCHEMA_VERSION,
 } from "./db.js";
 
@@ -260,6 +262,97 @@ describe("run and generation helpers", () => {
         state: "running",
         edited: 0,
       });
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("persists run summary and maps exit reasons to states", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      insertRun(db, {
+        id: "run_sum",
+        generation_id: null,
+        script_sha256: "h",
+        script_text: "BEGIN {}",
+        edited: false,
+        duration_s: 10,
+        state: "running",
+        started_at: 100,
+      });
+
+      persistRunSummary(db, "run_sum", {
+        events: 10,
+        bytes: 200,
+        dropped: 1,
+        exit_reason: "completed",
+      });
+
+      const row = db
+        .prepare("SELECT * FROM runs WHERE id = ?")
+        .get("run_sum") as {
+        state: string;
+        events_count: number;
+        bytes: number;
+        dropped: number;
+        exit_reason: string;
+        ended_at: number;
+      };
+      expect(row).toMatchObject({
+        state: "completed",
+        events_count: 10,
+        bytes: 200,
+        dropped: 1,
+        exit_reason: "completed",
+      });
+      expect(row.ended_at).toBeGreaterThan(0);
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("marks active runs as failed and is idempotent", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      insertRun(db, {
+        id: "run_fail",
+        generation_id: null,
+        script_sha256: "h",
+        script_text: "BEGIN {}",
+        edited: false,
+        duration_s: 10,
+        state: "running",
+        started_at: 100,
+      });
+
+      expect(markRunFailedIfActive(db, "run_fail")).toBe(true);
+      const row = db
+        .prepare("SELECT state, ended_at FROM runs WHERE id = ?")
+        .get("run_fail") as { state: string; ended_at: number };
+      expect(row.state).toBe("failed");
+      expect(row.ended_at).toBeGreaterThan(0);
+
+      // Idempotent: second call returns false because state is not 'running'
+      expect(markRunFailedIfActive(db, "run_fail")).toBe(false);
+
+      // Does not alter completed runs
+      insertRun(db, {
+        id: "run_done",
+        generation_id: null,
+        script_sha256: "h",
+        script_text: "BEGIN {}",
+        edited: false,
+        duration_s: 10,
+        state: "completed",
+        started_at: 100,
+      });
+      expect(markRunFailedIfActive(db, "run_done")).toBe(false);
+      const doneRow = db
+        .prepare("SELECT state FROM runs WHERE id = ?")
+        .get("run_done") as { state: string };
+      expect(doneRow.state).toBe("completed");
     } finally {
       closeDb(db);
     }

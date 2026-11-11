@@ -350,3 +350,48 @@ export function insertRun(db: Database.Database, run: RunInsertRow): void {
     run.started_at,
   );
 }
+
+export interface RunSummaryUpdate {
+  events: number;
+  bytes: number;
+  dropped: number;
+  exit_reason: string;
+}
+
+export function persistRunSummary(
+  db: Database.Database,
+  runId: string,
+  summary: RunSummaryUpdate,
+): void {
+  if (!db.open) return;
+  const state =
+    summary.exit_reason === "completed" || summary.exit_reason === "timeout"
+      ? "completed"
+      : summary.exit_reason === "cancelled"
+        ? "stopping"
+        : "failed";
+  db.prepare(
+    "UPDATE runs SET state = ?, ended_at = ?, events_count = ?, bytes = ?, dropped = ?, exit_reason = ? WHERE id = ?",
+  ).run(
+    state,
+    Date.now(),
+    summary.events,
+    summary.bytes,
+    summary.dropped,
+    summary.exit_reason,
+    runId,
+  );
+}
+
+export function markRunFailedIfActive(
+  db: Database.Database,
+  runId: string,
+): boolean {
+  if (!db.open) return false;
+  const res = db
+    .prepare(
+      "UPDATE runs SET state = 'failed', ended_at = ? WHERE id = ? AND state = 'running'",
+    )
+    .run(Date.now(), runId);
+  return res.changes > 0;
+}

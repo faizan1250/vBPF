@@ -45,6 +45,7 @@ interface FakeAgent {
 function startFakeAgent(): Promise<FakeAgent> {
   let validateHits = 0;
   let activeRun: string | null = null;
+  let activeRunScript = "";
 
   const server: Server = createServer((req, res) => {
     const send = (code: number, body: unknown): void => {
@@ -113,6 +114,7 @@ function startFakeAgent(): Promise<FakeAgent> {
           send(409, { error: "another run is active", code: "LIMIT_EXCEEDED" });
         } else {
           activeRun = `run_${Date.now()}`;
+          activeRunScript = body.script ?? "";
           send(201, { run_id: activeRun, state: "running" });
         }
       });
@@ -154,6 +156,18 @@ function startFakeAgent(): Promise<FakeAgent> {
           }),
         );
       };
+      if (activeRunScript.includes("stay-running")) {
+        send("status", { state: "running" }, 0);
+        ws.on("message", () => {
+          ws.close();
+        });
+        return;
+      }
+      if (activeRunScript.includes("stream-drop")) {
+        send("status", { state: "running" }, 0);
+        ws.close();
+        return;
+      }
       send("status", { state: "running" }, 0);
       send("printf", "hello", 1);
       send(
@@ -526,7 +540,9 @@ describe("run summaries", () => {
       await fetch(`${base}/api/runs`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+        body: JSON.stringify({
+          script: "BEGIN { @x = count(); } stay-running",
+        }),
       })
     ).json()) as { run_id: string };
     const stop = await fetch(`${base}/api/runs/${created.run_id}/stop`, {
@@ -543,6 +559,188 @@ describe("run summaries", () => {
     });
     expect(body.ended_at).toEqual(expect.any(Number));
     expect(body).not.toHaveProperty("script_text");
+  });
+
+  it("persists summary for headless runs without websocket client", async () => {
+    const created = (await (
+      await fetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+      })
+    ).json()) as { run_id: string };
+    try {
+      let state = "";
+      let body: { state?: string; summary?: unknown } = {};
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        const res = await fetch(`${base}/api/runs/${created.run_id}`);
+        body = (await res.json()) as typeof body;
+        state = body.state ?? "";
+        if (state === "completed") break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(state).toBe("completed");
+      expect(body.summary).toEqual({
+        events_count: 1,
+        bytes: 5,
+        dropped: 0,
+        exit_reason: "completed",
+      });
+    } finally {
+      await fetch(`${base}/api/runs/${created.run_id}/stop`, {
+        method: "POST",
+      });
+    }
+  });
+
+  it("transitions run to failed when stream terminates without summary", async () => {
+    const created = (await (
+      await fetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ script: "BEGIN { @x = count(); } stream-drop" }),
+      })
+    ).json()) as { run_id: string };
+    try {
+      let state = "";
+      let body: { state?: string; summary?: unknown } = {};
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        const res = await fetch(`${base}/api/runs/${created.run_id}`);
+        body = (await res.json()) as typeof body;
+        state = body.state ?? "";
+        if (state === "failed") break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(state).toBe("failed");
+      expect(body.summary).toBeNull();
+    } finally {
+      await fetch(`${base}/api/runs/${created.run_id}/stop`, {
+        method: "POST",
+      });
+    }
+  });
+
+  it("handles agent without websocket support cleanly and transitions run to failed", async () => {
+    let httpOnlyServer: Server | null = null;
+    const httpOnlyUrl = await new Promise<string>((resolve) => {
+      httpOnlyServer = createServer((req, res) => {
+        const send = (code: number, payload: unknown): void => {
+          res.writeHead(code, { "content-type": "application/json" });
+          res.end(JSON.stringify(payload));
+        };
+        const url = new URL(req.url ?? "/", "http://x");
+        if (req.method === "GET" && url.pathname === "/health") {
+          send(200, HEALTH);
+          return;
+        }
+        if (req.method === "POST" && url.pathname === "/v1/runs") {
+          send(201, { run_id: `run_http_${Date.now()}`, state: "running" });
+          return;
+        }
+        send(404, { error: "not found" });
+      });
+      httpOnlyServer.listen(0, "127.0.0.1", () => {
+        const addr = httpOnlyServer?.address();
+        const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+        resolve(`http://127.0.0.1:${port}`);
+      });
+    });
+
+    const httpOnlyApp = await buildApp({
+      agentUrl: httpOnlyUrl,
+      tokenFile,
+      dbPath: ":memory:",
+      recipesDir,
+      webOrigin: "http://localhost:5173",
+    });
+    const addr = await httpOnlyApp.listen({ host: "127.0.0.1", port: 0 });
+    const localBase = addr.replace("[::1]", "127.0.0.1");
+
+    try {
+      const res = await fetch(`${localBase}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+      });
+      expect(res.status).toBe(201);
+      const created = (await res.json()) as { run_id: string };
+
+      let state = "";
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        const check = await fetch(`${localBase}/api/runs/${created.run_id}`);
+        const body = (await check.json()) as { state: string };
+        state = body.state;
+        if (state === "failed") break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(state).toBe("failed");
+    } finally {
+      await httpOnlyApp.close();
+      await new Promise<void>((resolve) =>
+        httpOnlyServer?.close(() => resolve()),
+      );
+    }
+  });
+
+  it("teardown terminates active observer sockets on Fastify close without hanging", async () => {
+    let teardownServer: Server | null = null;
+    let teardownWs: WebSocket | null = null;
+    const teardownUrl = await new Promise<string>((resolve) => {
+      teardownServer = createServer((req, res) => {
+        const url = new URL(req.url ?? "/", "http://x");
+        if (req.method === "POST" && url.pathname === "/v1/runs") {
+          res.writeHead(201, { "content-type": "application/json" });
+          res.end(JSON.stringify({ run_id: "run_teardown", state: "running" }));
+          return;
+        }
+        res.writeHead(404);
+        res.end();
+      });
+      const wss = new WebSocketServer({ noServer: true });
+      teardownServer.on("upgrade", (req, socket, head) => {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          teardownWs = ws;
+          ws.send(
+            JSON.stringify({ kind: "status", data: { state: "running" } }),
+          );
+        });
+      });
+      teardownServer.listen(0, "127.0.0.1", () => {
+        const addr = teardownServer?.address();
+        const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+        resolve(`http://127.0.0.1:${port}`);
+      });
+    });
+
+    const testApp = await buildApp({
+      agentUrl: teardownUrl,
+      tokenFile,
+      dbPath: ":memory:",
+      recipesDir,
+      webOrigin: "http://localhost:5173",
+    });
+    const addr = await testApp.listen({ host: "127.0.0.1", port: 0 });
+    const localBase = addr.replace("[::1]", "127.0.0.1");
+
+    const res = await fetch(`${localBase}/api/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+    });
+    expect(res.status).toBe(201);
+
+    const deadline = Date.now() + 2000;
+    while (!teardownWs && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    await expect(testApp.close()).resolves.toBeUndefined();
+    await new Promise<void>((resolve) =>
+      teardownServer?.close(() => resolve()),
+    );
   });
 
   it("404s unknown run id", async () => {

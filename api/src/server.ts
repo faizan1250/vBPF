@@ -38,8 +38,10 @@ import {
   getGeneration,
   indexRecipes,
   insertRun,
+  markRunFailedIfActive,
   migrate,
   openDb,
+  persistRunSummary,
   searchRecipes,
 } from "./db.js";
 import { ExplainValidationError, explainScriptText } from "./explain.js";
@@ -275,15 +277,6 @@ function agentDelete(
     .finally(() => clearTimeout(timer));
 }
 
-// Maps an agent exit_reason to the stored run state, mirroring the agent's
-// finalState: completed/timeout are terminal-ok, cancelled is user-stopped,
-// everything else (failed, limit_bytes, unknown) is failed.
-function stateForExitReason(reason: string): string {
-  if (reason === "completed" || reason === "timeout") return "completed";
-  if (reason === "cancelled") return "stopping";
-  return "failed";
-}
-
 // All LLM_UNAVAILABLE 503s carry a fixed retry hint (D-24): 90 s matches
 // the default total LLM budget, so clients back off one budget window.
 function sendLlmUnavailable(reply: FastifyReply): FastifyReply {
@@ -350,26 +343,15 @@ export async function buildApp(
   migrate(database);
   indexRecipes(database, loadRecipes(opts.recipesDir));
 
+  const activeObservers = new Set<WebSocket>();
+
   // Persists the terminal summary from the agent's summary event. One update
   // per termination; stream end covers natural completion and timeout.
-  const persistRunSummary = (runId: string, data: unknown): void => {
+  const recordRunSummary = (runId: string, data: unknown): void => {
     const parsed = AgentRunSummarySchema.safeParse(data);
     if (!parsed.success) return;
-    const s = parsed.data;
     try {
-      database
-        .prepare(
-          "UPDATE runs SET state = ?, ended_at = ?, events_count = ?, bytes = ?, dropped = ?, exit_reason = ? WHERE id = ?",
-        )
-        .run(
-          stateForExitReason(s.exit_reason),
-          Date.now(),
-          s.events,
-          s.bytes,
-          s.dropped,
-          s.exit_reason,
-          runId,
-        );
+      persistRunSummary(database, runId, parsed.data);
     } catch (err) {
       app.log.error({ err }, "run summary update failed");
     }
@@ -388,7 +370,90 @@ export async function buildApp(
     }
   };
 
+  const startRunObserver = (runId: string): void => {
+    let token: string;
+    try {
+      token = readAgentToken(opts.tokenFile);
+    } catch (err) {
+      app.log.warn({ err, runId }, "run observer failed to read agent token");
+      return;
+    }
+
+    const target = agentWsUrl(
+      opts.agentUrl,
+      `/v1/runs/${encodeURIComponent(runId)}/stream`,
+    );
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(target, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch (err) {
+      app.log.warn({ err, runId }, "failed to initialize run observer socket");
+      return;
+    }
+
+    activeObservers.add(ws);
+    let receivedSummary = false;
+
+    const cleanup = (): void => {
+      activeObservers.delete(ws);
+    };
+
+    ws.on("message", (data) => {
+      try {
+        const envelope = EventEnvelopeSchema.parse(JSON.parse(data.toString()));
+        if (envelope.kind === "summary") {
+          const parsed = AgentRunSummarySchema.safeParse(envelope.data);
+          if (parsed.success) {
+            receivedSummary = true;
+            try {
+              persistRunSummary(database, runId, parsed.data);
+            } catch (err) {
+              app.log.error({ err, runId }, "run summary update failed");
+            }
+            cleanup();
+            try {
+              ws.close();
+            } catch {
+              /* already closed */
+            }
+          }
+        }
+      } catch {
+        // Non-envelope or unparseable event: ignore
+      }
+    });
+
+    ws.on("close", () => {
+      cleanup();
+      if (!receivedSummary) {
+        try {
+          markRunFailedIfActive(database, runId);
+        } catch (err) {
+          app.log.error(
+            { err, runId },
+            "failed to transition disconnected run to failed",
+          );
+        }
+      }
+    });
+
+    ws.on("error", (err) => {
+      cleanup();
+      app.log.debug({ err, runId }, "run observer websocket error");
+    });
+  };
+
   app.addHook("onClose", async () => {
+    for (const ws of activeObservers) {
+      try {
+        ws.terminate();
+      } catch {
+        /* already closed */
+      }
+    }
+    activeObservers.clear();
     closeDb(database);
   });
 
@@ -755,6 +820,7 @@ export async function buildApp(
         .code(500)
         .send({ error: "failed to persist run", code: "INTERNAL_ERROR" });
     }
+    startRunObserver(created.run_id);
     return reply.code(201).send(created);
   });
 
@@ -891,7 +957,7 @@ export async function buildApp(
         try {
           const envelope = EventEnvelopeSchema.parse(JSON.parse(text));
           if (envelope.kind === "summary") {
-            persistRunSummary(id, envelope.data);
+            recordRunSummary(id, envelope.data);
           }
         } catch {
           return;
