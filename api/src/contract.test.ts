@@ -1423,9 +1423,7 @@ describe("catalog-unavailable scope (code-only)", () => {
       expect(await vRes.json()).toMatchObject({ code: "LIMIT_EXCEEDED" });
     } finally {
       await otherApp.close();
-      await new Promise<void>((resolve) =>
-        otherServer?.close(() => resolve()),
-      );
+      await new Promise<void>((resolve) => otherServer?.close(() => resolve()));
     }
   });
 });

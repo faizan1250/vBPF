@@ -363,7 +363,7 @@ describe("run and generation helpers", () => {
     const db = openDb(":memory:");
     try {
       migrate(db);
-      expect(() => searchRecipes(db, "cpu\0\"*")).not.toThrow();
+      expect(() => searchRecipes(db, 'cpu\0"*')).not.toThrow();
       expect(searchRecipes(db, "\0")).toEqual(searchRecipes(db, ""));
     } finally {
       closeDb(db);

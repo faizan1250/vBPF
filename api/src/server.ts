@@ -483,10 +483,7 @@ export async function buildApp(
   // answers, and after websocket so rejected upgrades still mark req.ws for teardown.
   app.addHook("onRequest", async (req, reply) => {
     if (!hostIsLoopback(req.headers.host)) {
-      req.log.warn(
-        { host: req.headers.host, url: req.url },
-        "forbidden host",
-      );
+      req.log.warn({ host: req.headers.host, url: req.url }, "forbidden host");
       return reply
         .code(403)
         .send({ error: "forbidden host", code: "FORBIDDEN" });
