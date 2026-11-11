@@ -186,10 +186,16 @@ function newGenerationId(): string {
 }
 
 function isCatalogUnavailableError(err: unknown): boolean {
-  return (
-    err instanceof AgentProxyError &&
-    (err.status === 503 || err.code === "CATALOG_UNAVAILABLE")
-  );
+  if (!(err instanceof AgentProxyError)) return false;
+  if (err.code !== undefined) return err.code === "CATALOG_UNAVAILABLE";
+  // Fallback to status only when the upstream body is unparseable (code
+  // missing because JSON.parse failed), mirroring proxyVerbatim's catch path.
+  try {
+    JSON.parse(err.body) as unknown;
+    return false;
+  } catch {
+    return err.status === 503;
+  }
 }
 
 function newSessionId(): string {

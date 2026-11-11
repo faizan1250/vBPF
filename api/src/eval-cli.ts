@@ -20,6 +20,7 @@ import {
   searchProbes,
   validateScript,
 } from "./agent-client.js";
+import { closeDb } from "./db.js";
 import { LiveLlmChain } from "./live-llm.js";
 
 const srcDir = dirname(fileURLToPath(import.meta.url));
@@ -42,7 +43,7 @@ if (!opts.live) {
     model: "mock",
     delayMs: opts.delayMs,
   });
-  db.close();
+  closeDb(db);
   mkdirSync(reportsDir, { recursive: true });
   const outPath = opts.outPath ?? join(reportsDir, `${date}.md`);
   writeFileSync(outPath, renderMarkdown(date, "mock", summary, cases));
@@ -84,7 +85,7 @@ if (!opts.live) {
   } catch {
     // Report label only; keep the chain attribution.
   }
-  db.close();
+  closeDb(db);
   mkdirSync(reportsDir, { recursive: true });
   const outPath = opts.outPath ?? join(reportsDir, `${date}-live.md`);
   writeFileSync(
@@ -137,7 +138,7 @@ if (!opts.live) {
   } catch {
     // Report label only; keep the chain attribution.
   }
-  db.close();
+  closeDb(db);
   mkdirSync(reportsDir, { recursive: true });
   const outPath = opts.outPath ?? join(reportsDir, `${date}-live-real.md`);
   writeFileSync(

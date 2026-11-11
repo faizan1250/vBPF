@@ -1642,6 +1642,8 @@ describe("json modes", () => {
 
   it("hand-written schema validates identically to zod", () => {
     // Minimal reader for SUBMIT_PROBE_PARAMETERS (no new dependency).
+    // Script uses UTF-8 bytes to match validator.ts; maxLength stays a char
+    // hint for providers, zod byte-length refine is authoritative.
     const schemaValid = (value: unknown): boolean => {
       if (typeof value !== "object" || value === null) return false;
       const record = value as Record<string, unknown>;
@@ -1659,7 +1661,7 @@ describe("json modes", () => {
       }
       if (
         typeof record["script"] !== "string" ||
-        record["script"].length > 8 * 1024
+        new TextEncoder().encode(record["script"]).length > 8 * 1024
       ) {
         return false;
       }
@@ -1711,6 +1713,9 @@ describe("json modes", () => {
       { ...base, extra: true },
       { ...base, script: "x".repeat(8 * 1024 + 1) },
       { ...base, explanation: "x".repeat(2049) },
+      // Byte parity: multi-byte chars under the char count but over bytes.
+      { ...base, script: `BEGIN { @x = count(); }\n// ${"é".repeat(4090)}` },
+      { ...base, script: "BEGIN { @x = count(); }\n// héllo wörld\n" },
       "just a string",
       null,
     ];

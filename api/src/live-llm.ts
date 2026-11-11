@@ -47,8 +47,9 @@ export type JsonMode = "json_object" | "tool" | "none";
 export const SUBMIT_PROBE_TOOL_NAME = "submit_probe";
 
 // Hand-written mirror of LlmOutputSchema for `tool` mode. Keep in sync with
-// `api/src/llm.ts`: script ≤ 8 KiB, chart_type enum, explanation ≤ 2048,
-// duration_s integer 1-60, refusal string ≤ 2048 or null, no extras.
+// `api/src/llm.ts`: script ≤ 8 KiB UTF-8 bytes (maxLength is a char hint for
+// providers; true enforcement is the zod byte-length refine), chart_type enum,
+// explanation ≤ 2048, duration_s integer 1-60, refusal string ≤ 2048 or null.
 export const SUBMIT_PROBE_PARAMETERS = {
   type: "object",
   properties: {

@@ -77,8 +77,8 @@ beforeAll(async () => {
     webOrigin: "http://localhost:5173",
     llmMode: "live",
     llmChain: "groq",
+    // Minimal env: no process.env spread so stray GROQ_*/LLM_* never leak in.
     llmEnv: {
-      ...process.env,
       LLM_PROVIDER_CHAIN: "groq",
       LLM_GROQ_MODEL: "fake-model",
       GROQ_API_KEY: FAKE_GROQ_KEY,
