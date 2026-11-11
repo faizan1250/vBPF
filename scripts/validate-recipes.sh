@@ -6,10 +6,9 @@ set -euo pipefail
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 
 if ! python3 -c 'import yaml, jsonschema' >/dev/null 2>&1; then
-  printf 'validate-recipes: installing missing python packages...\n' >&2
-  if ! python3 -m pip install --user --quiet pyyaml jsonschema >/dev/null 2>&1; then
-    python3 -m pip install --user --break-system-packages --quiet pyyaml jsonschema
-  fi
+  printf 'validate-recipes: missing python packages (pyyaml, jsonschema).\n' >&2
+  printf 'Install them with your system package manager or venv, then re-run.\n' >&2
+  exit 1
 fi
 
 python3 - "$repo" <<'EOF'

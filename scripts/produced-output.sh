@@ -14,6 +14,9 @@ set -euo pipefail
 DURATION=5
 OUT_DIR="${1:-$(mktemp -d /tmp/vbpf-produced-XXXXXX)}"
 mkdir -p "$OUT_DIR"
+# Workload scratch file lives inside OUT_DIR (mktemp -d, root-owned 0700),
+# never at a predictable /tmp path (symlink race as root).
+IO_TEST_FILE="$OUT_DIR/vbpf-io-test"
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 agent="$repo/bin/agent"
@@ -52,7 +55,7 @@ stop_workloads() {
     tc qdisc del dev lo root 2>/dev/null || true
     QDISC_ADDED=0
   fi
-  rm -f /tmp/vbpf-io-test
+  rm -f "$IO_TEST_FILE"
 }
 trap stop_workloads EXIT
 
@@ -63,7 +66,7 @@ start_workload() {
     block-latency-histogram | slow-disk-io-by-process)
       # slow-disk-io only counts requests >= 10 ms; 8M dsync writes + sync
       # reliably produce some on this virtual disk (verified 2026-11-10).
-      (while true; do dd if=/dev/zero of=/tmp/vbpf-io-test bs=8M count=10 oflag=dsync status=none 2>/dev/null; sync; done) &
+      (while true; do dd if=/dev/zero of="$IO_TEST_FILE" bs=8M count=10 oflag=dsync status=none 2>/dev/null; sync; done) &
       WORKLOAD_PIDS="$WORKLOAD_PIDS $!"
       ;;
     cpu-by-process)
