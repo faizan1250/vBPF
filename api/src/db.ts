@@ -374,8 +374,10 @@ export function persistRunSummary(
       : summary.exit_reason === "cancelled"
         ? "stopping"
         : "failed";
+  // Idempotent: only a non-terminal row (running/stopping) accepts a summary,
+  // so a late duplicate (viewer relay vs monitor) cannot clobber the first.
   db.prepare(
-    "UPDATE runs SET state = ?, ended_at = ?, events_count = ?, bytes = ?, dropped = ?, exit_reason = ? WHERE id = ?",
+    "UPDATE runs SET state = ?, ended_at = ?, events_count = ?, bytes = ?, dropped = ?, exit_reason = ? WHERE id = ? AND state IN ('running', 'stopping')",
   ).run(
     state,
     Date.now(),
@@ -387,14 +389,49 @@ export function persistRunSummary(
   );
 }
 
+// Fails a run with an explicit exit reason (monitor_timeout, api_restart).
+// Like persistRunSummary, only non-terminal rows are touched.
+export function failRunWithReason(
+  db: Database.Database,
+  runId: string,
+  exitReason: string,
+): boolean {
+  if (!db.open) return false;
+  const res = db
+    .prepare(
+      "UPDATE runs SET state = 'failed', ended_at = ?, exit_reason = ? WHERE id = ? AND state IN ('running', 'stopping')",
+    )
+    .run(Date.now(), exitReason, runId);
+  return res.changes > 0;
+}
+
+export interface UnfinishedRun {
+  id: string;
+  duration_s: number;
+  started_at: number;
+}
+
+// Rows the monitor still owns: running, plus stopping (a stop was requested
+// but the agent's terminal summary never arrived).
+export function listUnfinishedRuns(db: Database.Database): UnfinishedRun[] {
+  if (!db.open) return [];
+  return db
+    .prepare(
+      "SELECT id, duration_s, started_at FROM runs WHERE state IN ('running', 'stopping')",
+    )
+    .all() as UnfinishedRun[];
+}
+
 export function markRunFailedIfActive(
   db: Database.Database,
   runId: string,
 ): boolean {
   if (!db.open) return false;
+  // stopping is not terminal: a requested stop still awaits the agent's
+  // summary, so a dead stream must fail it too.
   const res = db
     .prepare(
-      "UPDATE runs SET state = 'failed', ended_at = ? WHERE id = ? AND state = 'running'",
+      "UPDATE runs SET state = 'failed', ended_at = ? WHERE id = ? AND state IN ('running', 'stopping')",
     )
     .run(Date.now(), runId);
   return res.changes > 0;

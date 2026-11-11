@@ -857,6 +857,329 @@ describe("run summaries", () => {
   });
 });
 
+describe("server-owned run monitoring (I-02)", () => {
+  interface ScriptedAgent {
+    url: string;
+    close: () => Promise<void>;
+  }
+
+  // "summary" replays a terminal summary on every stream (an agent that
+  // retained the run); "hold" keeps the stream open with no summary (a run
+  // that never reports); "http-only" has no WS upgrade (a lost agent).
+  function startScriptedAgent(
+    stream: "summary" | "hold" | "http-only",
+  ): Promise<ScriptedAgent> {
+    let counter = 0;
+    const server: Server = createServer((req, res) => {
+      const send = (code: number, body: unknown): void => {
+        res.writeHead(code, { "content-type": "application/json" });
+        res.end(JSON.stringify(body));
+      };
+      if (req.headers.authorization !== `Bearer ${TOKEN}`) {
+        send(401, { error: "unauthorized", code: "UNAUTHORIZED" });
+        return;
+      }
+      const url = new URL(req.url ?? "/", "http://x");
+      if (req.method === "GET" && url.pathname === "/health") {
+        send(200, HEALTH);
+        return;
+      }
+      if (req.method === "POST" && url.pathname === "/v1/runs") {
+        counter += 1;
+        send(201, { run_id: `run_scripted_${counter}`, state: "running" });
+        return;
+      }
+      const del = /^\/v1\/runs\/([^/]+)$/.exec(url.pathname);
+      if (req.method === "DELETE" && del !== null) {
+        send(200, { run_id: del[1], state: "stopping" });
+        return;
+      }
+      send(404, { error: "not found", code: "NOT_FOUND" });
+    });
+    const wss = new WebSocketServer({ noServer: true });
+    if (stream !== "http-only") {
+      server.on("upgrade", (req, socket, head) => {
+        const url = new URL(req.url ?? "/", "http://x");
+        if (!/^\/v1\/runs\/([^/]+)\/stream$/.test(url.pathname)) {
+          socket.destroy();
+          return;
+        }
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          const send = (kind: string, data: unknown, n: number): void => {
+            ws.send(
+              JSON.stringify({
+                run_id: "run_scripted",
+                seq: n,
+                ts: 1_700_000_000_000 + n,
+                kind,
+                data,
+              }),
+            );
+          };
+          send("status", { state: "running" }, 0);
+          if (stream === "summary") {
+            send("printf", "hello", 1);
+            send(
+              "summary",
+              {
+                events: 1,
+                bytes: 5,
+                dropped: 0,
+                duration_ms: 10,
+                exit_reason: "completed",
+              },
+              2,
+            );
+          }
+        });
+      });
+    }
+    return new Promise((resolve) => {
+      server.listen(0, "127.0.0.1", () => {
+        const addr = server.address();
+        const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+        resolve({
+          url: `http://127.0.0.1:${port}`,
+          close: () =>
+            new Promise<void>((done) => {
+              wss.close();
+              server.close(() => done());
+            }),
+        });
+      });
+    });
+  }
+
+  async function waitForState(
+    appBase: string,
+    runId: string,
+    states: string[],
+    timeoutMs = 8000,
+  ): Promise<{ state: string; summary: unknown }> {
+    const deadline = Date.now() + timeoutMs;
+    let body = { state: "", summary: null as unknown };
+    while (Date.now() < deadline) {
+      const res = await fetch(`${appBase}/api/runs/${runId}`);
+      body = (await res.json()) as typeof body;
+      if (states.includes(body.state)) return body;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    return body;
+  }
+
+  it("finalizes a run whose viewer disconnects midway", async () => {
+    const created = (await (
+      await fetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+      })
+    ).json()) as { run_id: string };
+    try {
+      const wsUrl = `${base.replace(/^http/, "ws")}/ws/runs/${created.run_id}`;
+      await new Promise<void>((resolve, reject) => {
+        const ws = new WebSocket(wsUrl);
+        // Viewer leaves after the first event; no viewer stays attached.
+        ws.on("message", () => {
+          ws.close();
+          resolve();
+        });
+        ws.on("error", reject);
+        setTimeout(() => reject(new Error("ws timeout")), 10000);
+      });
+      const body = await waitForState(base, created.run_id, ["completed"]);
+      expect(body.state).toBe("completed");
+      expect(body.summary).toEqual({
+        events_count: 1,
+        bytes: 5,
+        dropped: 0,
+        exit_reason: "completed",
+      });
+    } finally {
+      await fetch(`${base}/api/runs/${created.run_id}/stop`, {
+        method: "POST",
+      });
+    }
+  });
+
+  it("keeps the summary when a stop arrives after completion", async () => {
+    const created = (await (
+      await fetch(`${base}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+      })
+    ).json()) as { run_id: string };
+    try {
+      const done = await waitForState(base, created.run_id, ["completed"]);
+      expect(done.state).toBe("completed");
+      const stop = await fetch(`${base}/api/runs/${created.run_id}/stop`, {
+        method: "POST",
+      });
+      expect(stop.status).toBe(200);
+      const res = await fetch(`${base}/api/runs/${created.run_id}`);
+      const body = (await res.json()) as {
+        state: string;
+        summary: unknown;
+      };
+      expect(body.state).toBe("completed");
+      expect(body.summary).toEqual({
+        events_count: 1,
+        bytes: 5,
+        dropped: 0,
+        exit_reason: "completed",
+      });
+    } finally {
+      await fetch(`${base}/api/runs/${created.run_id}/stop`, {
+        method: "POST",
+      });
+    }
+  });
+
+  it("fails a silent run at duration_s + grace with monitor_timeout", async () => {
+    const hold = await startScriptedAgent("hold");
+    const monApp = await buildApp({
+      agentUrl: hold.url,
+      tokenFile,
+      dbPath: ":memory:",
+      recipesDir,
+      webOrigin: "http://localhost:5173",
+      monitorGraceMs: 300,
+    });
+    const addr = await monApp.listen({ host: "127.0.0.1", port: 0 });
+    const monBase = addr.replace("[::1]", "127.0.0.1");
+    try {
+      const res = await fetch(`${monBase}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          script: "BEGIN { @x = count(); }",
+          duration_s: 1,
+        }),
+      });
+      expect(res.status).toBe(201);
+      const created = (await res.json()) as { run_id: string };
+      const body = await waitForState(monBase, created.run_id, ["failed"]);
+      expect(body.state).toBe("failed");
+      expect(body.summary).toEqual({
+        events_count: 0,
+        bytes: 0,
+        dropped: 0,
+        exit_reason: "monitor_timeout",
+      });
+    } finally {
+      await monApp.close();
+      await hold.close();
+    }
+  });
+
+  it("restart finalizes an orphaned row from the retained agent summary", async () => {
+    const dbPath = join(dir, `reconcile-summary-${Date.now()}.sqlite3`);
+    const hold = await startScriptedAgent("hold");
+    const first = await buildApp({
+      agentUrl: hold.url,
+      tokenFile,
+      dbPath,
+      recipesDir,
+      webOrigin: "http://localhost:5173",
+      monitorGraceMs: 300,
+    });
+    const addr = await first.listen({ host: "127.0.0.1", port: 0 });
+    const firstBase = addr.replace("[::1]", "127.0.0.1");
+    const created = (await (
+      await fetch(`${firstBase}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          script: "BEGIN { @x = count(); }",
+          duration_s: 1,
+        }),
+      })
+    ).json()) as { run_id: string };
+    await first.close();
+    await hold.close();
+
+    const summary = await startScriptedAgent("summary");
+    const second = await buildApp({
+      agentUrl: summary.url,
+      tokenFile,
+      dbPath,
+      recipesDir,
+      webOrigin: "http://localhost:5173",
+      monitorGraceMs: 300,
+    });
+    const addr2 = await second.listen({ host: "127.0.0.1", port: 0 });
+    const secondBase = addr2.replace("[::1]", "127.0.0.1");
+    try {
+      const body = await waitForState(secondBase, created.run_id, [
+        "completed",
+      ]);
+      expect(body.state).toBe("completed");
+      expect(body.summary).toEqual({
+        events_count: 1,
+        bytes: 5,
+        dropped: 0,
+        exit_reason: "completed",
+      });
+    } finally {
+      await second.close();
+      await summary.close();
+    }
+  });
+
+  it("restart fails an orphaned row when the agent lost the run", async () => {
+    const dbPath = join(dir, `reconcile-lost-${Date.now()}.sqlite3`);
+    const hold = await startScriptedAgent("hold");
+    const first = await buildApp({
+      agentUrl: hold.url,
+      tokenFile,
+      dbPath,
+      recipesDir,
+      webOrigin: "http://localhost:5173",
+      monitorGraceMs: 300,
+    });
+    const addr = await first.listen({ host: "127.0.0.1", port: 0 });
+    const firstBase = addr.replace("[::1]", "127.0.0.1");
+    const created = (await (
+      await fetch(`${firstBase}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          script: "BEGIN { @x = count(); }",
+          duration_s: 1,
+        }),
+      })
+    ).json()) as { run_id: string };
+    await first.close();
+    await hold.close();
+
+    const lost = await startScriptedAgent("http-only");
+    const second = await buildApp({
+      agentUrl: lost.url,
+      tokenFile,
+      dbPath,
+      recipesDir,
+      webOrigin: "http://localhost:5173",
+      monitorGraceMs: 300,
+    });
+    const addr2 = await second.listen({ host: "127.0.0.1", port: 0 });
+    const secondBase = addr2.replace("[::1]", "127.0.0.1");
+    try {
+      const body = await waitForState(secondBase, created.run_id, ["failed"]);
+      expect(body.state).toBe("failed");
+      expect(body.summary).toEqual({
+        events_count: 0,
+        bytes: 0,
+        dropped: 0,
+        exit_reason: "api_restart",
+      });
+    } finally {
+      await second.close();
+      await lost.close();
+    }
+  });
+});
+
 describe("run generation links", () => {
   async function freshGeneration(): Promise<{
     generation_id: string;

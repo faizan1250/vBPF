@@ -7,9 +7,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   closeDb,
+  failRunWithReason,
   generationExists,
   getGeneration,
   insertRun,
+  listUnfinishedRuns,
   markRunFailedIfActive,
   migrate,
   openDb,
@@ -365,6 +367,150 @@ describe("run and generation helpers", () => {
       migrate(db);
       expect(() => searchRecipes(db, 'cpu\0"*')).not.toThrow();
       expect(searchRecipes(db, "\0")).toEqual(searchRecipes(db, ""));
+    } finally {
+      closeDb(db);
+    }
+  });
+});
+
+describe("terminal run finalization (I-02)", () => {
+  function seedRun(
+    db: Database.Database,
+    id: string,
+    state: string,
+    startedAt = 100,
+  ): void {
+    insertRun(db, {
+      id,
+      generation_id: null,
+      script_sha256: "h",
+      script_text: "BEGIN {}",
+      edited: false,
+      duration_s: 10,
+      state,
+      started_at: startedAt,
+    });
+  }
+
+  function runState(db: Database.Database, id: string): string {
+    return (
+      db.prepare("SELECT state FROM runs WHERE id = ?").get(id) as {
+        state: string;
+      }
+    ).state;
+  }
+
+  it("ignores a second summary once the row is terminal", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      seedRun(db, "run_dup", "running");
+      persistRunSummary(db, "run_dup", {
+        events: 7,
+        bytes: 70,
+        dropped: 0,
+        exit_reason: "completed",
+      });
+      // Late duplicate from the second consumer (viewer relay vs monitor).
+      persistRunSummary(db, "run_dup", {
+        events: 99,
+        bytes: 99,
+        dropped: 99,
+        exit_reason: "failed",
+      });
+      const row = db
+        .prepare(
+          "SELECT state, events_count, bytes, dropped, exit_reason FROM runs WHERE id = ?",
+        )
+        .get("run_dup") as {
+        state: string;
+        events_count: number;
+        bytes: number;
+        dropped: number;
+        exit_reason: string;
+      };
+      expect(row).toMatchObject({
+        state: "completed",
+        events_count: 7,
+        bytes: 70,
+        dropped: 0,
+        exit_reason: "completed",
+      });
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("persists a summary onto a stopping row", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      seedRun(db, "run_stopping", "stopping");
+      persistRunSummary(db, "run_stopping", {
+        events: 3,
+        bytes: 30,
+        dropped: 0,
+        exit_reason: "cancelled",
+      });
+      const row = db
+        .prepare("SELECT state, exit_reason FROM runs WHERE id = ?")
+        .get("run_stopping") as { state: string; exit_reason: string };
+      expect(row).toEqual({ state: "stopping", exit_reason: "cancelled" });
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("fails with a reason only when the row is unfinished", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      seedRun(db, "run_live", "running");
+      seedRun(db, "run_stop", "stopping");
+      seedRun(db, "run_done", "completed");
+      expect(failRunWithReason(db, "run_live", "monitor_timeout")).toBe(true);
+      expect(failRunWithReason(db, "run_stop", "api_restart")).toBe(true);
+      expect(failRunWithReason(db, "run_live", "api_restart")).toBe(false);
+      expect(failRunWithReason(db, "run_done", "api_restart")).toBe(false);
+      expect(failRunWithReason(db, "run_missing", "api_restart")).toBe(false);
+      expect(runState(db, "run_live")).toBe("failed");
+      expect(runState(db, "run_stop")).toBe("failed");
+      const reason = (
+        db
+          .prepare("SELECT exit_reason FROM runs WHERE id = ?")
+          .get("run_stop") as { exit_reason: string }
+      ).exit_reason;
+      expect(reason).toBe("api_restart");
+      expect(runState(db, "run_done")).toBe("completed");
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("marks stopping rows failed when the stream dies", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      seedRun(db, "run_stopping", "stopping");
+      expect(markRunFailedIfActive(db, "run_stopping")).toBe(true);
+      expect(runState(db, "run_stopping")).toBe("failed");
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("lists only unfinished runs for the restart sweep", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      seedRun(db, "run_a", "running", 11);
+      seedRun(db, "run_b", "stopping", 22);
+      seedRun(db, "run_c", "completed", 33);
+      seedRun(db, "run_d", "failed", 44);
+      expect(listUnfinishedRuns(db)).toEqual([
+        { id: "run_a", duration_s: 10, started_at: 11 },
+        { id: "run_b", duration_s: 10, started_at: 22 },
+      ]);
     } finally {
       closeDb(db);
     }
