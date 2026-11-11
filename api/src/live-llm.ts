@@ -753,7 +753,7 @@ async function readCappedText(
     if (signal?.aborted) throw abortedError();
     const text = await res.text();
     if (signal?.aborted) throw abortedError();
-    if (text.length > maxBytes) {
+    if (Buffer.byteLength(text, "utf8") > maxBytes) {
       throw new Error(`response exceeds ${maxBytes} byte cap`);
     }
     return text;

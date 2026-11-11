@@ -203,6 +203,36 @@ describe("validator wildcard rules and total MaxProbes occurrence sum", () => {
   });
 });
 
+describe("validator script cap measures UTF-8 bytes", () => {
+  const skip = { catalog: { mode: "skip" } } as const;
+
+  it("rejects multi-byte scripts over 8 KiB with fewer chars", () => {
+    const script = `BEGIN { @x = count(); }\n// ${"é".repeat(4090)}`;
+    expect(script.length).toBeLessThanOrEqual(8 * 1024);
+    expect(Buffer.byteLength(script, "utf8")).toBeGreaterThan(8 * 1024);
+    const res = staticValidate(script, skip);
+    expect(res.code).toBe("VALIDATION_FAILED");
+    expect(res.errors).toEqual(["script exceeds 8 KB"]);
+  });
+
+  it("accepts multi-byte scripts within the byte budget", () => {
+    const script = "BEGIN { @x = count(); }\n// héllo wörld\n";
+    expect(Buffer.byteLength(script, "utf8")).toBeLessThanOrEqual(8 * 1024);
+    const res = staticValidate(script, skip);
+    expect(res.errors).toEqual([]);
+    expect(res.probes).toEqual(["BEGIN"]);
+  });
+
+  it("holds the ASCII boundary at exactly 8192 bytes", () => {
+    expect(staticValidate("a".repeat(8192), skip).errors).toEqual([
+      "no probes found",
+    ]);
+    expect(staticValidate("a".repeat(8193), skip).errors).toEqual([
+      "script exceeds 8 KB",
+    ]);
+  });
+});
+
 describe("runGenerate fail-fast on 503 CATALOG_UNAVAILABLE", () => {
   it("aborts after 1 LLM call without entering the retry loop", async () => {
     const dir = mkdtempSync(join(tmpdir(), "vbpf-gen-unready-"));

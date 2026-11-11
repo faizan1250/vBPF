@@ -15,7 +15,7 @@ no service code: every `make` target prints SKIP when its dir is absent.
 | eval-mock     | `make eval` with `LLM_MODE=mock`, no secrets                                                     |
 | docker-build  | Image build only — no push, no privileged run                                                    |
 
-Go floor: `agent/go.mod` (`go 1.26`, resolved to latest 1.26.x by
+Go floor: `agent/go.mod` (`go 1.26.11`, resolved from the file by
 `setup-go`); latest verified: Go 1.27.x. Node 22 LTS, pnpm 9.x pinned.
 
 ## Secrets policy: mock-only

@@ -710,7 +710,7 @@ export function staticValidate(
       probe_count: 0,
     };
   }
-  if (script.length > MAX_SCRIPT_BYTES) {
+  if (Buffer.byteLength(script, "utf8") > MAX_SCRIPT_BYTES) {
     return {
       code: "VALIDATION_FAILED",
       probes: [],

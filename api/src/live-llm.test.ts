@@ -567,6 +567,77 @@ describe("transport guards", () => {
     const leaked = JSON.stringify(health).includes("secret");
     expect(leaked).toBe(false);
   });
+
+  it("caps null-body responses in UTF-8 bytes", async () => {
+    const over = "é".repeat(40); // 40 chars but 80 UTF-8 bytes
+    expect(over.length).toBeLessThan(64);
+    expect(Buffer.byteLength(over, "utf8")).toBeGreaterThan(64);
+    const nullBody = (text: string): Response =>
+      ({
+        status: 200,
+        headers: new Headers(),
+        body: null,
+        text: async () => text,
+      }) as unknown as Response;
+    const infos: Array<{ obj: Record<string, unknown>; msg?: string }> = [];
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "ma",
+      },
+      fetchFn: stubFetch(() => nullBody(over), []),
+      logger: {
+        warn: () => {},
+        info: (obj: Record<string, unknown>, msg?: string) => {
+          infos.push({ obj, msg });
+        },
+      },
+      timeoutMs: 5000,
+      maxBodyBytes: 64,
+    });
+    await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+      LlmRequestError,
+    );
+    const call = infos.find((l) => l.msg === "live llm call")?.obj;
+    expect(call).toMatchObject({ status: 200, outcome: "too_large" });
+  });
+
+  it("accepts null-body responses within the byte budget", async () => {
+    const content = JSON.stringify(
+      LlmOutputSchema.parse({
+        script: "BEGIN { @x = count(); }\n",
+        chart_type: "events",
+        explanation: "héllo wörld",
+        duration_s: 10,
+        refusal: null,
+      }),
+    );
+    expect(Buffer.byteLength(content, "utf8")).toBeLessThanOrEqual(256 * 1024);
+    const envelope = JSON.stringify({
+      choices: [{ message: { content } }],
+    });
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "groq",
+        GROQ_API_KEY: "k",
+        LLM_GROQ_MODEL: "ma",
+      },
+      fetchFn: stubFetch(
+        () =>
+          ({
+            status: 200,
+            headers: new Headers(),
+            body: null,
+            text: async () => envelope,
+          }) as unknown as Response,
+        [],
+      ),
+      timeoutMs: 5000,
+    });
+    const out = await chain.generate("cpu?");
+    expect(out.script).toContain("BEGIN");
+  });
 });
 
 describe("deadline spans headers and body", () => {
