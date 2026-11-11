@@ -364,6 +364,7 @@ export async function buildApp(
   indexRecipes(database, loadRecipes(opts.recipesDir));
 
   const activeObservers = new Set<WebSocket>();
+  const observerTimers = new Set<NodeJS.Timeout>();
 
   // Persists the terminal summary from the agent's summary event. One update
   // per termination; stream end covers natural completion and timeout.
@@ -391,81 +392,122 @@ export async function buildApp(
   };
 
   const startRunObserver = (runId: string): void => {
-    let token: string;
-    try {
-      token = readAgentToken(opts.tokenFile);
-    } catch (err) {
-      app.log.warn({ err, runId }, "run observer failed to read agent token");
-      return;
-    }
-
     const target = agentWsUrl(
       opts.agentUrl,
       `/v1/runs/${encodeURIComponent(runId)}/stream`,
     );
-    let ws: WebSocket;
-    try {
-      ws = new WebSocket(target, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-    } catch (err) {
-      app.log.warn({ err, runId }, "failed to initialize run observer socket");
-      return;
-    }
-
-    activeObservers.add(ws);
+    const maxRetries = 3;
     let receivedSummary = false;
+    let attempts = 0;
 
-    const cleanup = (): void => {
-      activeObservers.delete(ws);
+    const markFailed = (): void => {
+      try {
+        markRunFailedIfActive(database, runId);
+      } catch (err) {
+        app.log.error(
+          { err, runId },
+          "failed to transition disconnected run to failed",
+        );
+      }
     };
 
-    ws.on("message", (data) => {
+    const scheduleRetry = (): void => {
+      if (receivedSummary || !database.open) return;
+      if (attempts >= maxRetries) {
+        markFailed();
+        return;
+      }
+      attempts += 1;
+      const delay = Math.min(100 * 2 ** (attempts - 1), 1000);
+      const timer = setTimeout(() => {
+        observerTimers.delete(timer);
+        connect();
+      }, delay);
+      observerTimers.add(timer);
+      if (typeof timer.unref === "function") timer.unref();
+    };
+
+    function connect(): void {
+      let token: string;
       try {
-        const envelope = EventEnvelopeSchema.parse(JSON.parse(data.toString()));
-        if (envelope.kind === "summary") {
-          const parsed = AgentRunSummarySchema.safeParse(envelope.data);
-          if (parsed.success) {
-            receivedSummary = true;
-            try {
-              persistRunSummary(database, runId, parsed.data);
-            } catch (err) {
-              app.log.error({ err, runId }, "run summary update failed");
-            }
-            cleanup();
-            try {
-              ws.close();
-            } catch {
-              /* already closed */
+        token = readAgentToken(opts.tokenFile);
+      } catch (err) {
+        app.log.warn({ err, runId }, "run observer failed to read agent token");
+        return;
+      }
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(target, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      } catch (err) {
+        app.log.warn(
+          { err, runId },
+          "failed to initialize run observer socket",
+        );
+        scheduleRetry();
+        return;
+      }
+      activeObservers.add(ws);
+      let settled = false;
+      const settle = (): void => {
+        if (settled) return;
+        settled = true;
+        activeObservers.delete(ws);
+        if (!receivedSummary) scheduleRetry();
+      };
+
+      ws.on("message", (data) => {
+        try {
+          const envelope = EventEnvelopeSchema.parse(
+            JSON.parse(data.toString()),
+          );
+          if (envelope.kind === "summary") {
+            const parsed = AgentRunSummarySchema.safeParse(envelope.data);
+            if (parsed.success) {
+              receivedSummary = true;
+              try {
+                persistRunSummary(database, runId, parsed.data);
+              } catch (err) {
+                app.log.error({ err, runId }, "run summary update failed");
+              }
+              activeObservers.delete(ws);
+              settled = true;
+              try {
+                ws.close();
+              } catch {
+                /* already closed */
+              }
             }
           }
+        } catch {
+          // Non-envelope or unparseable event: ignore
         }
-      } catch {
-        // Non-envelope or unparseable event: ignore
-      }
-    });
+      });
 
-    ws.on("close", () => {
-      cleanup();
-      if (!receivedSummary) {
+      // Close without a summary retries with backoff; a socket error forces
+      // the close path so an error without close cannot leave the run stuck.
+      ws.on("close", () => {
+        settle();
+      });
+
+      ws.on("error", (err) => {
+        app.log.debug({ err, runId }, "run observer websocket error");
         try {
-          markRunFailedIfActive(database, runId);
-        } catch (err) {
-          app.log.error(
-            { err, runId },
-            "failed to transition disconnected run to failed",
-          );
+          ws.close();
+        } catch {
+          /* already closed */
         }
-      }
-    });
+        setTimeout(settle, 500);
+      });
+    }
 
-    ws.on("error", (err) => {
-      cleanup();
-      app.log.debug({ err, runId }, "run observer websocket error");
-    });
+    connect();
   };
 
   app.addHook("onClose", async () => {
+    for (const timer of observerTimers) clearTimeout(timer);
+    observerTimers.clear();
     for (const ws of activeObservers) {
       try {
         ws.terminate();

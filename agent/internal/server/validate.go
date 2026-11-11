@@ -666,6 +666,10 @@ func validateWildcardShape(pr, provider string) string {
 	}
 	rest := strings.TrimPrefix(pr, provider+":")
 	if provider == "tracepoint" {
+		// No prefix-length floor: tracepoint patterns are catalog-bounded
+		// (subsys must match a known catalog entry, expansion capped at
+		// MaxProbes), while kprobe matches an unbounded kernel symbol
+		// namespace and needs the >=3 floor below.
 		subsys, event, ok := strings.Cut(rest, ":")
 		if !ok || subsys == "" || strings.Contains(event, ":") {
 			return "invalid wildcard pattern: " + pr
@@ -698,19 +702,34 @@ func suggestProbes(pr string, known map[string]bool) string {
 			searchPrefix = cleanTarget[:colon+1+second+1]
 		}
 	}
-	targetStem := cleanTarget
-	if len(targetStem) > len(provider)+4 {
-		targetStem = targetStem[:len(provider)+4]
-	}
-
+	// Prefer the full pre-* prefix so long names narrow to their own
+	// family before falling back to the short stem and provider scope.
 	var candidates []string
 	for k := range known {
+		if !strings.HasPrefix(k, searchPrefix) {
+			continue
+		}
 		if provider == "tracepoint" {
-			if strings.HasPrefix(k, searchPrefix) {
+			if strings.HasPrefix(k, cleanTarget) {
 				candidates = append(candidates, k)
 			}
-		} else if strings.HasPrefix(k, provider+":") && strings.HasPrefix(k, targetStem) {
+		} else if strings.HasPrefix(k, cleanTarget) {
 			candidates = append(candidates, k)
+		}
+	}
+	if len(candidates) == 0 {
+		targetStem := cleanTarget
+		if len(targetStem) > len(provider)+4 {
+			targetStem = targetStem[:len(provider)+4]
+		}
+		for k := range known {
+			if provider == "tracepoint" {
+				if strings.HasPrefix(k, searchPrefix) {
+					candidates = append(candidates, k)
+				}
+			} else if strings.HasPrefix(k, provider+":") && strings.HasPrefix(k, targetStem) {
+				candidates = append(candidates, k)
+			}
 		}
 	}
 	if len(candidates) == 0 {

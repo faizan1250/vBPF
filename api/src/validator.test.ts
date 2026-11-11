@@ -173,6 +173,32 @@ describe("validator wildcard rules and total MaxProbes occurrence sum", () => {
     expect(res.errors.join("; ")).toContain("did you mean: tracepoint:block:");
   });
 
+  it("prefers full pre-star prefix for suggestions", () => {
+    const fullKnown = [
+      "kprobe:vfs_read",
+      "kprobe:vfs_readlink",
+      "kprobe:vfs_write",
+    ];
+    const res = staticValidate("kprobe:vfs_readlin { @x = count(); }", {
+      catalog: { mode: "enforce", known: fullKnown },
+    });
+    expect(res.code).toBe("PROBE_NOT_FOUND");
+    expect(res.errors.join("; ")).toContain("kprobe:vfs_readlink");
+    expect(res.errors.join("; ")).not.toContain("kprobe:vfs_write");
+  });
+
+  it("tracepoint short prefixes stay catalog-bounded without a floor", () => {
+    const short = staticValidate("tracepoint:block:a* { @x = count(); }", {
+      catalog: { mode: "enforce", known },
+    });
+    expect(short.errors.join("; ")).not.toContain("wildcard too broad");
+    const kprobeShort = staticValidate("kprobe:vf* { @x = count(); }", {
+      catalog: { mode: "enforce", known },
+    });
+    expect(kprobeShort.code).toBe("VALIDATION_FAILED");
+    expect(kprobeShort.errors.join("; ")).toContain("wildcard too broad");
+  });
+
   it("counts occurrences toward MaxProbes in enforce and skip modes", () => {
     const exactly50 =
       "tracepoint:block:block_rq_issue { @x = count(); }\n".repeat(MAX_PROBES);
