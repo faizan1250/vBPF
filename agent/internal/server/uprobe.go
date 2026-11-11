@@ -293,7 +293,7 @@ func (c *UprobeChecker) VerifyProbes(ctx context.Context, probes []string) []str
 	chk := c.withDefaults()
 	var errs []string
 	for _, pr := range probes {
-		_, target, symbol, ok := parseUprobeProbe(pr)
+		provider, target, symbol, ok := parseUprobeProbe(pr)
 		if !ok {
 			continue
 		}
@@ -302,14 +302,14 @@ func (c *UprobeChecker) VerifyProbes(ctx context.Context, probes []string) []str
 				errs = append(errs, err.Error())
 				continue
 			}
-			lines, err := chk.ListProbe(ctx, "uprobe:"+target+":"+symbol)
+			lines, err := chk.ListProbe(ctx, provider+":"+target+":"+symbol)
 			if err != nil || len(lines) == 0 {
-				errs = append(errs, fmt.Sprintf("probe not found: %s (check available symbols with `bpftrace -l 'uprobe:%s:*'`)", pr, target))
+				errs = append(errs, fmt.Sprintf("probe not found: %s (check available symbols with `bpftrace -l '%s:%s:*'`)", pr, provider, target))
 			}
 			continue
 		}
 
-		lines, err := chk.ListProbe(ctx, "uprobe:libc:"+symbol)
+		lines, err := chk.ListProbe(ctx, provider+":libc:"+symbol)
 		if err == nil && len(lines) > 0 {
 			continue
 		}
@@ -318,9 +318,9 @@ func (c *UprobeChecker) VerifyProbes(ctx context.Context, probes []string) []str
 			errs = append(errs, fmt.Sprintf("probe not found: %s (unable to resolve libc path: %s)", pr, rerr.Error()))
 			continue
 		}
-		lines, err = chk.ListProbe(ctx, "uprobe:"+resolved+":"+symbol)
+		lines, err = chk.ListProbe(ctx, provider+":"+resolved+":"+symbol)
 		if err != nil || len(lines) == 0 {
-			errs = append(errs, fmt.Sprintf("probe not found: %s (symbol missing in %s; inspect with `bpftrace -l 'uprobe:%s:*'`)", pr, resolved, resolved))
+			errs = append(errs, fmt.Sprintf("probe not found: %s (symbol missing in %s; inspect with `bpftrace -l '%s:%s:*'`)", pr, resolved, provider, resolved))
 		}
 	}
 	return errs

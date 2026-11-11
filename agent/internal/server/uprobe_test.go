@@ -132,7 +132,7 @@ func TestUprobeHostFSChecksAndListProbe(t *testing.T) {
 		},
 	})
 
-	// Valid uretprobe queries `uprobe:<path>:<symbol>` via -l and still executes dry-run.
+	// Valid uretprobe queries `uretprobe:<path>:<symbol>` via -l and still executes dry-run.
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, authReq(t, s, "POST", "/v1/validate", `{"script":"uretprobe:/lib/x86_64-linux-gnu/libc.so.6:getaddrinfo { @x = count(); }"}`))
 	require.Equal(t, http.StatusOK, w.Code)
@@ -144,7 +144,7 @@ func TestUprobeHostFSChecksAndListProbe(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &valOut))
 	require.True(t, valOut.OK, "errors=%v", valOut.Errors)
 	require.Equal(t, 1, valOut.ProbeCount)
-	require.Equal(t, []string{"uprobe:" + validPath + ":getaddrinfo"}, listed)
+	require.Equal(t, []string{"uretprobe:" + validPath + ":getaddrinfo"}, listed)
 	require.Equal(t, 1, dryRunCalls)
 
 	// Missing symbol on explicit path returns PROBE_NOT_FOUND on /v1/runs without calling dry-run.
@@ -300,6 +300,82 @@ func TestUprobeLibcAliasFallback(t *testing.T) {
 	status, code := postRunCode(t, s, "uretprobe:libc:missing_fn { @x = count(); }")
 	require.Equal(t, http.StatusBadRequest, status)
 	require.Equal(t, "PROBE_NOT_FOUND", code)
+}
+
+func TestUprobeProviderPreservedInListQuery(t *testing.T) {
+	root := t.TempDir()
+	const validPath = "/lib/x86_64-linux-gnu/libc.so.6"
+	makeFakeLibcFile(t, root, validPath, 0o444)
+
+	// Stub only knows return probes: entry queries come back empty.
+	var queried []string
+	s := testServer(t, Config{
+		UprobeCheck: &UprobeChecker{
+			FSRoot:      root,
+			IsRootOwned: func(fs.FileInfo) bool { return true },
+			ListProbe: func(ctx context.Context, probe string) ([]string, error) {
+				queried = append(queried, probe)
+				if strings.HasPrefix(probe, "uretprobe:") && strings.HasSuffix(probe, ":getaddrinfo") {
+					return []string{probe}, nil
+				}
+				return nil, nil
+			},
+		},
+		DryRun: func(ctx context.Context, script string) []string { return nil },
+	})
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, authReq(t, s, "POST", "/v1/validate", `{"script":"uretprobe:/lib/x86_64-linux-gnu/libc.so.6:getaddrinfo { @x = count(); }"}`))
+	var okOut struct {
+		OK     bool     `json:"ok"`
+		Errors []string `json:"errors"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &okOut))
+	require.True(t, okOut.OK, "errors=%v", okOut.Errors)
+	require.Equal(t, []string{"uretprobe:" + validPath + ":getaddrinfo"}, queried)
+
+	// Same symbol as entry probe is unknown to the stub: entry vs return distinguished.
+	status, code := postRunCode(t, s, "uprobe:/lib/x86_64-linux-gnu/libc.so.6:getaddrinfo { @x = count(); }")
+	require.Equal(t, http.StatusBadRequest, status)
+	require.Equal(t, "PROBE_NOT_FOUND", code)
+	require.Equal(t, []string{
+		"uretprobe:" + validPath + ":getaddrinfo",
+		"uprobe:" + validPath + ":getaddrinfo",
+	}, queried)
+}
+
+func TestUretprobeLibcAliasPreservesProvider(t *testing.T) {
+	root := t.TempDir()
+	makeFakeLibcFile(t, root, "/lib/x86_64-linux-gnu/libc.so.6", 0o444)
+
+	var queried []string
+	s := testServer(t, Config{
+		UprobeCheck: &UprobeChecker{
+			FSRoot:      root,
+			IsRootOwned: func(fs.FileInfo) bool { return true },
+			ListProbe: func(ctx context.Context, probe string) ([]string, error) {
+				queried = append(queried, probe)
+				if probe == "uretprobe:/lib/x86_64-linux-gnu/libc.so.6:malloc" {
+					return []string{probe}, nil
+				}
+				return nil, nil
+			},
+		},
+	})
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, authReq(t, s, "POST", "/v1/validate", `{"script":"uretprobe:libc:malloc { @x = count(); }"}`))
+	require.Equal(t, http.StatusOK, w.Code)
+	var out struct {
+		OK     bool     `json:"ok"`
+		Errors []string `json:"errors"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
+	require.True(t, out.OK, "errors=%v", out.Errors)
+	require.Equal(t, []string{
+		"uretprobe:libc:malloc",
+		"uretprobe:/lib/x86_64-linux-gnu/libc.so.6:malloc",
+	}, queried)
 }
 
 func buildTestListBinary(t *testing.T) string {
