@@ -401,12 +401,16 @@ func (run *Run) publish(ev parser.Event) {
 		run.rateWin = now
 		run.rateN = 0
 	}
-	if run.rateN >= maxPerSecond {
-		run.dropped++
-		run.maybeEmitLostLocked(now)
-		return
+	// Terminal summary is never rate-limited: dropping it loses finalState
+	// and stalls stream consumers waiting for summary completion.
+	if ev.Kind != parser.KindSummary {
+		if run.rateN >= maxPerSecond {
+			run.dropped++
+			run.maybeEmitLostLocked(now)
+			return
+		}
+		run.rateN++
 	}
-	run.rateN++
 	if ev.Seq > run.lastSeq || (ev.Kind == parser.KindStatus && ev.Seq >= run.lastSeq) {
 		run.lastSeq = ev.Seq
 	}
