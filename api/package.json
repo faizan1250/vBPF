@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx --watch src/index.ts",
+    "build": "tsc -p tsconfig.build.json",
     "eval": "tsx src/eval-cli.ts",
     "test": "vitest",
     "typecheck": "tsc --noEmit"
