@@ -324,6 +324,11 @@ export async function buildApp(
   db?: Database.Database,
 ): Promise<FastifyInstance> {
   const app = Fastify({
+    // Single trusted proxy hop: in compose only the nginx front door reaches
+    // the API (only web publishes ports), so X-Forwarded-For carries the real
+    // client IP and per-IP rate limiting works. Direct dev access stays
+    // loopback-only via the Host gate below.
+    trustProxy: true,
     logger: {
       level: process.env["LOG_LEVEL"] ?? "info",
       redact: {
