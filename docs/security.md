@@ -1,17 +1,24 @@
 # Security
 
-Threat model: vBPF is a **local loopback service**. The API and agent bind
-`127.0.0.1` only; there is no multi-user auth on the API itself — any local
-process can call it. The agent runs as **root** and executes kernel probes,
+Threat model: vBPF is a **local loopback service**. Natively the API and
+agent bind `127.0.0.1` only; there is no multi-user auth on the API
+itself — any local process can call it. (In the compose quickstart the
+agent binds the container wildcard `0.0.0.0` under the explicit
+`AGENT_ALLOW_WILDCARD_BIND=1` opt-in because each container has its own
+loopback; no agent or API port is published to the host — see
+[Compose quickstart network](#compose-quickstart-network).) The agent runs as **root** and executes kernel probes,
 so treat the host accordingly. The LLM is untrusted: its output is validated
 twice (API static checks + agent re-validation and dry-run compile) and never
 executed without human confirmation.
 
 ## Network surface
 
-- API and agent listen on loopback only; the agent refuses non-loopback bind
-  addresses. No TLS (loopback); put a reverse proxy in front if you ever
-  expose the UI beyond localhost.
+- API and agent listen on loopback by default; the agent refuses
+  non-loopback bind addresses except the `0.0.0.0`/`::` wildcard when
+  explicitly opted in with `AGENT_ALLOW_WILDCARD_BIND=1` (compose sets
+  this because each container has its own loopback), and a specific
+  non-loopback address is always refused. No TLS (loopback); put a
+  reverse proxy in front if you ever expose the UI beyond localhost.
 - CORS origin is exactly `WEB_ORIGIN`, never `*`. Requests carrying any other
   `Origin` get `403 FORBIDDEN`.
 - `Host` must be loopback (`127.0.0.1`, `localhost`, `::1`, any port).

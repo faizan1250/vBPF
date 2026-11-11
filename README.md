@@ -84,7 +84,7 @@ It is built **on top of** bpftrace; it does not replace it.
 - **Defense in depth**: blocklist and allowlist, dry-run compile, kernel verifier, runtime limits, independent re-validation in the privileged agent.
 - **Hard limits**: duration, output rate, output size, map keys, probe count, and concurrency.
 - **Clean teardown**: probes and child processes are always killed, including on crashes.
-- **Local-first**: the agent and API bind to loopback; run output never leaves your machine by default.
+- **Local-first**: the agent and API bind to loopback by default; run output never leaves your machine by default.
 - **History and export**: re-run past probes and export history entries as JSON. History lives in browser localStorage; there are no server-side sessions yet.
 - **Recipe-only mode**: works without an API key (browse and run recipes).
 
@@ -214,7 +214,7 @@ make setup                    # install dependencies, build the agent
 ./scripts/check-env.sh        # verify kernel, BTF, bpftrace, mounts
 
 # terminal 1: privileged agent (use sudo, or `wsl -u root` from Windows)
-sudo ./scripts/dev-agent.sh start
+sudo ./scripts/dev-agent.sh serve
 
 # terminal 2: API
 make api-dev
@@ -225,7 +225,7 @@ make web-dev
 
 Web UI: <http://localhost:5173>. API: <http://localhost:8080>. Agent: `127.0.0.1:8787`.
 
-Stop the agent with `./scripts/dev-agent.sh stop`.
+Stop the agent with `Ctrl-C` (it runs in the foreground; the agent CLI has no `stop` subcommand — only `run` and `serve`).
 
 ### First run
 
@@ -418,7 +418,7 @@ Common tasks (run inside Linux or WSL, from the repository root):
 | Lint and typecheck                      | `make lint`                                                           |
 | Unit and contract tests (no root)       | `make test`                                                           |
 | Integration tests (real bpftrace, root) | `sudo make test-integration`                                          |
-| Run the agent / API / web               | `sudo ./scripts/dev-agent.sh start` / `make api-dev` / `make web-dev` |
+| Run the agent / API / web               | `sudo ./scripts/dev-agent.sh serve` / `make api-dev` / `make web-dev` |
 | End-to-end test (mocked agent)          | `pnpm -C web run test:e2e`                                            |
 | Evaluation (mock-only)                  | `make eval`                                                           |
 
