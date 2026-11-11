@@ -28,7 +28,6 @@ import {
   parseChain,
   parseUsage,
   resetDeprecatedGenericModelWarnForTests,
-  resetJsonDowngradeForTests,
   validateBaseUrl,
 } from "./live-llm.js";
 import { LlmOutputSchema } from "./llm.js";
@@ -1500,7 +1499,6 @@ describe("json modes", () => {
   });
 
   it("json_object sends response_format and keeps JSON in the system message", async () => {
-    resetJsonDowngradeForTests();
     const stub = await startJsonStub(() => ({
       status: 200,
       json: { choices: [{ message: { content: validArgs() } }] },
@@ -1518,12 +1516,10 @@ describe("json modes", () => {
       expect(messages[0]?.content).toContain("JSON");
     } finally {
       await stub.close();
-      resetJsonDowngradeForTests();
     }
   });
 
   it("tool sends one submit_probe tool with forced choice", async () => {
-    resetJsonDowngradeForTests();
     const stub = await startJsonStub(() => ({
       status: 200,
       json: toolEnvelope(validArgs()),
@@ -1551,12 +1547,10 @@ describe("json modes", () => {
       });
     } finally {
       await stub.close();
-      resetJsonDowngradeForTests();
     }
   });
 
   it("none sends no shaping fields", async () => {
-    resetJsonDowngradeForTests();
     const stub = await startJsonStub(() => ({
       status: 200,
       json: { choices: [{ message: { content: validArgs() } }] },
@@ -1572,7 +1566,6 @@ describe("json modes", () => {
       expect(body).not.toHaveProperty("tool_choice");
     } finally {
       await stub.close();
-      resetJsonDowngradeForTests();
     }
   });
 
@@ -1680,7 +1673,6 @@ describe("json modes", () => {
   });
 
   it("downgrades to none on a json-mode 400 and retries once", async () => {
-    resetJsonDowngradeForTests();
     const warns: string[] = [];
     const stub = await startJsonStub((body) => {
       if ("response_format" in body || "tools" in body) {
@@ -1719,12 +1711,10 @@ describe("json modes", () => {
       ]);
     } finally {
       await stub.close();
-      resetJsonDowngradeForTests();
     }
   });
 
   it("downgrades tool mode on a 422 mentioning tool", async () => {
-    resetJsonDowngradeForTests();
     const warns: string[] = [];
     const stub = await startJsonStub((body) => {
       if ("tools" in body || "tool_choice" in body) {
@@ -1750,12 +1740,10 @@ describe("json modes", () => {
       expect(warns).toHaveLength(1);
     } finally {
       await stub.close();
-      resetJsonDowngradeForTests();
     }
   });
 
   it("keeps other 400s on the model-fallback path", async () => {
-    resetJsonDowngradeForTests();
     const warns: string[] = [];
     const stub = await startJsonStub(() => ({
       status: 400,
@@ -1770,7 +1758,45 @@ describe("json modes", () => {
       expect(warns).toHaveLength(0);
     } finally {
       await stub.close();
-      resetJsonDowngradeForTests();
+    }
+  });
+
+  it("keeps downgrade scoped to the chain that triggered it", async () => {
+    const warnsFirst: string[] = [];
+    const warnsSecond: string[] = [];
+    const stub = await startJsonStub((body) => {
+      if ("response_format" in body || "tools" in body) {
+        return {
+          status: 400,
+          json: {
+            error: {
+              message: "response_format json_object is not supported",
+              code: "bad_request",
+            },
+          },
+        };
+      }
+      return {
+        status: 200,
+        json: { choices: [{ message: { content: validArgs() } }] },
+      };
+    });
+    try {
+      const first = chainFor(stub.baseUrl, "json_object", warnsFirst);
+      const out = await first.generate("cpu?");
+      expect(out.script).toContain("BEGIN");
+      expect(stub.requests).toHaveLength(2);
+      expect(warnsFirst).toHaveLength(1);
+
+      const second = chainFor(stub.baseUrl, "json_object", warnsSecond);
+      const out2 = await second.generate("cpu?");
+      expect(out2.script).toContain("BEGIN");
+      expect(stub.requests).toHaveLength(4);
+      expect(stub.requests[2]).toHaveProperty("response_format");
+      expect(stub.requests[3]).not.toHaveProperty("response_format");
+      expect(warnsSecond).toHaveLength(1);
+    } finally {
+      await stub.close();
     }
   });
 });

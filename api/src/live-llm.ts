@@ -79,17 +79,6 @@ export function discoverJsonMode(
 
 const DOWNGRADE_BODY_RE = /response_format|json_object|json mode|tool/i;
 
-// Per-process downgrade: once a provider rejects JSON shaping, it stays on
-// `none` for every chain in this process. Warned set keeps the log to one.
-const downgradedJsonProviders = new Set<string>();
-const downgradeWarnedProviders = new Set<string>();
-
-/** Test-only reset for the per-process JSON-mode downgrade. */
-export function resetJsonDowngradeForTests(): void {
-  downgradedJsonProviders.clear();
-  downgradeWarnedProviders.clear();
-}
-
 // Short system prompt for /api/explain. Only the script text is ever sent;
 // run output (process names, paths, command lines) is never included.
 export const EXPLAIN_SYSTEM = [
@@ -862,6 +851,9 @@ export class LiveLlmChain implements LlmClient {
   private readonly semaphore: Semaphore;
   private readonly logger: ChainLogger;
   private attribution: string;
+  // Per-chain downgrade: once a provider rejects JSON shaping, it stays on
+  // `none` for this chain only. Warned set keeps the log to one per chain.
+  private readonly downgradeWarnedProviders = new Set<string>();
 
   constructor(opts: ChainOptions = {}) {
     const env = opts.env ?? process.env;
@@ -885,7 +877,6 @@ export class LiveLlmChain implements LlmClient {
         ...(primary === null ? [] : [primary]),
         ...discoverFallbackModels(name, env),
       ];
-      const downgraded = downgradedJsonProviders.has(name.toLowerCase());
       return {
         name,
         baseUrl: resolved.baseUrl,
@@ -895,7 +886,7 @@ export class LiveLlmChain implements LlmClient {
         active: 0,
         models,
         cooldownUntil: 0,
-        jsonMode: downgraded ? "none" : discoverJsonMode(name, env),
+        jsonMode: discoverJsonMode(name, env),
         ...(resolved.reason !== undefined ? { reason: resolved.reason } : {}),
       } satisfies ProviderRuntime;
     });
@@ -1483,11 +1474,10 @@ export class LiveLlmChain implements LlmClient {
       DOWNGRADE_BODY_RE.test(first.errorBody ?? "")
     ) {
       p.jsonMode = "none";
-      downgradedJsonProviders.add(p.name.toLowerCase());
-      if (!downgradeWarnedProviders.has(p.name.toLowerCase())) {
-        downgradeWarnedProviders.add(p.name.toLowerCase());
+      if (!this.downgradeWarnedProviders.has(p.name.toLowerCase())) {
+        this.downgradeWarnedProviders.add(p.name.toLowerCase());
         this.logger.warn(
-          `live LLM provider "${p.name}" rejected JSON mode; downgraded to none for this process`,
+          `live LLM provider "${p.name}" rejected JSON mode; downgraded to none for this chain`,
         );
       }
       const retry = await this.doPostChat(
