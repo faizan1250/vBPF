@@ -131,6 +131,7 @@ export function validateScript(script: string): Promise<ValidateResult> {
 export function createRun(
   script: string,
   durationS: number,
+  generationId?: string,
 ): Promise<CreateRunResult> {
   const oversize = rejectOversizeScript(script);
   if (oversize) return Promise.reject(oversize);
@@ -141,6 +142,9 @@ export function createRun(
   return postJson<CreateRunResult>("/api/runs", {
     script,
     duration_s: duration,
+    ...(generationId !== undefined && generationId !== ""
+      ? { generation_id: generationId }
+      : {}),
   });
 }
 

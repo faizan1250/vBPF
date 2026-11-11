@@ -113,6 +113,51 @@ describe("script size cap", () => {
   });
 });
 
+describe("createRun generation binding", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("posts generation_id when provided", async () => {
+    let body: Record<string, unknown> = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init: unknown) => {
+        body = JSON.parse((init as { body: string }).body) as Record<
+          string,
+          unknown
+        >;
+        return Response.json({ run_id: "run_1", state: "running" });
+      }),
+    );
+    await expect(createRun("BEGIN { }", 10, "gen_123")).resolves.toEqual({
+      run_id: "run_1",
+      state: "running",
+    });
+    expect(body).toMatchObject({
+      script: "BEGIN { }",
+      duration_s: 10,
+      generation_id: "gen_123",
+    });
+  });
+
+  it("omits generation_id when absent", async () => {
+    let body: Record<string, unknown> = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init: unknown) => {
+        body = JSON.parse((init as { body: string }).body) as Record<
+          string,
+          unknown
+        >;
+        return Response.json({ run_id: "run_1", state: "running" });
+      }),
+    );
+    await createRun("BEGIN { }", 10);
+    expect(body).not.toHaveProperty("generation_id");
+  });
+});
+
 describe("explainScript", () => {
   afterEach(() => {
     vi.unstubAllGlobals();

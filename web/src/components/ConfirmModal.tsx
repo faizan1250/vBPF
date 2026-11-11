@@ -39,7 +39,11 @@ export function ConfirmModal() {
           state: "running",
         });
       }
-      return createRun(request.script, request.durationS);
+      return createRun(
+        request.script,
+        request.durationS,
+        generation?.generation_id,
+      );
     },
     onSuccess: (result) => {
       clearRun();
