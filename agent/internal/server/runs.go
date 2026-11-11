@@ -20,10 +20,11 @@ import (
 type RunnerFunc func(ctx context.Context, opts runner.Options, emit func(parser.Event) error) error
 
 const (
-	subBuffer     = 256
-	maxPerSecond  = 500 // sustained event rate forwarded to consumers
-	lostThrottle  = time.Second
-	flushInterval = 100 * time.Millisecond // 10 Hz stream batches
+	subBuffer      = 256
+	controlReserve = 64  // live-queue headroom above subBuffer reserved for control events
+	maxPerSecond   = 500 // sustained event rate forwarded to consumers
+	lostThrottle   = time.Second
+	flushInterval  = 100 * time.Millisecond // 10 Hz stream batches
 )
 
 // subscriber receives broadcast events with drop-oldest backpressure.
@@ -45,7 +46,7 @@ type Run struct {
 	finishedAt   time.Time
 	historyTimer *time.Timer
 	subs         map[*subscriber]struct{}
-	dropped      uint64
+	dropped      uint64 // data-plane events shed; control events are never counted here
 	lastLost     time.Time
 	lastSeq      uint64
 	rateN        int
@@ -54,6 +55,8 @@ type Run struct {
 	summarySeq   uint64
 	summaryTs    int64
 	runErr       error
+	log          *zerolog.Logger
+	clock        func() time.Time // wall clock unless overridden in tests
 }
 
 func newRunID() string {
@@ -182,6 +185,7 @@ func (r *Registry) Start(ctx context.Context, script string, duration time.Durat
 		done:      make(chan struct{}),
 		subs:      make(map[*subscriber]struct{}),
 		rateWin:   time.Now(),
+		log:       &log,
 	}
 	r.active[id] = run
 	r.mu.Unlock()
@@ -249,6 +253,18 @@ func (r *Registry) finishRun(run *Run) {
 	r.pruneExpiredHistoriesLocked(now)
 
 	run.mu.Lock()
+	if run.summary == nil && run.runErr == nil {
+		r.logger.Error().Str("run_id", run.id).Msg("run ended without summary; marking failed (no_summary)")
+		noSummary := parser.Summary{ExitReason: "no_summary"}
+		run.summary = &noSummary
+		run.lastSeq++
+		sumEv := parser.Summarize(run.id, run.lastSeq, noSummary)
+		run.history = append(run.history, sumEv)
+		run.historyBytes += eventBytes(sumEv)
+		run.summarySeq = sumEv.Seq
+		run.summaryTs = sumEv.Ts
+		run.deliverControlLocked(sumEv)
+	}
 	run.state = finalState(run)
 	run.finishedAt = now
 	if r.closed {
@@ -372,7 +388,10 @@ func finalState(run *Run) string {
 	if run.runErr != nil {
 		return "failed"
 	}
-	return "completed"
+	// No summary and no run error: the run never reported a terminal outcome.
+	// finishRun synthesizes a no_summary summary for this case; reaching here
+	// still means failure, never completion.
+	return "failed"
 }
 
 // Stop cancels a run; runner escalates SIGINT to SIGKILL on its grace period.
@@ -393,28 +412,45 @@ func (r *Registry) Stop(id string) bool {
 }
 
 // publish forwards one event with rate cap and drop-oldest fan-out.
+// Control events bypass the rate window entirely: never throttled, never
+// counted, always appended to history and delivered ahead of data.
 func (run *Run) publish(ev parser.Event) {
-	now := time.Now()
+	clock := run.clock
+	if clock == nil {
+		clock = time.Now
+	}
+	now := clock()
 	run.mu.Lock()
 	defer run.mu.Unlock()
+	if ev.Kind.IsControl() {
+		run.publishControlLocked(ev)
+		return
+	}
 	if now.Sub(run.rateWin) >= time.Second {
 		run.rateWin = now
 		run.rateN = 0
 	}
-	// Terminal summary is never rate-limited: dropping it loses finalState
-	// and stalls stream consumers waiting for summary completion.
-	if ev.Kind != parser.KindSummary {
-		if run.rateN >= maxPerSecond {
-			run.dropped++
-			run.maybeEmitLostLocked(now)
+	if run.rateN >= maxPerSecond {
+		run.dropped++
+		run.maybeEmitLostLocked(now)
+		return
+	}
+	run.rateN++
+	run.appendLocked(ev)
+	run.deliverLocked(ev)
+	run.maybeEmitLostLocked(now)
+}
+
+// publishControlLocked records a control event; caller holds run.mu.
+// A second summary is ignored and logged, keeping exactly one per run.
+func (run *Run) publishControlLocked(ev parser.Event) {
+	if ev.Kind == parser.KindSummary {
+		if run.summary != nil {
+			if run.log != nil {
+				run.log.Error().Str("run_id", run.id).Uint64("seq", ev.Seq).Msg("duplicate summary ignored")
+			}
 			return
 		}
-		run.rateN++
-	}
-	if ev.Seq > run.lastSeq || (ev.Kind == parser.KindStatus && ev.Seq >= run.lastSeq) {
-		run.lastSeq = ev.Seq
-	}
-	if ev.Kind == parser.KindSummary {
 		if s, ok := ev.Data.(parser.Summary); ok {
 			cp := s
 			run.summary = &cp
@@ -422,24 +458,95 @@ func (run *Run) publish(ev parser.Event) {
 			run.summaryTs = ev.Ts
 		}
 	}
+	run.appendLocked(ev)
+	run.deliverControlLocked(ev)
+}
+
+// appendLocked records sequence and history; caller holds run.mu.
+func (run *Run) appendLocked(ev parser.Event) {
+	if ev.Seq > run.lastSeq || (ev.Kind == parser.KindStatus && ev.Seq >= run.lastSeq) {
+		run.lastSeq = ev.Seq
+	}
 	run.history = append(run.history, ev)
 	run.historyBytes += eventBytes(ev)
+}
+
+// dataWatermark caps how many queued events data may occupy per subscriber.
+// The physical channel is larger by controlReserve so control always has room.
+func dataWatermark(sub *subscriber) int {
+	if cap(sub.ch) < subBuffer {
+		return cap(sub.ch)
+	}
+	return subBuffer
+}
+
+// deliverLocked enqueues a data event on every subscriber, shedding the oldest
+// queued data event when at the watermark. Queued control is never evicted for
+// data; with only control queued the data event itself is shed. Caller holds mu.
+func (run *Run) deliverLocked(ev parser.Event) {
 	for sub := range run.subs {
+		if len(sub.ch) < dataWatermark(sub) {
+			select {
+			case sub.ch <- ev:
+				continue
+			default:
+			}
+		}
+		if !run.evictOldestDataLocked(sub) {
+			run.dropped++
+			continue
+		}
 		select {
 		case sub.ch <- ev:
 		default:
-			select {
-			case <-sub.ch:
-			default:
-			}
-			select {
-			case sub.ch <- ev:
-			default:
-			}
 			run.dropped++
 		}
 	}
-	run.maybeEmitLostLocked(now)
+}
+
+// deliverControlLocked enqueues a control event on every subscriber, evicting
+// queued data first. The fallthrough only triggers when the queue already
+// holds a full buffer of control events, which bounded control emission per
+// run makes unreachable. Caller holds run.mu.
+func (run *Run) deliverControlLocked(ev parser.Event) {
+	for sub := range run.subs {
+		select {
+		case sub.ch <- ev:
+			continue
+		default:
+		}
+		run.evictOldestDataLocked(sub)
+		select {
+		case sub.ch <- ev:
+		default:
+			if run.log != nil {
+				run.log.Error().Str("run_id", run.id).Str("kind", string(ev.Kind)).Msg("control event shed: subscriber queue holds only control events")
+			}
+		}
+	}
+}
+
+// evictOldestDataLocked drops the oldest queued data event for sub, preserving
+// the order of everything else. Caller holds run.mu.
+func (run *Run) evictOldestDataLocked(sub *subscriber) bool {
+	evicted := false
+	var rest []parser.Event
+	for {
+		select {
+		case ev := <-sub.ch:
+			if !evicted && !ev.Kind.IsControl() {
+				evicted = true
+				run.dropped++
+				continue
+			}
+			rest = append(rest, ev)
+		default:
+			for _, ev := range rest {
+				sub.ch <- ev
+			}
+			return evicted
+		}
+	}
 }
 
 func (run *Run) maybeEmitLostLocked(now time.Time) {
@@ -452,18 +559,13 @@ func (run *Run) maybeEmitLostLocked(now time.Time) {
 	run.lastLost = now
 	run.history = append(run.history, lost)
 	run.historyBytes += eventBytes(lost)
-	for sub := range run.subs {
-		select {
-		case sub.ch <- lost:
-		default:
-		}
-	}
+	run.deliverControlLocked(lost)
 }
 
 // subscribe replays history (or synthesized terminal summary after eviction/expiry)
 // then streams live events.
 func (run *Run) subscribe() (*subscriber, []parser.Event) {
-	sub := &subscriber{ch: make(chan parser.Event, subBuffer)}
+	sub := &subscriber{ch: make(chan parser.Event, subBuffer+controlReserve)}
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	var hist []parser.Event
@@ -519,10 +621,21 @@ func (run *Run) stopHistoryTimerLocked() {
 func (run *Run) clearHistoryLocked() {
 	run.stopHistoryTimerLocked()
 	if len(run.history) > 0 {
-		run.dropped += uint64(len(run.history))
+		run.dropped += countDataEvents(run.history)
 	}
 	run.history = nil
 	run.historyBytes = 0
+}
+
+// countDataEvents counts data-plane events; control events never feed dropped.
+func countDataEvents(evs []parser.Event) uint64 {
+	var n uint64
+	for _, ev := range evs {
+		if !ev.Kind.IsControl() {
+			n++
+		}
+	}
+	return n
 }
 
 func (run *Run) trimHistoryToBudgetLocked(budget int64) {
@@ -535,11 +648,13 @@ func (run *Run) trimHistoryToBudgetLocked(budget int64) {
 	}
 	idx := 0
 	for idx < len(run.history) && run.historyBytes > budget {
+		if !run.history[idx].Kind.IsControl() {
+			run.dropped++
+		}
 		run.historyBytes -= eventBytes(run.history[idx])
 		if run.historyBytes < 0 {
 			run.historyBytes = 0
 		}
-		run.dropped++
 		idx++
 	}
 	if idx >= len(run.history) {

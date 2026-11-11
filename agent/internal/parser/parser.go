@@ -11,25 +11,39 @@ import (
 )
 
 const (
-	KindStatus  = "status"
-	KindPrintf  = "printf"
-	KindMap     = "map"
-	KindHist    = "hist"
-	KindLHist   = "lhist"
-	KindLost    = "lost"
-	KindStderr  = "stderr"
-	KindSummary = "summary"
+	KindStatus  Kind = "status"
+	KindPrintf  Kind = "printf"
+	KindMap     Kind = "map"
+	KindHist    Kind = "hist"
+	KindLHist   Kind = "lhist"
+	KindLost    Kind = "lost"
+	KindStderr  Kind = "stderr"
+	KindSummary Kind = "summary"
 
 	// MaxLineBytes bounds one bpftrace output line (large maps get wide).
 	MaxLineBytes = 8 * 1024 * 1024
 )
+
+// Kind is the normalized event envelope type.
+type Kind string
+
+// IsControl reports whether k is control-plane (never rate-limited, never
+// shed): lifecycle status, terminal summary, and drop-counter markers.
+func (k Kind) IsControl() bool {
+	switch k {
+	case KindStatus, KindSummary, KindLost:
+		return true
+	default:
+		return false
+	}
+}
 
 // Event is the normalized envelope streamed to consumers.
 type Event struct {
 	RunID string `json:"run_id"`
 	Seq   uint64 `json:"seq"`
 	Ts    int64  `json:"ts"`
-	Kind  string `json:"kind"`
+	Kind  Kind   `json:"kind"`
 	Data  any    `json:"data"`
 }
 
@@ -40,7 +54,7 @@ type rawLine struct {
 }
 
 // dataKinds are bpftrace types forwarded with their kind unchanged.
-var dataKinds = map[string]bool{
+var dataKinds = map[Kind]bool{
 	KindPrintf: true,
 	KindMap:    true,
 	KindHist:   true,
@@ -56,14 +70,14 @@ func ParseLine(runID string, seq uint64, line []byte) (Event, error) {
 	if err := json.Unmarshal(line, &raw); err != nil {
 		return Event{}, fmt.Errorf("parser: bad line %d: %w", seq, err)
 	}
-	if !dataKinds[raw.Type] {
+	if !dataKinds[Kind(raw.Type)] {
 		return Event{}, fmt.Errorf("parser: line %d has unsupported type %q", seq, raw.Type)
 	}
 	var data any
 	if err := json.Unmarshal(raw.Data, &data); err != nil {
 		return Event{}, fmt.Errorf("parser: line %d has bad data: %w", seq, err)
 	}
-	return Event{RunID: runID, Seq: seq, Ts: NowMillis(), Kind: raw.Type, Data: data}, nil
+	return Event{RunID: runID, Seq: seq, Ts: NowMillis(), Kind: Kind(raw.Type), Data: data}, nil
 }
 
 // Status builds a lifecycle event (attached, running, stopping, completed, failed).

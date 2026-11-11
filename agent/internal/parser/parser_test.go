@@ -14,7 +14,7 @@ import (
 func TestFixtures(t *testing.T) {
 	fixtures := []struct {
 		file string
-		kind string
+		kind Kind
 	}{
 		{"block-latency-histogram.ndjson", KindHist},
 		{"cpu-by-process.ndjson", KindMap},
