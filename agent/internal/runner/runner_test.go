@@ -51,6 +51,12 @@ func summaryOf(t *testing.T, events []parser.Event) parser.Summary {
 }
 
 func TestReplayFixture(t *testing.T) {
+	// Isolate os.TempDir so the leak glob below sees only this test's files,
+	// not other packages' in-flight vbpf-*.bt files during parallel runs.
+	isolated := t.TempDir()
+	t.Setenv("TMPDIR", isolated)
+	t.Setenv("TMP", isolated)
+	t.Setenv("TEMP", isolated)
 	fake := fakePath(t)
 	t.Setenv("FAKE_MODE", "replay")
 	t.Setenv("FAKE_FIXTURE", filepath.Join("..", "..", "..", "fixtures", "syscall-counts-by-process.ndjson"))
