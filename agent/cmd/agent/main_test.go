@@ -45,7 +45,7 @@ func TestRunWithFake(t *testing.T) {
 	if got := realMain([]string{"run", script, "--duration", "1"}, &stdout, &stderr); got != 0 {
 		t.Fatalf("exit=%d stderr=%s", got, stderr.String())
 	}
-	var kinds []string
+	var kinds []parser.Kind
 	for _, line := range strings.Split(strings.TrimSpace(stdout.String()), "\n") {
 		var ev parser.Event
 		if err := json.Unmarshal([]byte(line), &ev); err != nil {

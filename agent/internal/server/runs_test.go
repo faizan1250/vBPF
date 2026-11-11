@@ -143,7 +143,7 @@ func TestFastCompletingRunReplaysWithinTTL(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = conn.Close(websocket.StatusNormalClosure, "") }()
 
-	var kinds []string
+	var kinds []parser.Kind
 	for {
 		_, raw, err := conn.Read(ctx)
 		if err != nil {
@@ -157,7 +157,7 @@ func TestFastCompletingRunReplaysWithinTTL(t *testing.T) {
 			break
 		}
 	}
-	require.Equal(t, []string{parser.KindStatus, parser.KindPrintf, parser.KindPrintf, parser.KindPrintf, parser.KindSummary}, kinds)
+	require.Equal(t, []parser.Kind{parser.KindStatus, parser.KindPrintf, parser.KindPrintf, parser.KindPrintf, parser.KindSummary}, kinds)
 }
 
 func TestFinishedRunHistoryTTLExpiresCleanly(t *testing.T) {
