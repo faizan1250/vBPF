@@ -572,7 +572,7 @@ export function lexScript(script: string): {
 }
 
 // Every identifier call site: an identifier whose next non-comment token is
-// an opening paren. A name in macro-definition position is a definition,
+// an opening paren. A name in macro-definition position at depth 0 is a definition,
 // not a call.
 export function collectCalls(toks: ScriptToken[]): {
   calls: string[];
@@ -596,7 +596,7 @@ export function collectCalls(toks: ScriptToken[]): {
     } else if (
       t.kind === "ident" &&
       !CALL_KEYWORDS.has(t.text) &&
-      prevIdent !== "macro"
+      (prevIdent !== "macro" || depth > 0)
     ) {
       let j = idx + 1;
       while (j < toks.length && toks[j]!.kind === "comment") j += 1;

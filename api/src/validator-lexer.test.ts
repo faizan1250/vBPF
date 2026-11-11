@@ -165,6 +165,18 @@ describe("lexer default-deny corpus", () => {
       "blocked call: cat",
     ],
     [
+      "macro-blocked inside probe",
+      'BEGIN { macro system("id"); }',
+      "BLOCKED_CALL",
+      "blocked call: system",
+    ],
+    [
+      "macro-blocked comment-split inside probe",
+      'BEGIN { macro /*x*/ system("id"); }',
+      "BLOCKED_CALL",
+      "blocked call: system",
+    ],
+    [
       "uppercase system",
       'BEGIN { SYSTEM("id"); }',
       "UNKNOWN_CALL",

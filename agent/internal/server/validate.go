@@ -360,7 +360,7 @@ func lexScript(script string) ([]scriptToken, string, []string) {
 // collectCalls records every identifier call site: an identifier whose next
 // non-comment token is an opening paren. Comment-split, whitespace-split, and
 // line-continued spellings still read as calls; split identifiers cannot.
-// A name in macro-definition position is a definition, not a call.
+// A name in macro-definition position at depth 0 is a definition, not a call.
 func collectCalls(toks []scriptToken) (calls []string, tooDeep bool) {
 	depth := 0
 	maxDepth := 0
@@ -382,7 +382,7 @@ func collectCalls(toks []scriptToken) (calls []string, tooDeep bool) {
 					depth--
 				}
 			}
-		} else if t.kind == tokIdent && !callKeywords[t.text] && prevIdent != "macro" {
+		} else if t.kind == tokIdent && !callKeywords[t.text] && (prevIdent != "macro" || depth > 0) {
 			j := idx + 1
 			for j < len(toks) && toks[j].kind == tokComment {
 				j++
