@@ -25,7 +25,8 @@ func TestClassifyValidationError(t *testing.T) {
 	require.Equal(t, "LIMIT_EXCEEDED", classifyValidationError([]string{"wildcard expands to too many probes: tracepoint:block:item*"}))
 	require.Equal(t, "LIMIT_EXCEEDED", classifyValidationError([]string{"wildcard expands to too many probes: tracepoint:unknown probe:*"}))
 	require.Equal(t, "LIMIT_EXCEEDED", classifyValidationError([]string{"ERROR: too many probes"}))
-	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{"blocked call: system/signal/override/cat are forbidden"}))
+	require.Equal(t, "BLOCKED_CALL", classifyValidationError([]string{"blocked call: cat is forbidden"}))
+	require.Equal(t, "UNKNOWN_CALL", classifyValidationError([]string{"unknown function call: exec is not allowlisted"}))
 	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{`uprobe must target libc or an absolute path: uprobe:rel/"unknown probe":fn`}))
 	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{`uprobe must target libc or an absolute path: uprobe:rel/"too many probes":fn`}))
 	require.Equal(t, "VALIDATION_FAILED", classifyValidationError([]string{`wildcard too broad: tracepoint:block:"unknown probe":*`}))
@@ -136,13 +137,13 @@ func TestStaticValidateRejectsCommentAndContinuationBypasses(t *testing.T) {
 		{"system block comment", `BEGIN { system/*x*/("id"); }`, "blocked call"},
 		{"signal block comment", `BEGIN { signal/*x*/(9); }`, "blocked call"},
 		{"override block comment", `BEGIN { override/*x*/(0); }`, "blocked call"},
-		{"comment before include", "/*x*/#include <stdio.h>\nBEGIN {}", "blocked syntax: #include/#define"},
-		{"comment inside define", "#/*x*/define FOO cat\nBEGIN {}", "blocked syntax: #include/#define"},
-		{"line continuation include", "#\\\ninclude <x>\nBEGIN {}", "blocked syntax: #include/#define"},
+		{"comment before include", "/*x*/#include <stdio.h>\nBEGIN {}", "blocked syntax: preprocessor directives are forbidden"},
+		{"comment inside define", "#/*x*/define FOO cat\nBEGIN {}", "blocked syntax: preprocessor directives are forbidden"},
+		{"line continuation include", "#\\\ninclude <x>\nBEGIN {}", "blocked syntax: preprocessor directives are forbidden"},
 		{"line continuation inside cat", "BEGIN { ca\\\nt(\"/etc/shadow\"); }", "blocked call"},
 		{"line continuation crlf cat", "BEGIN { ca\\\r\nt(\"/etc/shadow\"); }", "blocked call"},
 		{"line continuation before paren", "BEGIN { cat\\\n(\"/etc/shadow\"); }", "blocked call"},
-		{"multiline comment before define", "struct s{}; /*\n*/#define X 1\nBEGIN {}", "blocked syntax: #include/#define"},
+		{"multiline comment before define", "struct s{}; /*\n*/#define X 1\nBEGIN {}", "blocked syntax: preprocessor directives are forbidden"},
 		{"crlf line comment cat", "BEGIN { cat//\r\n(\"/etc/shadow\"); }", "blocked call"},
 		{"unclosed block comment", "BEGIN { /*", "unclosed block comment"},
 		{"unclosed slash-star-slash", "BEGIN { /*/", "unclosed block comment"},
@@ -229,7 +230,7 @@ func TestCommentBypassRunsRejectedAndValidRawScriptPreserved(t *testing.T) {
 
 	status, code := postRunCode(t, s, `BEGIN { cat/*x*/("/etc/shadow"); }`)
 	require.Equal(t, http.StatusBadRequest, status)
-	require.Equal(t, "VALIDATION_FAILED", code)
+	require.Equal(t, "BLOCKED_CALL", code)
 
 	status, code = postRunCode(t, s, "BEGIN { /*")
 	require.Equal(t, http.StatusBadRequest, status)
@@ -357,7 +358,6 @@ func TestStaticValidateHeaderSyntaxAndSpoofing(t *testing.T) {
 		{"config block compact", "config={max_probes=999;}", "provider not allowed: config="},
 		{"config block before BEGIN", "config = { max_probes = 999; }\nBEGIN {}", "invalid probe header"},
 		{"macro definition", "macro m() { @x = count(); }", "invalid probe header"},
-		{"macro before BEGIN", "macro m() { @x = count(); }\nBEGIN { m(); }", "invalid probe header"},
 		{"multiline comma mixed", "kprobe:do_sys_open,\nu:./evil:fn { @x = count(); }", "provider not allowed: u"},
 		{"BEGIN with target", "BEGIN:evil {}", "invalid probe header: BEGIN/END cannot have target"},
 		{"END with target", "END:evil {}", "invalid probe header: BEGIN/END cannot have target"},
@@ -445,6 +445,15 @@ func TestStaticValidateHeaderSyntaxAndSpoofing(t *testing.T) {
 			require.Equal(t, tc.wantProbes, res.Probes)
 		})
 	}
+
+	t.Run("macro use reads as unknown call", func(t *testing.T) {
+		res := StaticValidate("macro m() { @x = count(); }\nBEGIN { m(); }", cat)
+		require.NotEmpty(t, res.Errors)
+		joined := strings.Join(res.Errors, "; ")
+		require.Contains(t, joined, "invalid probe header")
+		require.Contains(t, joined, "unknown function call: m")
+		require.Equal(t, "UNKNOWN_CALL", classifyValidationError(res.Errors))
+	})
 
 	t.Run("create run classifies unlisted probe as VALIDATION_FAILED even with catalog", func(t *testing.T) {
 		s := knownCatalogServer(t, []string{"BEGIN", "tracepoint:block:block_rq_issue"})

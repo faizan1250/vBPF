@@ -132,6 +132,20 @@ response body nor captured log output contains key material.
 
 - **`uprobe` / `uretprobe` allowlist (`libc`-only):** both API static validation and agent re-validation restrict user-space probes to the bare alias `libc` or a canonical POSIX absolute path under `/lib`, `/lib64`, `/usr/lib`, or `/usr/lib64` (with at most one multiarch subdirectory matching `^[a-z0-9_]+-linux-[a-z0-9]+$`) and a shared-object basename matching `^libc\.so(\.[0-9]+)*$` or `^libc-[0-9]+(\.[0-9]+)*\.so$` (no `.`, `..`, `//`, whitespace, or trailing `/`). Symbols must be plain identifiers (`^[A-Za-z_][A-Za-z0-9_]*$`, rejecting wildcards, `+offset`, hex addresses, quotes, or extra segments); `usdt` remains rejected. On the host, the agent verifies `EvalSymlinks` stays within the rootfs and still satisfies the allowed directory/libc basename rules, confirms a regular root-owned (`uid == 0`) non-group/world-writable (`mode & 0o022 == 0`) binary, and runs a bounded `bpftrace -l 'uprobe:<target>:<symbol>'` existence check (`3s` timeout, `8 KB` cap; falling back across allowed libc directories for `libc`).
 - **Uprobe user-space visibility & hot-symbol warnings:** even when scoped to `libc`, uprobes can read user-space arguments across any process on the host (for example `getaddrinfo` hostnames or `malloc` sizes). Human confirmation and validator warnings for hot symbols (`malloc`, `free`, `memcpy`, `memset`, `strlen`, `read`, `write`) remain required before execution.
+- **Token-level, default-deny function allowlist:** both implementations lex
+  the script (identifiers, numbers, string literals with escapes, operators,
+  punctuation, comments, preprocessor lines) and record every identifier call
+  site. Strings and comments can never read as calls; unterminated strings or
+  comments, preprocessor lines (`#...`), NUL/control bytes, non-ASCII code
+  outside strings/comments, token floods, and deep nesting are validation
+  errors. Calls to `system`, `signal`, `override`, `cat` are rejected as
+  `BLOCKED_CALL`; any other call outside the allowlist of read-only and
+  aggregation builtins (`printf`, `print`, `count`, `sum`, `avg`, `min`,
+  `max`, `stats`, `hist`, `lhist`, `delete`, `clear`, `zero`, `str`,
+  `strncmp`, `strlen`, `buf`, `ntop`, `kstack`, `ustack`, `ksym`, `usym`,
+  `time`, `join`, `exit`, `cgroup_path`, `cgroupid`) is rejected as
+  `UNKNOWN_CALL` with the function name. The agent verdict is authoritative;
+  the TS validator mirrors it for instant UI feedback.
 - **Strict wildcard grammar & probe-count cap:** at most one `*` is permitted and only as the last character of the final segment (`tracepoint:<subsys>:*`, `tracepoint:<subsys>:<prefix>*`, `kprobe:<prefix>*`, `kretprobe:<prefix>*` with at least 3 prefix characters for `kprobe`/`kretprobe`; wildcards are rejected on `uprobe`, `uretprobe`, `profile`, `interval`, `software`, `BEGIN`, `END`, as are `?`, `[`, `]`). `tracepoint` has no prefix-length floor because patterns are catalog-bounded (the subsystem must match a known entry and every expansion counts toward the cap), while `kprobe`/`kretprobe` match an unbounded kernel symbol namespace and need the floor. Total probe **occurrences** (counting duplicate blocks/targets and each wildcard's expanded catalog match count) are capped at `BPFTRACE_MAX_PROBES` (`50`), enforced in static validation, agent re-validation, dry-run compile, and runtime env.
 - **Fail-closed non-blocking catalog readiness:** the agent binds HTTP immediately without blocking startup and loads `bpftrace -l` asynchronously with exponential backoff (`1s`..`30s`). Readiness requires at least one non-empty refresh; failed/empty refreshes preserve the previous immutable snapshot atomically while recording `stale_since` and `last_error`. While unready, `/health` reports `200` with `ready: false` while `/v1/validate` and `/v1/runs` fail closed (`503 CATALOG_UNAVAILABLE` + `Retry-After`) for every script including `BEGIN {}`, and the API maps upstream `503`/`CATALOG_UNAVAILABLE` to `503 AGENT_NOT_READY` + `fix_hint` across `/api/validate`, `/api/runs`, and `/api/generate`.
 
@@ -144,19 +158,21 @@ leaves the machine.
 
 ## Error taxonomy
 
-| Code                 | Signal                                                               | Surfaced where                                                                                       |
-| -------------------- | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `AGENT_OFFLINE`      | Agent unreachable / token unreadable                                 | `/api/health`, proxies (`503`)                                                                       |
-| `AGENT_NOT_READY`    | Agent catalog still loading or refresh failed                        | `/api/health` readiness, proxies (`503` + `Retry-After` + hint)                                      |
-| `NO_PRIVILEGE`       | Agent health `root: false`                                           | `/api/health` warnings, TopBar hint                                                                  |
-| `KERNEL_UNSUPPORTED` | Health `btf: false` or `tracefs: false`                              | `/api/health` warnings, TopBar hint                                                                  |
-| `PROBE_NOT_FOUND`    | Probe / wildcard / uprobe symbol missing on host                     | `POST /v1/runs` (`400` `code`); `/v1/validate` reports `errors` (`200`, no `code`)                   |
-| `VALIDATION_FAILED`  | Blocklist, allowlist, host libc FS, compile err, or bad JSON (`400`) | `POST /v1/runs` (`400` `code`); `/v1/validate` (`400` bad JSON only; script errs `200` `errors`)     |
-| `LIMIT_EXCEEDED`     | Concurrent run (`409`) or total probes > 50 (`400`)                  | `POST /v1/runs` (`409` / `400` `code`); `/v1/validate` reports `> 50` in `errors` (`200`, no `code`) |
-| `RATE_LIMITED`       | Generate budget spent                                                | `POST /api/generate` (`429` + `Retry-After`)                                                         |
-| `REFUSAL`            | Unsafe prompt refused by the LLM gate                                | `POST /api/generate` (`422`)                                                                         |
-| `LLM_UNAVAILABLE`    | Live mode without a provider key                                     | `POST /api/generate` (`503`)                                                                         |
-| `FORBIDDEN`          | Foreign `Origin` / non-loopback `Host`                               | Any API route (`403`)                                                                                |
+| Code                 | Signal                                                           | Surfaced where                                                                                       |
+| -------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `AGENT_OFFLINE`      | Agent unreachable / token unreadable                             | `/api/health`, proxies (`503`)                                                                       |
+| `AGENT_NOT_READY`    | Agent catalog still loading or refresh failed                    | `/api/health` readiness, proxies (`503` + `Retry-After` + hint)                                      |
+| `NO_PRIVILEGE`       | Agent health `root: false`                                       | `/api/health` warnings, TopBar hint                                                                  |
+| `KERNEL_UNSUPPORTED` | Health `btf: false` or `tracefs: false`                          | `/api/health` warnings, TopBar hint                                                                  |
+| `PROBE_NOT_FOUND`    | Probe / wildcard / uprobe symbol missing on host                 | `POST /v1/runs` (`400` `code`); `/v1/validate` reports `errors` (`200`, no `code`)                   |
+| `VALIDATION_FAILED`  | Static allowlist, host libc FS, compile err, or bad JSON (`400`) | `POST /v1/runs` (`400` `code`); `/v1/validate` (`400` bad JSON only; script errs `200` `errors`)     |
+| `BLOCKED_CALL`       | Denylisted call (`system`, `signal`, `override`, `cat`) (`400`)  | `POST /v1/runs` (`400` `code`); `/v1/validate` reports `errors` (`200`, no `code`)                   |
+| `UNKNOWN_CALL`       | Call outside the function allowlist (`400`)                      | `POST /v1/runs` (`400` `code`); `/v1/validate` reports `errors` (`200`, no `code`)                   |
+| `LIMIT_EXCEEDED`     | Concurrent run (`409`) or total probes > 50 (`400`)              | `POST /v1/runs` (`409` / `400` `code`); `/v1/validate` reports `> 50` in `errors` (`200`, no `code`) |
+| `RATE_LIMITED`       | Generate budget spent                                            | `POST /api/generate` (`429` + `Retry-After`)                                                         |
+| `REFUSAL`            | Unsafe prompt refused by the LLM gate                            | `POST /api/generate` (`422`)                                                                         |
+| `LLM_UNAVAILABLE`    | Live mode without a provider key                                 | `POST /api/generate` (`503`)                                                                         |
+| `FORBIDDEN`          | Foreign `Origin` / non-loopback `Host`                           | Any API route (`403`)                                                                                |
 
 Known design trade-offs (documented, not silently unhandled):
 
@@ -167,8 +183,9 @@ Known design trade-offs (documented, not silently unhandled):
   closed across validation, generation, and run creation (`503 AGENT_NOT_READY`).
 - **Validation vs. run error envelopes (`POST /v1/validate` vs. `POST /v1/runs`):**
   `POST /v1/runs` returns HTTP `400` with JSON `{error, code, errors}` for
-  `PROBE_NOT_FOUND`, `VALIDATION_FAILED` (static blocklist, allowlist,
-  host-libc, or compile failures), and `LIMIT_EXCEEDED` (>50 probes), plus
+  `PROBE_NOT_FOUND`, `VALIDATION_FAILED`, `BLOCKED_CALL`, `UNKNOWN_CALL`
+  (static denylist, allowlist, host-libc, or compile failures), and
+  `LIMIT_EXCEEDED` (>50 probes), plus
   HTTP `409` `LIMIT_EXCEEDED` for a concurrent active run. By contrast,
   `POST /v1/validate` reports probe misses, static/host-libc/compile
   failures, and >50 probe-cap errors inside

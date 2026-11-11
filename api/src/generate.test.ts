@@ -861,17 +861,17 @@ describe("validator comment and continuation stripping", () => {
       [
         "comment before include",
         "/*x*/#include <stdio.h>\nBEGIN {}",
-        /blocked syntax: #include\/#define/,
+        /blocked syntax: preprocessor/,
       ],
       [
         "comment inside define",
         "#/*x*/define FOO cat\nBEGIN {}",
-        /blocked syntax: #include\/#define/,
+        /blocked syntax: preprocessor/,
       ],
       [
         "line continuation include",
         "#\\\ninclude <x>\nBEGIN {}",
-        /blocked syntax: #include\/#define/,
+        /blocked syntax: preprocessor/,
       ],
       [
         "line continuation inside cat",
@@ -891,7 +891,7 @@ describe("validator comment and continuation stripping", () => {
       [
         "multiline comment before define",
         "struct s{}; /*\n*/#define X 1\nBEGIN {}",
-        /blocked syntax: #include\/#define/,
+        /blocked syntax: preprocessor/,
       ],
       [
         "crlf line comment cat",

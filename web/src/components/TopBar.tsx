@@ -17,6 +17,8 @@ const FIX_HINTS: Record<string, string> = {
     "Kernel lacks BTF or required probes; see docs/environment.md.",
   PROBE_NOT_FOUND: "Probe missing on this kernel; pick a recipe alternative.",
   VALIDATION_FAILED: "Fix the highlighted script errors and retry.",
+  BLOCKED_CALL: "Remove the blocked call and retry.",
+  UNKNOWN_CALL: "Use only allowlisted functions and retry.",
   LIMIT_EXCEEDED: "Shorten duration or narrow the probe; see run summary.",
   RATE_LIMITED: "Generation is rate-limited: wait a minute, then retry.",
   LLM_UNAVAILABLE: "Set ANTHROPIC_API_KEY locally, or browse recipes below.",
