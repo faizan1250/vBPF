@@ -1,9 +1,19 @@
 import { z } from "zod";
 
+// Script cap is UTF-8 bytes (matches the Go agent's len() and the web
+// TextEncoder check). TextEncoder works in Node and browsers, unlike Buffer.
+export const MAX_SCRIPT_BYTES = 8 * 1024;
+
+function utf8ByteLength(value: string): number {
+  return new TextEncoder().encode(value).length;
+}
+
 export const ScriptSchema = z
   .string()
   .min(1)
-  .max(8 * 1024);
+  .refine((s) => utf8ByteLength(s) <= MAX_SCRIPT_BYTES, {
+    message: `Too big: expected string to have <=${MAX_SCRIPT_BYTES} UTF-8 bytes`,
+  });
 
 export const DurationSchema = z.number().int().min(1).max(60);
 
