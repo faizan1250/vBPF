@@ -758,6 +758,40 @@ describe("generate rate limit", () => {
       await limited.close();
     }
   });
+
+  it("budgets follow the forwarded client IP behind the proxy", async () => {
+    const limited = await buildApp({
+      agentUrl: fake.url,
+      tokenFile,
+      dbPath: ":memory:",
+      recipesDir: RECIPES_DIR,
+      webOrigin: "http://localhost:5173",
+      llmModel: "mock",
+      llmMode: "mock",
+      generateRateLimit: { max: 1, windowMs: 60_000 },
+    });
+    try {
+      // Same socket IP (the nginx hop) for every caller; only X-Forwarded-For
+      // differs, as the proxy sets it per connection.
+      const post = (forwardedFor: string) =>
+        limited.inject({
+          method: "POST",
+          url: "/api/generate",
+          payload: { prompt: "cpu?" },
+          remoteAddress: "172.18.0.2",
+          headers: {
+            host: "localhost",
+            "content-type": "application/json",
+            "x-forwarded-for": forwardedFor,
+          },
+        });
+      expect((await post("10.0.0.1")).statusCode).toBe(200);
+      expect((await post("10.0.0.1")).statusCode).toBe(429);
+      expect((await post("10.0.0.2")).statusCode).toBe(200);
+    } finally {
+      await limited.close();
+    }
+  });
 });
 
 describe("validator limits", () => {
