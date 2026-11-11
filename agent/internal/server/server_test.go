@@ -393,13 +393,61 @@ func TestNewHTTPServerConfig(t *testing.T) {
 	require.Zero(t, srv.WriteTimeout, "global WriteTimeout must stay unset for long-lived streams")
 }
 
+// instantTestHealth returns a HealthProvider with no subprocess or
+// filesystem latency. Socket-behavior tests use it so readiness polling
+// never depends on bpftrace presence or fork/exec speed on a loaded
+// runner; the tests assert transport behavior (431/408/idle close), not
+// health contents.
+func instantTestHealth() *HealthProvider {
+	return &HealthProvider{
+		StartTime:  time.Now(),
+		Kernel:     func() string { return "6.8-test" },
+		Version:    func(ctx context.Context) string { return "bpftrace v0.21" },
+		HasBTF:     func() bool { return true },
+		IsRoot:     func() bool { return false },
+		HasTracefs: func() bool { return true },
+	}
+}
+
+// waitForHealthy polls /health until 200. Unlike bare Eventually it fails
+// fast with the real error if ListenAndServe exits (e.g. the grab-port
+// race loses its bind) instead of burning the whole budget into a bare
+// "condition never satisfied". The 10s budget only extends the readiness
+// gate on slow runners; every feature assertion below keeps its own tight
+// deadline, so nothing passes by sleeping.
+func waitForHealthy(t *testing.T, client *http.Client, addr, token string, serveDone <-chan error) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case err := <-serveDone:
+			require.NoError(t, err, "ListenAndServe exited before serving traffic")
+			t.Fatal("ListenAndServe exited cleanly before serving traffic")
+		default:
+		}
+		req, err := http.NewRequest("GET", "http://"+addr+"/health", nil)
+		if err == nil {
+			req.Header.Set("Authorization", "Bearer "+token)
+			resp, err := client.Do(req)
+			if err == nil {
+				_ = resp.Body.Close()
+				if resp.StatusCode == http.StatusOK {
+					return
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("server never became healthy")
+}
+
 func TestServerHeaderLimit431AndSlowHeaderTimeout(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	addr := ln.Addr().String()
 	require.NoError(t, ln.Close())
 
-	s := testServer(t, Config{Addr: addr})
+	s := testServer(t, Config{Addr: addr, Health: instantTestHealth()})
 	s.readHeaderTimeout = 80 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -410,19 +458,7 @@ func TestServerHeaderLimit431AndSlowHeaderTimeout(t *testing.T) {
 	}()
 
 	client := &http.Client{Timeout: 2 * time.Second}
-	require.Eventually(t, func() bool {
-		req, err := http.NewRequest("GET", "http://"+addr+"/health", nil)
-		if err != nil {
-			return false
-		}
-		req.Header.Set("Authorization", "Bearer "+s.Token())
-		resp, err := client.Do(req)
-		if err != nil {
-			return false
-		}
-		_ = resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 2*time.Second, 10*time.Millisecond)
+	waitForHealthy(t, client, addr, s.Token(), serveDone)
 
 	t.Run("oversized headers return 431", func(t *testing.T) {
 		req, err := http.NewRequest("GET", "http://"+addr+"/health", nil)
@@ -471,7 +507,7 @@ func TestServerIdleKeepAliveTimeout(t *testing.T) {
 	addr := ln.Addr().String()
 	require.NoError(t, ln.Close())
 
-	s := testServer(t, Config{Addr: addr})
+	s := testServer(t, Config{Addr: addr, Health: instantTestHealth()})
 	// Keep ReadHeaderTimeout at 5s so only IdleTimeout can expire the idle keep-alive socket.
 	s.idleTimeout = 80 * time.Millisecond
 
@@ -483,19 +519,7 @@ func TestServerIdleKeepAliveTimeout(t *testing.T) {
 	}()
 
 	client := &http.Client{Timeout: 2 * time.Second}
-	require.Eventually(t, func() bool {
-		req, err := http.NewRequest("GET", "http://"+addr+"/health", nil)
-		if err != nil {
-			return false
-		}
-		req.Header.Set("Authorization", "Bearer "+s.Token())
-		resp, err := client.Do(req)
-		if err != nil {
-			return false
-		}
-		_ = resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 2*time.Second, 10*time.Millisecond)
+	waitForHealthy(t, client, addr, s.Token(), serveDone)
 
 	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	require.NoError(t, err)
