@@ -78,13 +78,24 @@ func BPFtraceEnvSlice() []string {
 // ChildEnv builds a minimal allowlisted environment for child processes.
 // Inherited host variables like LD_LIBRARY_PATH and LD_PRELOAD are stripped;
 // FAKE_* test hooks are forwarded only when running under `go test`.
+// Windows children need SystemRoot plus TEMP/TMP/PATHEXT to spawn; they are
+// preserved allowlist-style (case-insensitive, harmless elsewhere).
 func ChildEnv(withBPFtraceCaps bool) []string {
 	return buildChildEnv(withBPFtraceCaps, testing.Testing(), os.Environ())
+}
+
+// windowsChildVars is the minimal set Windows needs to spawn children.
+var windowsChildVars = map[string]bool{
+	"SYSTEMROOT": true,
+	"TEMP":       true,
+	"TMP":        true,
+	"PATHEXT":    true,
 }
 
 func buildChildEnv(withBPFtraceCaps, includeFake bool, parentEnv []string) []string {
 	pathVal := ""
 	var fakeVars []string
+	winVals := map[string]string{}
 	for _, entry := range parentEnv {
 		k, v, ok := strings.Cut(entry, "=")
 		if !ok {
@@ -95,12 +106,26 @@ func buildChildEnv(withBPFtraceCaps, includeFake bool, parentEnv []string) []str
 			pathVal = v
 		} else if includeFake && strings.HasPrefix(k, "FAKE_") {
 			fakeVars = append(fakeVars, entry)
+		} else if windowsChildVars[strings.ToUpper(k)] {
+			if _, seen := winVals[strings.ToUpper(k)]; !seen && v != "" {
+				winVals[strings.ToUpper(k)] = k + "=" + v
+			}
 		}
 	}
 	if pathVal == "" {
 		pathVal = defaultChildPath
 	}
 	out := []string{"PATH=" + pathVal}
+	if len(winVals) > 0 {
+		keys := make([]string, 0, len(winVals))
+		for k := range winVals {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			out = append(out, winVals[k])
+		}
+	}
 	if withBPFtraceCaps {
 		out = append(out, BPFtraceEnvSlice()...)
 	}

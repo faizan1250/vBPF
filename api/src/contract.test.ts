@@ -622,6 +622,113 @@ describe("run summaries", () => {
     }
   });
 
+  it("retries a flaky observer stream and persists the summary", async () => {
+    let flakyServer: Server | null = null;
+    let streamConnections = 0;
+    const flakyUrl = await new Promise<string>((resolve) => {
+      flakyServer = createServer((req, res) => {
+        const send = (code: number, payload: unknown): void => {
+          res.writeHead(code, { "content-type": "application/json" });
+          res.end(JSON.stringify(payload));
+        };
+        const url = new URL(req.url ?? "/", "http://x");
+        if (req.method === "POST" && url.pathname === "/v1/runs") {
+          send(201, { run_id: "run_flaky", state: "running" });
+          return;
+        }
+        if (req.method === "GET" && url.pathname === "/health") {
+          send(200, HEALTH);
+          return;
+        }
+        send(404, { error: "not found" });
+      });
+      const wss = new WebSocketServer({ noServer: true });
+      flakyServer.on("upgrade", (req, socket, head) => {
+        wss.handleUpgrade(req, socket, head, (ws) => {
+          streamConnections += 1;
+          const n = streamConnections;
+          const send = (kind: string, data: unknown, seq: number): void => {
+            ws.send(
+              JSON.stringify({
+                run_id: "run_flaky",
+                seq,
+                ts: 1_700_000_000_000 + seq,
+                kind,
+                data,
+              }),
+            );
+          };
+          if (n === 1) {
+            send("status", { state: "running" }, 0);
+            ws.close();
+            return;
+          }
+          send("status", { state: "running" }, 0);
+          send("printf", "hello", 1);
+          send(
+            "summary",
+            {
+              events: 1,
+              bytes: 5,
+              dropped: 0,
+              duration_ms: 10,
+              exit_reason: "completed",
+            },
+            2,
+          );
+        });
+      });
+      flakyServer.listen(0, "127.0.0.1", () => {
+        const addr = flakyServer?.address();
+        const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+        resolve(`http://127.0.0.1:${port}`);
+      });
+    });
+
+    const flakyApp = await buildApp({
+      agentUrl: flakyUrl,
+      tokenFile,
+      dbPath: ":memory:",
+      recipesDir,
+      webOrigin: "http://localhost:5173",
+    });
+    const addr = await flakyApp.listen({ host: "127.0.0.1", port: 0 });
+    const localBase = addr.replace("[::1]", "127.0.0.1");
+    try {
+      const res = await fetch(`${localBase}/api/runs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ script: "BEGIN { @x = count(); }" }),
+      });
+      expect(res.status).toBe(201);
+      let state = "";
+      let summary: unknown = null;
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        const check = await fetch(`${localBase}/api/runs/run_flaky`);
+        const body = (await check.json()) as {
+          state: string;
+          summary: unknown;
+        };
+        state = body.state;
+        summary = body.summary;
+        if (state === "completed") break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      expect(state).toBe("completed");
+      expect(summary).toEqual({
+        events_count: 1,
+        bytes: 5,
+        dropped: 0,
+        exit_reason: "completed",
+      });
+      expect(streamConnections).toBeGreaterThanOrEqual(2);
+    } finally {
+      await flakyApp.close();
+      await new Promise<void>((resolve) => flakyServer?.close(() => resolve()));
+    }
+  });
+
   it("handles agent without websocket support cleanly and transitions run to failed", async () => {
     let httpOnlyServer: Server | null = null;
     const httpOnlyUrl = await new Promise<string>((resolve) => {

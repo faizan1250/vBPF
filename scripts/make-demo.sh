@@ -32,8 +32,12 @@ VITE_FIXTURE_MODE=1 pnpm -C web run build >/dev/null || fail "fixture build fail
 printf 'make-demo: starting preview server on 127.0.0.1:%s...\n' "$PORT"
 pnpm -C web exec vite preview --port "$PORT" --strictPort >/dev/null 2>&1 &
 SERVER_PID=$!
-cleanup() { kill "$SERVER_PID" 2>/dev/null || true; }
-trap cleanup EXIT
+PALETTE_TMP=""
+cleanup() {
+  kill "$SERVER_PID" 2>/dev/null || true
+  if [ -n "$PALETTE_TMP" ]; then rm -f "$PALETTE_TMP"; fi
+}
+trap cleanup EXIT INT TERM
 
 for _ in $(seq 1 30); do
   if curl -sf -o /dev/null "http://127.0.0.1:${PORT}/"; then
@@ -47,6 +51,7 @@ printf 'make-demo: recording three fixture scenarios...\n'
 rm -rf web/test-results/demo-demo-three-fixture-scenarios-chromium
 pnpm -C web exec playwright test -c playwright.demo.config.ts || fail "demo recording failed"
 
+# GNU findutils required for -printf (BSD/macOS find lacks it; brew install findutils).
 VIDEO="$(find web/test-results/demo-demo-three-fixture-scenarios-chromium -maxdepth 1 -name '*.webm' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)"
 if [ -z "$VIDEO" ] || [ ! -f "$VIDEO" ]; then
   fail "no video captured"
@@ -63,10 +68,12 @@ render_gif() {
   shift 2
   local palette
   palette="$(mktemp)"
+  PALETTE_TMP="$palette"
   ffmpeg -y -loglevel error -i "$VIDEO" -vf "fps=${fps},scale=${width}:-1:flags=lanczos,palettegen" "$palette"
   ffmpeg -y -loglevel error -i "$VIDEO" -i "$palette" -lavfi \
     "fps=${fps},scale=${width}:-1:flags=lanczos[x];[x][1:v]paletteuse=$*" "$OUT"
   rm -f "$palette"
+  PALETTE_TMP=""
 }
 
 render_gif 640 8 "dither=bayer:bayer_scale=4"

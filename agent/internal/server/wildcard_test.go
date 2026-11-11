@@ -105,6 +105,27 @@ func TestWildcardZeroMatchIncludesSuggestions(t *testing.T) {
 	require.Contains(t, strings.Join(resK.Errors, "; "), "did you mean: kprobe:vfs_read, kprobe:vfs_write")
 }
 
+func TestSuggestProbesPrefersFullPrefix(t *testing.T) {
+	known := map[string]bool{
+		"kprobe:vfs_read":     true,
+		"kprobe:vfs_readlink": true,
+		"kprobe:vfs_write":    true,
+	}
+	got := suggestProbes("kprobe:vfs_readlin", known)
+	require.Contains(t, got, "kprobe:vfs_readlink")
+	require.NotContains(t, got, "kprobe:vfs_write")
+}
+
+func TestTracepointShortPrefixHasNoFloor(t *testing.T) {
+	cat := wildcardCatalog(t)
+	// Catalog-bounded: a 1-char event prefix still passes shape checks and
+	// resolves via the catalog (or reports PROBE_NOT_FOUND, never too broad).
+	res := StaticValidate("tracepoint:block:a* { @x = count(); }", cat)
+	require.NotContains(t, strings.Join(res.Errors, "; "), "wildcard too broad")
+	resK := StaticValidate("kprobe:vf* { @x = count(); }", cat)
+	require.Contains(t, strings.Join(resK.Errors, "; "), "wildcard too broad")
+}
+
 func TestMaxProbesOccurrenceSumAndEndpointProbeCount(t *testing.T) {
 	cat := wildcardCatalog(t)
 

@@ -153,6 +153,10 @@ function validateWildcardShape(pr: string, provider: string): string {
   }
   const rest = pr.slice(provider.length + 1);
   if (provider === "tracepoint") {
+    // No prefix-length floor: tracepoint patterns are catalog-bounded
+    // (subsys must match a known catalog entry, expansion capped at
+    // MAX_PROBES), while kprobe matches an unbounded kernel symbol
+    // namespace and needs the >=3 floor below.
     const colon = rest.indexOf(":");
     if (colon <= 0) {
       return `invalid wildcard pattern: ${pr}`;
@@ -185,17 +189,28 @@ function suggestProbes(pr: string, known: Set<string>): string {
       searchPrefix = cleanTarget.slice(0, second + 1);
     }
   }
-  const targetStem =
-    cleanTarget.length > provider.length + 4
-      ? cleanTarget.slice(0, provider.length + 4)
-      : cleanTarget;
-
+  // Prefer the full pre-* prefix so long names narrow to their own
+  // family before falling back to the short stem and provider scope.
   const candidates: string[] = [];
   for (const k of known) {
+    if (!k.startsWith(searchPrefix)) continue;
     if (provider === "tracepoint") {
-      if (k.startsWith(searchPrefix)) candidates.push(k);
-    } else if (k.startsWith(`${provider}:`) && k.startsWith(targetStem)) {
+      if (k.startsWith(cleanTarget)) candidates.push(k);
+    } else if (k.startsWith(cleanTarget)) {
       candidates.push(k);
+    }
+  }
+  if (candidates.length === 0) {
+    const targetStem =
+      cleanTarget.length > provider.length + 4
+        ? cleanTarget.slice(0, provider.length + 4)
+        : cleanTarget;
+    for (const k of known) {
+      if (provider === "tracepoint") {
+        if (k.startsWith(searchPrefix)) candidates.push(k);
+      } else if (k.startsWith(`${provider}:`) && k.startsWith(targetStem)) {
+        candidates.push(k);
+      }
     }
   }
   if (candidates.length === 0) {
