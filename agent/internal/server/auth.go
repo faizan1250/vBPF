@@ -6,9 +6,11 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -26,8 +28,10 @@ func TokenFilePath() string {
 // LoadOrCreateToken reads the bearer token or generates one with 0600 perms.
 func LoadOrCreateToken(path string) (string, error) {
 	if raw, err := os.ReadFile(path); err == nil {
+		if err := secureTokenFile(path); err != nil {
+			return "", err
+		}
 		if tok := strings.TrimSpace(string(raw)); tok != "" {
-			_ = os.Chmod(path, 0o600)
 			return tok, nil
 		}
 	} else if !os.IsNotExist(err) {
@@ -46,7 +50,26 @@ func LoadOrCreateToken(path string) (string, error) {
 	if err := os.WriteFile(path, []byte(tok+"\n"), 0o600); err != nil {
 		return "", err
 	}
+	if err := secureTokenFile(path); err != nil {
+		return "", err
+	}
 	return tok, nil
+}
+
+func secureTokenFile(path string) error {
+	if err := os.Chmod(path, 0o600); err != nil {
+		return err
+	}
+	if runtime.GOOS != "windows" {
+		fi, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+		if perm := fi.Mode().Perm(); perm != 0o600 {
+			return fmt.Errorf("insecure token file permissions: %04o (expected 0600)", perm)
+		}
+	}
+	return nil
 }
 
 func bearerToken(r *http.Request) string {
