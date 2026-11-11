@@ -1,8 +1,6 @@
 export const MAX_SCRIPT_BYTES = 8 * 1024;
 export const MAX_PROBES = 50;
 
-const BLOCKED_CALLS = /\b(system|signal|override|cat)\s*\(/;
-const INCLUDE_RE = /^\s*#\s*(include|define)\b/m;
 const C_DECL_RE = /^(struct|enum|union)(\s+[A-Za-z_][A-Za-z0-9_]*)?$/;
 const PATH_BEARING_PROVIDERS = [
   "uprobe:",
@@ -62,7 +60,9 @@ export type StaticErrorCode =
   | "CATALOG_UNAVAILABLE"
   | "VALIDATION_FAILED"
   | "PROBE_NOT_FOUND"
-  | "LIMIT_EXCEEDED";
+  | "LIMIT_EXCEEDED"
+  | "BLOCKED_CALL"
+  | "UNKNOWN_CALL";
 
 export interface StaticResult {
   code?: StaticErrorCode;
@@ -239,6 +239,12 @@ const STATIC_VALIDATION_FAILED_PREFIXES = [
 ];
 
 function classifyStaticErrors(errors: string[]): StaticErrorCode {
+  for (const err of errors) {
+    if (err.startsWith("blocked call:")) return "BLOCKED_CALL";
+  }
+  for (const err of errors) {
+    if (err.startsWith("unknown function call:")) return "UNKNOWN_CALL";
+  }
   let code: StaticErrorCode = "VALIDATION_FAILED";
   for (const err of errors) {
     if (err.startsWith("catalog unavailable:")) return "CATALOG_UNAVAILABLE";
@@ -267,97 +273,361 @@ function expandCount(pattern: string, known: Set<string>): number {
   return n;
 }
 
-// Strip // and /* */ comments and \\\r?\n line continuations outside
-// double-quoted strings so regex checks match Go's StaticValidate identically.
-function stripCommentsAndContinuations(script: string): {
+// Token-level lexer for default-deny call validation (parity with the agent).
+type TokenKind =
+  "ident" | "number" | "string" | "punct" | "comment" | "preproc";
+
+interface ScriptToken {
+  kind: TokenKind;
+  text: string;
+}
+
+const MAX_LEXER_TOKENS = 10000;
+const MAX_NESTING_DEPTH = 128;
+
+const DENIED_CALLS = new Set(["system", "signal", "override", "cat"]);
+
+const ALLOWED_CALLS = new Set([
+  "printf",
+  "print",
+  "count",
+  "sum",
+  "avg",
+  "min",
+  "max",
+  "stats",
+  "hist",
+  "lhist",
+  "delete",
+  "clear",
+  "zero",
+  "str",
+  "strncmp",
+  "strlen",
+  "buf",
+  "ntop",
+  "kstack",
+  "ustack",
+  "ksym",
+  "usym",
+  "time",
+  "join",
+  "exit",
+  "cgroup_path",
+  "cgroupid",
+]);
+
+const CALL_KEYWORDS = new Set([
+  "if",
+  "else",
+  "for",
+  "while",
+  "return",
+  "sizeof",
+  "typeof",
+  "unroll",
+  "comptime",
+]);
+
+function isAsciiLetter(ch: string): boolean {
+  return ch === "_" || (ch >= "A" && ch <= "Z") || (ch >= "a" && ch <= "z");
+}
+
+function isAsciiDigit(ch: string): boolean {
+  return ch >= "0" && ch <= "9";
+}
+
+// Exported for tests: the lexer is the single source of truth for call
+// detection, shared in behavior with the agent implementation.
+export function lexScript(script: string): {
+  toks: ScriptToken[];
   cleaned: string;
-  unclosedComment: boolean;
+  errs: string[];
 } {
+  const toks: ScriptToken[] = [];
   const out: string[] = [];
-  let inString = false;
-  let unclosedComment = false;
+  const errs: string[] = [];
+  let seenControl = false;
+  let seenNonAscii = false;
   const n = script.length;
+  let i = 0;
 
-  for (let i = 0; i < n;) {
+  for (; i < n;) {
+    if (toks.length > MAX_LEXER_TOKENS) {
+      errs.push("script too complex: token limit exceeded");
+      break;
+    }
     const ch = script.charAt(i);
-    if (inString) {
-      if (ch === "\\") {
-        out.push(ch);
-        i += 1;
-        if (i < n && script.charAt(i) !== "\n") {
-          out.push(script.charAt(i));
-          i += 1;
-        }
-        continue;
-      }
-      out.push(ch);
-      if (ch === '"' || ch === "\n") {
-        inString = false;
-      }
-      i += 1;
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = true;
+    const code = ch.charCodeAt(0);
+    if (ch === "\n") {
       out.push(ch);
       i += 1;
       continue;
     }
-    if (ch === "\\") {
-      if (i + 1 < n && script.charAt(i + 1) === "\n") {
-        i += 2;
-        continue;
-      }
-      if (
-        i + 2 < n &&
-        script.charAt(i + 1) === "\r" &&
-        script.charAt(i + 2) === "\n"
-      ) {
-        i += 3;
-        continue;
-      }
+    if (ch === " " || ch === "\t" || ch === "\r") {
       out.push(ch);
       i += 1;
       continue;
     }
     if (ch === "/" && i + 1 < n && script.charAt(i + 1) === "/") {
-      i += 2;
-      while (i < n && script.charAt(i) !== "\n") {
-        i += 1;
-      }
+      let j = i + 2;
+      while (j < n && script.charAt(j) !== "\n") j += 1;
+      toks.push({ kind: "comment", text: script.slice(i, j) });
       out.push(" ");
+      i = j;
       continue;
     }
     if (ch === "/" && i + 1 < n && script.charAt(i + 1) === "*") {
-      i += 2;
-      out.push(" ");
+      let j = i + 2;
       let closed = false;
-      while (i < n) {
+      while (j < n) {
         if (
-          script.charAt(i) === "*" &&
-          i + 1 < n &&
-          script.charAt(i + 1) === "/"
+          script.charAt(j) === "*" &&
+          j + 1 < n &&
+          script.charAt(j + 1) === "/"
         ) {
-          i += 2;
+          j += 2;
           closed = true;
           break;
         }
-        if (script.charAt(i) === "\n") {
-          out.push("\n");
-        }
-        i += 1;
+        if (script.charAt(j) === "\n") out.push("\n");
+        j += 1;
       }
-      if (!closed) {
-        unclosedComment = true;
-      }
+      toks.push({ kind: "comment", text: script.slice(i, j) });
+      out.push(" ");
+      if (!closed) errs.push("blocked syntax: unclosed block comment");
+      i = j;
       continue;
     }
+    if (ch === '"') {
+      let j = i + 1;
+      let closed = false;
+      while (j < n) {
+        if (script.charAt(j) === "\\") {
+          j += script.charAt(j + 1) !== "\n" ? 2 : 1;
+          continue;
+        }
+        if (script.charAt(j) === '"') {
+          j += 1;
+          closed = true;
+          break;
+        }
+        if (script.charAt(j) === "\n") break;
+        j += 1;
+      }
+      toks.push({ kind: "string", text: script.slice(i, j) });
+      out.push(script.slice(i, j));
+      if (!closed) errs.push("blocked syntax: unterminated string literal");
+      i = j;
+      continue;
+    }
+    if (ch === "#") {
+      let j = i + 1;
+      while (j < n && script.charAt(j) !== "\n") {
+        if (
+          script.charAt(j) === "\\" &&
+          j + 1 < n &&
+          script.charAt(j + 1) === "\n"
+        ) {
+          j += 2;
+          continue;
+        }
+        if (
+          script.charAt(j) === "\\" &&
+          j + 2 < n &&
+          script.charAt(j + 1) === "\r" &&
+          script.charAt(j + 2) === "\n"
+        ) {
+          j += 3;
+          continue;
+        }
+        j += 1;
+      }
+      toks.push({ kind: "preproc", text: script.slice(i, j) });
+      out.push(" ");
+      errs.push("blocked syntax: preprocessor directives are forbidden");
+      i = j;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < n && script.charAt(i + 1) === "\n") {
+      i += 2;
+      continue;
+    }
+    if (
+      ch === "\\" &&
+      i + 2 < n &&
+      script.charAt(i + 1) === "\r" &&
+      script.charAt(i + 2) === "\n"
+    ) {
+      i += 3;
+      continue;
+    }
+    if (code >= 0x80) {
+      if (!seenNonAscii) {
+        seenNonAscii = true;
+        errs.push(
+          "blocked syntax: non-ASCII characters are not allowed outside strings and comments",
+        );
+      }
+      out.push(" ");
+      const cp = script.codePointAt(i) ?? code;
+      i += cp > 0xffff ? 2 : 1;
+      continue;
+    }
+    if (code < 0x20 || code === 0x7f) {
+      if (!seenControl) {
+        seenControl = true;
+        errs.push("blocked syntax: invalid control character");
+      }
+      out.push(" ");
+      i += 1;
+      continue;
+    }
+    if (isAsciiLetter(ch)) {
+      const parts: string[] = [];
+      let j = i;
+      for (;;) {
+        if (
+          j < n &&
+          (isAsciiLetter(script.charAt(j)) || isAsciiDigit(script.charAt(j)))
+        ) {
+          parts.push(script.charAt(j));
+          j += 1;
+          continue;
+        }
+        // Line continuations join identifiers, as in C, so a split
+        // spelling still reads as the same call.
+        if (
+          j < n &&
+          script.charAt(j) === "\\" &&
+          j + 1 < n &&
+          script.charAt(j + 1) === "\n"
+        ) {
+          j += 2;
+          continue;
+        }
+        if (
+          j < n &&
+          script.charAt(j) === "\\" &&
+          j + 2 < n &&
+          script.charAt(j + 1) === "\r" &&
+          script.charAt(j + 2) === "\n"
+        ) {
+          j += 3;
+          continue;
+        }
+        break;
+      }
+      toks.push({ kind: "ident", text: parts.join("") });
+      out.push(parts.join(""));
+      i = j;
+      continue;
+    }
+    if (isAsciiDigit(ch)) {
+      const parts: string[] = [];
+      let j = i;
+      for (;;) {
+        if (
+          j < n &&
+          (isAsciiLetter(script.charAt(j)) ||
+            isAsciiDigit(script.charAt(j)) ||
+            script.charAt(j) === ".")
+        ) {
+          parts.push(script.charAt(j));
+          j += 1;
+          continue;
+        }
+        if (
+          j < n &&
+          script.charAt(j) === "\\" &&
+          j + 1 < n &&
+          script.charAt(j + 1) === "\n"
+        ) {
+          j += 2;
+          continue;
+        }
+        if (
+          j < n &&
+          script.charAt(j) === "\\" &&
+          j + 2 < n &&
+          script.charAt(j + 1) === "\r" &&
+          script.charAt(j + 2) === "\n"
+        ) {
+          j += 3;
+          continue;
+        }
+        break;
+      }
+      toks.push({ kind: "number", text: parts.join("") });
+      out.push(parts.join(""));
+      i = j;
+      continue;
+    }
+    toks.push({ kind: "punct", text: ch });
     out.push(ch);
     i += 1;
   }
 
-  return { cleaned: out.join(""), unclosedComment };
+  return { toks, cleaned: out.join(""), errs };
+}
+
+// Every identifier call site: an identifier whose next non-comment token is
+// an opening paren. A name in macro-definition position at depth 0 is a definition,
+// not a call.
+export function collectCalls(toks: ScriptToken[]): {
+  calls: string[];
+  tooDeep: boolean;
+} {
+  const calls: string[] = [];
+  let depth = 0;
+  let maxDepth = 0;
+  let prevIdent = "";
+  for (let idx = 0; idx < toks.length; idx += 1) {
+    const t = toks[idx]!;
+    if (t.kind === "comment") continue;
+    let call = false;
+    if (t.kind === "punct" && t.text.length === 1) {
+      if (t.text === "(" || t.text === "{" || t.text === "[") {
+        depth += 1;
+        if (depth > maxDepth) maxDepth = depth;
+      } else if (t.text === ")" || t.text === "}" || t.text === "]") {
+        if (depth > 0) depth -= 1;
+      }
+    } else if (
+      t.kind === "ident" &&
+      !CALL_KEYWORDS.has(t.text) &&
+      (prevIdent !== "macro" || depth > 0)
+    ) {
+      let j = idx + 1;
+      while (j < toks.length && toks[j]!.kind === "comment") j += 1;
+      if (
+        j < toks.length &&
+        toks[j]!.kind === "punct" &&
+        toks[j]!.text === "("
+      ) {
+        call = true;
+      }
+    }
+    if (call) calls.push(t.text);
+    prevIdent = t.kind === "ident" ? t.text : "";
+  }
+  return { calls, tooDeep: maxDepth > MAX_NESTING_DEPTH };
+}
+
+function checkCalls(calls: string[]): string[] {
+  const seen = new Set<string>();
+  const errs: string[] = [];
+  for (const name of calls) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    if (DENIED_CALLS.has(name)) {
+      errs.push(`blocked call: ${name} is forbidden`);
+    } else if (!ALLOWED_CALLS.has(name)) {
+      errs.push(`unknown function call: ${name} is not allowlisted`);
+    }
+  }
+  errs.sort();
+  return errs;
 }
 
 function advanceInString(s: string, i: number): [number, boolean] {
@@ -735,16 +1005,12 @@ export function staticValidate(
     };
   }
   if (script.includes("--unsafe")) errors.push("--unsafe is forbidden");
-  const { cleaned, unclosedComment } = stripCommentsAndContinuations(script);
-  if (unclosedComment) {
-    errors.push("blocked syntax: unclosed block comment");
-  }
-  if (BLOCKED_CALLS.test(cleaned)) {
-    errors.push("blocked call: system/signal/override/cat are forbidden");
-  }
-  if (INCLUDE_RE.test(cleaned)) {
-    errors.push("blocked syntax: #include/#define are forbidden");
-  }
+  const { toks, cleaned, errs: lexErrs } = lexScript(script);
+  errors.push(...lexErrs);
+  const { calls, tooDeep } = collectCalls(toks);
+  if (tooDeep) errors.push("script too complex: nesting too deep");
+  errors.push(...checkCalls(calls));
+  const hasPrintfCall = calls.includes("printf");
   const { probes, errs: parseErrors } = extractProbes(cleaned);
   errors.push(...parseErrors);
   if (probes.length === 0 && parseErrors.length === 0) {
@@ -844,7 +1110,7 @@ export function staticValidate(
       `too many probes: script attaches ${probeCount} probes (limit ${MAX_PROBES})`,
     );
   }
-  if (/\bprintf\s*\(/.test(cleaned)) {
+  if (hasPrintfCall) {
     const hot = probes.some(
       (p) => HIGH_FREQ.has(p) || p.startsWith("profile:"),
     );

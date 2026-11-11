@@ -19,9 +19,7 @@ import (
 const MaxScriptBytes = 8 * 1024
 
 var (
-	blockedCalls = regexp.MustCompile(`\b(system|signal|override|cat)\s*\(`)
-	includeRe    = regexp.MustCompile(`(?m)^\s*#\s*(include|define)\b`)
-	cDeclRe      = regexp.MustCompile(`^(struct|enum|union)(\s+[A-Za-z_][A-Za-z0-9_]*)?$`)
+	cDeclRe = regexp.MustCompile(`^(struct|enum|union)(\s+[A-Za-z_][A-Za-z0-9_]*)?$`)
 )
 
 var allowedProviders = map[string]bool{
@@ -69,6 +67,12 @@ func classifySingleError(err string) string {
 	if strings.HasPrefix(err, "catalog unavailable:") {
 		return "CATALOG_UNAVAILABLE"
 	}
+	if strings.HasPrefix(err, "blocked call:") {
+		return "BLOCKED_CALL"
+	}
+	if strings.HasPrefix(err, "unknown function call:") {
+		return "UNKNOWN_CALL"
+	}
 	if strings.HasPrefix(err, "probe not found:") {
 		return "PROBE_NOT_FOUND"
 	}
@@ -96,7 +100,18 @@ func classifySingleError(err string) string {
 // taxonomy code. HTTP status stays 400; only the code carries the taxonomy.
 // StaticValidate errors match strictly by prefix so probe text cannot spoof
 // dry-run compiler wording; unrecognized errors fall back to best-effort matching.
+// Severity order: BLOCKED_CALL, UNKNOWN_CALL, PROBE_NOT_FOUND, LIMIT_EXCEEDED.
 func classifyValidationError(errs []string) string {
+	for _, e := range errs {
+		if classifySingleError(e) == "BLOCKED_CALL" {
+			return "BLOCKED_CALL"
+		}
+	}
+	for _, e := range errs {
+		if classifySingleError(e) == "UNKNOWN_CALL" {
+			return "UNKNOWN_CALL"
+		}
+	}
 	code := "VALIDATION_FAILED"
 	for _, e := range errs {
 		switch classifySingleError(e) {
@@ -109,86 +124,303 @@ func classifyValidationError(errs []string) string {
 	return code
 }
 
-// stripCommentsAndContinuations removes // and /* */ comments and \\\r?\n
-// line continuations outside double-quoted strings so regex checks see unified
-// tokens without gluing adjacent identifiers or merging lines across comments.
-func stripCommentsAndContinuations(script string) (string, bool) {
-	var out strings.Builder
-	out.Grow(len(script))
-	inString := false
-	unclosedComment := false
+// Token-level lexer for default-deny call validation. Strings and comments
+// become opaque tokens so their contents can never read as calls; the cleaned
+// source rebuilt here feeds probe-header parsing. Unterminated strings and
+// comments, preprocessor lines, NUL/control bytes, non-ASCII code, token
+// floods, and deep nesting are validation errors, never silent skips.
+type tokenKind int
 
-	for i := 0; i < len(script); {
+const (
+	tokIdent tokenKind = iota
+	tokNumber
+	tokString
+	tokPunct
+	tokComment
+	tokPreproc
+)
+
+type scriptToken struct {
+	kind tokenKind
+	text string
+}
+
+const (
+	maxLexerTokens  = 10000
+	maxNestingDepth = 128
+)
+
+// deniedCalls are rejected with the function name even though they are also
+// absent from the allowlist, so the reason is specific.
+var deniedCalls = map[string]bool{
+	"system":   true,
+	"signal":   true,
+	"override": true,
+	"cat":      true,
+}
+
+// allowedCalls is the default-deny function allowlist: bpftrace builtins that
+// are read-only or in-kernel aggregation/output helpers.
+var allowedCalls = map[string]bool{
+	"printf": true, "print": true,
+	"count": true, "sum": true, "avg": true, "min": true, "max": true,
+	"stats": true, "hist": true, "lhist": true,
+	"delete": true, "clear": true, "zero": true,
+	"str": true, "strncmp": true, "strlen": true, "buf": true,
+	"ntop":   true,
+	"kstack": true, "ustack": true, "ksym": true, "usym": true,
+	"time": true, "join": true,
+	"exit":        true,
+	"cgroup_path": true, "cgroupid": true,
+}
+
+// callKeywords take parentheses but are control flow, not function calls.
+var callKeywords = map[string]bool{
+	"if": true, "else": true, "for": true, "while": true, "return": true,
+	"sizeof": true, "typeof": true, "unroll": true, "comptime": true,
+}
+
+func isASCIILetter(c byte) bool {
+	return c == '_' || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+}
+
+func isASCIIDigit(c byte) bool {
+	return c >= '0' && c <= '9'
+}
+
+func lexScript(script string) ([]scriptToken, string, []string) {
+	var toks []scriptToken
+	var cleaned strings.Builder
+	cleaned.Grow(len(script))
+	var errs []string
+	seenControl := false
+	seenNonASCII := false
+	n := len(script)
+	i := 0
+	for i < n {
+		if len(toks) > maxLexerTokens {
+			errs = append(errs, "script too complex: token limit exceeded")
+			break
+		}
 		c := script[i]
-		if inString {
-			if c == '\\' {
-				out.WriteByte(c)
-				i++
-				if i < len(script) && script[i] != '\n' {
-					out.WriteByte(script[i])
-					i++
-				}
-				continue
-			}
-			out.WriteByte(c)
-			if c == '"' || c == '\n' {
-				inString = false
-			}
+		switch {
+		case c == '\n':
+			cleaned.WriteByte(c)
 			i++
-			continue
-		}
-
-		if c == '"' {
-			inString = true
-			out.WriteByte(c)
+		case c == ' ' || c == '\t' || c == '\r':
+			cleaned.WriteByte(c)
 			i++
-			continue
-		}
-		if c == '\\' {
-			if i+1 < len(script) && script[i+1] == '\n' {
-				i += 2
-				continue
+		case c == '/' && i+1 < n && script[i+1] == '/':
+			j := i + 2
+			for j < n && script[j] != '\n' {
+				j++
 			}
-			if i+2 < len(script) && script[i+1] == '\r' && script[i+2] == '\n' {
-				i += 3
-				continue
-			}
-			out.WriteByte(c)
-			i++
-			continue
-		}
-		if c == '/' && i+1 < len(script) && script[i+1] == '/' {
-			i += 2
-			for i < len(script) && script[i] != '\n' {
-				i++
-			}
-			out.WriteByte(' ')
-			continue
-		}
-		if c == '/' && i+1 < len(script) && script[i+1] == '*' {
-			i += 2
-			out.WriteByte(' ')
+			toks = append(toks, scriptToken{kind: tokComment, text: script[i:j]})
+			cleaned.WriteByte(' ')
+			i = j
+		case c == '/' && i+1 < n && script[i+1] == '*':
+			j := i + 2
 			closed := false
-			for i < len(script) {
-				if script[i] == '*' && i+1 < len(script) && script[i+1] == '/' {
-					i += 2
+			for j < n {
+				if script[j] == '*' && j+1 < n && script[j+1] == '/' {
+					j += 2
 					closed = true
 					break
 				}
-				if script[i] == '\n' {
-					out.WriteByte('\n')
+				if script[j] == '\n' {
+					cleaned.WriteByte('\n')
 				}
-				i++
+				j++
 			}
+			toks = append(toks, scriptToken{kind: tokComment, text: script[i:j]})
+			cleaned.WriteByte(' ')
 			if !closed {
-				unclosedComment = true
+				errs = append(errs, "blocked syntax: unclosed block comment")
 			}
+			i = j
+		case c == '"':
+			j := i + 1
+			closed := false
+			for j < n {
+				if script[j] == '\\' {
+					if j+1 < n && script[j+1] != '\n' {
+						j += 2
+					} else {
+						j++
+					}
+					continue
+				}
+				if script[j] == '"' {
+					j++
+					closed = true
+					break
+				}
+				if script[j] == '\n' {
+					break
+				}
+				j++
+			}
+			toks = append(toks, scriptToken{kind: tokString, text: script[i:j]})
+			cleaned.WriteString(script[i:j])
+			if !closed {
+				errs = append(errs, "blocked syntax: unterminated string literal")
+			}
+			i = j
+		case c == '#':
+			j := i + 1
+			for j < n && script[j] != '\n' {
+				if script[j] == '\\' && j+1 < n && script[j+1] == '\n' {
+					j += 2
+					continue
+				}
+				if script[j] == '\\' && j+2 < n && script[j+1] == '\r' && script[j+2] == '\n' {
+					j += 3
+					continue
+				}
+				j++
+			}
+			toks = append(toks, scriptToken{kind: tokPreproc, text: script[i:j]})
+			cleaned.WriteByte(' ')
+			errs = append(errs, "blocked syntax: preprocessor directives are forbidden")
+			i = j
+		case c == '\\' && i+1 < n && script[i+1] == '\n':
+			i += 2
+		case c == '\\' && i+2 < n && script[i+1] == '\r' && script[i+2] == '\n':
+			i += 3
+		case c >= 0x80:
+			_, size := utf8.DecodeRuneInString(script[i:])
+			if !seenNonASCII {
+				seenNonASCII = true
+				errs = append(errs, "blocked syntax: non-ASCII characters are not allowed outside strings and comments")
+			}
+			cleaned.WriteByte(' ')
+			i += size
+		case c < 0x20 || c == 0x7f:
+			if !seenControl {
+				seenControl = true
+				errs = append(errs, "blocked syntax: invalid control character")
+			}
+			cleaned.WriteByte(' ')
+			i++
+		case isASCIILetter(c):
+			var sb strings.Builder
+			j := i
+			for j < n {
+				if isASCIILetter(script[j]) || isASCIIDigit(script[j]) {
+					sb.WriteByte(script[j])
+					j++
+					continue
+				}
+				// Line continuations join identifiers, as in C, so a split
+				// spelling still reads as the same call.
+				if script[j] == '\\' && j+1 < n && script[j+1] == '\n' {
+					j += 2
+					continue
+				}
+				if script[j] == '\\' && j+2 < n && script[j+1] == '\r' && script[j+2] == '\n' {
+					j += 3
+					continue
+				}
+				break
+			}
+			toks = append(toks, scriptToken{kind: tokIdent, text: sb.String()})
+			cleaned.WriteString(sb.String())
+			i = j
+		case isASCIIDigit(c):
+			var nb strings.Builder
+			j := i
+			for j < n {
+				if isASCIILetter(script[j]) || isASCIIDigit(script[j]) || script[j] == '.' {
+					nb.WriteByte(script[j])
+					j++
+					continue
+				}
+				if script[j] == '\\' && j+1 < n && script[j+1] == '\n' {
+					j += 2
+					continue
+				}
+				if script[j] == '\\' && j+2 < n && script[j+1] == '\r' && script[j+2] == '\n' {
+					j += 3
+					continue
+				}
+				break
+			}
+			toks = append(toks, scriptToken{kind: tokNumber, text: nb.String()})
+			cleaned.WriteString(nb.String())
+			i = j
+		default:
+			toks = append(toks, scriptToken{kind: tokPunct, text: script[i : i+1]})
+			cleaned.WriteByte(c)
+			i++
+		}
+	}
+	return toks, cleaned.String(), errs
+}
+
+// collectCalls records every identifier call site: an identifier whose next
+// non-comment token is an opening paren. Comment-split, whitespace-split, and
+// line-continued spellings still read as calls; split identifiers cannot.
+// A name in macro-definition position at depth 0 is a definition, not a call.
+func collectCalls(toks []scriptToken) (calls []string, tooDeep bool) {
+	depth := 0
+	maxDepth := 0
+	prevIdent := ""
+	for idx, t := range toks {
+		if t.kind == tokComment {
 			continue
 		}
-		out.WriteByte(c)
-		i++
+		call := false
+		if t.kind == tokPunct && len(t.text) == 1 {
+			switch t.text[0] {
+			case '(', '{', '[':
+				depth++
+				if depth > maxDepth {
+					maxDepth = depth
+				}
+			case ')', '}', ']':
+				if depth > 0 {
+					depth--
+				}
+			}
+		} else if t.kind == tokIdent && !callKeywords[t.text] && (prevIdent != "macro" || depth > 0) {
+			j := idx + 1
+			for j < len(toks) && toks[j].kind == tokComment {
+				j++
+			}
+			if j < len(toks) && toks[j].kind == tokPunct && toks[j].text == "(" {
+				call = true
+			}
+		}
+		if call {
+			calls = append(calls, t.text)
+		}
+		if t.kind == tokIdent {
+			prevIdent = t.text
+		} else {
+			prevIdent = ""
+		}
 	}
-	return out.String(), unclosedComment
+	return calls, maxDepth > maxNestingDepth
+}
+
+// checkCalls enforces default-deny: every recorded call must be allowlisted,
+// with denylisted calls rejected under their own message.
+func checkCalls(calls []string) []string {
+	seen := map[string]bool{}
+	var errs []string
+	for _, name := range calls {
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		if deniedCalls[name] {
+			errs = append(errs, "blocked call: "+name+" is forbidden")
+		} else if !allowedCalls[name] {
+			errs = append(errs, "unknown function call: "+name+" is not allowlisted")
+		}
+	}
+	sort.Strings(errs)
+	return errs
 }
 
 func advanceInString(s string, i int) (int, bool) {
@@ -557,16 +789,13 @@ func StaticValidate(script string, catalog *Catalog) ValidateResult {
 	var errors []string
 	var warnings []string
 	seenHotSym := map[string]bool{}
-	cleaned, unclosedComment := stripCommentsAndContinuations(script)
-	if unclosedComment {
-		errors = append(errors, "blocked syntax: unclosed block comment")
+	toks, cleaned, lexErrs := lexScript(script)
+	errors = append(errors, lexErrs...)
+	calls, tooDeep := collectCalls(toks)
+	if tooDeep {
+		errors = append(errors, "script too complex: nesting too deep")
 	}
-	if blockedCalls.MatchString(cleaned) {
-		errors = append(errors, "blocked call: system/signal/override/cat are forbidden")
-	}
-	if includeRe.MatchString(cleaned) {
-		errors = append(errors, "blocked syntax: #include/#define are forbidden")
-	}
+	errors = append(errors, checkCalls(calls)...)
 	probes, parseErrs := extractProbes(cleaned)
 	errors = append(errors, parseErrs...)
 	if len(probes) == 0 && len(parseErrs) == 0 {
