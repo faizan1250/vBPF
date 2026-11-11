@@ -358,8 +358,12 @@ func main() {
 		}
 		time.Sleep(30 * time.Second)
 	case "printf_then_sleep":
-		_, _ = os.Stdout.WriteString("{\"type\":\"printf\",\"data\":\"hello\\n\"}\n")
+		// Stderr first: Run kills the child as soon as the stdout printf
+		// triggers the emit error, so stderr must already be in the pipe.
+		// Writing stdout first races the kill against the child's second
+		// write and flakes the stderr-drain assertion (PR #88).
 		_, _ = os.Stderr.WriteString("before-sleep stderr\n")
+		_, _ = os.Stdout.WriteString("{\"type\":\"printf\",\"data\":\"hello\\n\"}\n")
 		time.Sleep(30 * time.Second)
 	case "close_stdout_sleep":
 		_, _ = os.Stdout.WriteString("{\"type\":\"printf\",\"data\":\"early\\n\"}\n")
