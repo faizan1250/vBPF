@@ -976,6 +976,21 @@ recipe-check` green for all 30; full agent `produced-output.sh` run:
   is the observed tuning-round spread (n=1 full run), never a
   standard deviation. PR/commit links use full GitHub URLs (remote is
   faizan1250/vBPF) with SHAs verified in the local git log.
-- **Verified:** ash scripts/check-docs.sh green, prettier --check
+- **Verified:** bash scripts/check-docs.sh green, prettier --check
   clean on touched markdown, article and post drafts committed marked
   DRAFT.
+
+## I-21: roadmap reorder (2026-11-13)
+
+- **Scope (D-96).** Docs-only: README roadmap reordered per the issue
+  (sessions/export first, then opt-in Explain results with a
+  data-sharing notice, then Kubernetes/container targeting via cgroup
+  IDs; libbpf/CO-RE backend and multi-host TLS agents last as the
+  largest scope), plus one sentence on why. No implementation, no
+  version bump (target stays 0.3.x).
+- **Consistency (D-96).** docs/launch-post.md already lists sessions,
+  Kubernetes/cgroup, then multi-host in that order, so no change
+  needed there; README limitations (single-host, bpftrace-only) and
+  the deferred-to-v0.3 sessions note already match the new order.
+- **Verified:** bash scripts/check-docs.sh green, prettier --check
+  clean on touched markdown.

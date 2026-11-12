@@ -553,13 +553,15 @@ why pasting chatbot output into a root shell is not the same thing.
 
 - [x] Real generation scores from the eval harness, published above
 - [x] Container packaging (`docker compose up` quickstart)
-- [ ] libbpf / CO-RE backend for long-running probes
-- [ ] Flame graphs and off-CPU analysis
-- [ ] Multi-host agents over TLS with enrollment tokens
-- [ ] Kubernetes and container targeting (pod name to cgroup)
-- [ ] Opt-in "Explain these results"
-- [ ] Saved dashboards and shareable run reports
 - [ ] Server-side sessions and export (v0.3): persistent, shareable history beyond browser localStorage
+- [ ] Opt-in "Explain these results" (with a clear data-sharing notice: run output would leave the machine)
+- [ ] Kubernetes and container targeting (pod name to cgroup IDs)
+- [ ] Saved dashboards and shareable run reports
+- [ ] Flame graphs and off-CPU analysis
+- [ ] libbpf / CO-RE backend for long-running probes
+- [ ] Multi-host agents over TLS with enrollment tokens
+
+Ordered to finish single-host usability first; the libbpf backend and multi-host agents come last as the largest scope.
 
 Have a request? [Open an issue](https://github.com/faizan1250/vBPF/issues/new/choose).
 
