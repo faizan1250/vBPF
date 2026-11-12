@@ -1,0 +1,10 @@
+tracepoint:sched:sched_process_fork
+{
+  @forks[comm] = count();
+}
+
+interval:s:1
+{
+  print(@forks);
+  clear(@forks);
+}

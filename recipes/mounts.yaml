@@ -1,0 +1,9 @@
+id: mounts
+title: Filesystem mounts
+description: Streams mount syscalls with source, target, and filesystem type. Unexpected mounts can indicate persistence tricks.
+tags: [security, filesystem, mount, audit]
+view: events
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:syscalls:sys_enter_mount"]
+params: []

@@ -1,0 +1,9 @@
+id: connects-by-process
+title: TCP connects by process
+description: Counts newly established IPv4 TCP connections attributed to each process.
+tags: [network, tcp, connections, process]
+view: bar
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:sock:inet_sock_set_state"]
+params: []

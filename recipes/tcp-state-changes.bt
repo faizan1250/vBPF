@@ -1,0 +1,12 @@
+// TCP state numbers: 1 ESTABLISHED, 2 SYN-SENT, 3 SYN-RECV, 4 FIN-WAIT-1,
+// 5 FIN-WAIT-2, 6 TIME-WAIT, 7 CLOSE, 8 CLOSE-WAIT, 9 LAST-ACK, 10 LISTEN, 11 CLOSING.
+tracepoint:sock:inet_sock_set_state
+{
+  @states[args->newstate] = count();
+}
+
+END
+{
+  print(@states);
+  clear(@states);
+}

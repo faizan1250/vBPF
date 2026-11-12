@@ -857,3 +857,53 @@ state}` shape is parsed with `.omit({ origin: true })` since the agent
   fixed to extract headings from `$target` (with `2>/dev/null || true`
   guard), now green; prettier check clean on edited/new markdown;
   social.png opens at exactly 1280x640.
+
+## I-19: Contributor funnel and recipe growth (2026-11-12)
+
+- **Scope (D-89).** 20 new recipes (30 total), all tracepoint/uprobe, no
+  kprobes: exec-snoop-args, setuid-calls, ptrace-attach,
+  connects-by-process, accepts-listens, bind-calls, mounts, module-loads,
+  unlinks, openat-errors, syscall-io-latency, runqueue-latency, oom-kills,
+  signal-generation, fork-rate, syscall-errors, tcp-state-changes,
+  page-cache-misses, block-io-sizes, dns-lookups-by-process. `sys_exit_*`
+  tracepoints carry only the return value, so openat-errors and
+  syscall-io-latency pair enter/exit via maps keyed by `tid` (always delete
+  on both outcomes).
+- **openat2 twin (D-89).** Modern glibc opens via `openat2`, so an
+  openat-only recipe misses most opens (proven: `cat` of a missing file
+  fired nothing until `sys_enter_openat2`/`sys_exit_openat2` were added).
+  `docs/writing-recipes.md` tells contributors to watch syscall twins.
+- **`__data_loc` strings need `str()` (D-89).** `module:module_load`
+  `name` and `oom:mark_victim` `comm` read as integers without it
+  (dry-run error). bpftrace `for` is map-iteration only; the argv count in
+  exec-snoop-args uses `while` with pointer arithmetic instead.
+- **OOM workload (D-90).** A plain 200 MB allocation survives a 50M memcg
+  (1G swap pages it out); the sentinel hog does `mlockall(MCL_FUTURE)`
+  then touches per-page, so the killer fires in under a second.
+  `oom:mark_victim` is confirmed emitted for memcg kills (52 victims in an
+  8 s agent run). One attach-time `tracepoint not found` for
+  `oom:mark_victim` never reproduced; treated as environmental noise.
+- **Funnel (D-91).** `recipes/_template.bt` + `recipes/_template.yaml`
+  (skipped by name in `validate-recipes.sh` and `collect-compat.sh`;
+  `_template.bt` still passes `TestLexerAcceptsRecipes`), plus
+  `scripts/new-recipe.sh`, `make recipe-check ID=<id>`
+  (`scripts/recipe-check.sh`: schema, static rules, dry-run when bpftrace
+  is present, fixture presence), `docs/writing-recipes.md`, CONTRIBUTING
+  first-contribution steps with the label vocabulary (`good first issue`,
+  `recipe`, `kernel-report`, `help wanted`), and `scripts/compat-report.sh`
+  (reuses `collect-compat.sh`, prints paste-ready markdown for
+  `kernel.yml`). `produced-output.sh` now covers all 30 recipes with a
+  sentinel workload each. Fuzz corpus not regenerated: no CI gate enforces
+  freshness and seeds are inputs, not assertions.
+- **Verified (D-92).** On WSL2 (6.6.87.2-microsoft-standard, bpftrace
+  v0.20.2, 2026-11-12): `bpftrace -d` clean for all 30; `make
+recipe-check` green for all 30; full agent `produced-output.sh` run:
+  28/30 produced events (page-faults-by-process and
+  slow-disk-io-by-process recorded zero events, a measurement not a
+  failure, same as 2026-11-10). `compat/wsl2-ubuntu-24.04.json` refreshed
+  and `docs/compat.md` regenerated. `make test-integration`: all green
+  except `TestLoadOrCreateToken_ChmodOrPermError`, a root artifact (the
+  test assumes unprivileged chmod fails; root bypasses it), pre-existing
+  and unrelated to recipes; recorded in the report's failed list.
+  `validate-recipes` (30), `check-docs`, `compat-check`, shellcheck,
+  prettier, and the Go server/parser suites are green.

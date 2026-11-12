@@ -1,0 +1,4 @@
+tracepoint:module:module_load
+{
+  printf("module=%s taints=%u\n", str(args->name), args->taints);
+}

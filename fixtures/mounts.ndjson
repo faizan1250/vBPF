@@ -1,0 +1,6 @@
+{"type": "printf", "data": "mount pid=3206299 src=/tmp/vbpf-test/vbpf-mnt-src target=/tmp/vbpf-test/vbpf-mnt-dst fstype=none\n"}
+{"type": "printf", "data": "mount pid=3206301 src=/tmp/vbpf-test/vbpf-mnt-src target=/tmp/vbpf-test/vbpf-mnt-dst fstype=none\n"}
+{"type": "printf", "data": "mount pid=3206303 src=/tmp/vbpf-test/vbpf-mnt-src target=/tmp/vbpf-test/vbpf-mnt-dst fstype=none\n"}
+{"type": "printf", "data": "mount pid=3206305 src=/tmp/vbpf-test/vbpf-mnt-src target=/tmp/vbpf-test/vbpf-mnt-dst fstype=none\n"}
+{"type": "printf", "data": "mount pid=3206307 src=/tmp/vbpf-test/vbpf-mnt-src target=/tmp/vbpf-test/vbpf-mnt-dst fstype=none\n"}
+{"type": "printf", "data": "mount pid=3206309 src=/tmp/vbpf-test/vbpf-mnt-src target=/tmp/vbpf-test/vbpf-mnt-dst fstype=none\n"}

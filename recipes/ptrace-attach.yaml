@@ -1,0 +1,9 @@
+id: ptrace-attach
+title: ptrace attach
+description: Streams debugger-style attach requests (PTRACE_ATTACH and PTRACE_SEIZE) with the tracer and target pid.
+tags: [security, ptrace, debug, audit]
+view: events
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:syscalls:sys_enter_ptrace"]
+params: []

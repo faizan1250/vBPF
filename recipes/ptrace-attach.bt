@@ -1,0 +1,7 @@
+// PTRACE_ATTACH == 16, PTRACE_SEIZE == 0x4206 (16902).
+tracepoint:syscalls:sys_enter_ptrace
+{
+  if (args->request == 16 || args->request == 16902) {
+    printf("%s pid=%d target=%d request=%d\n", comm, pid, args->pid, args->request);
+  }
+}

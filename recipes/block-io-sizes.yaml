@@ -1,0 +1,9 @@
+id: block-io-sizes
+title: Block I/O sizes
+description: Histogram of block I/O request sizes in bytes at queue time. A shift toward tiny requests suggests fragmentation or mis-tuned writes.
+tags: [disk, io, block, histogram]
+view: histogram
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:block:block_bio_queue"]
+params: []

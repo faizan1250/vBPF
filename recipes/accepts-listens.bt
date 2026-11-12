@@ -1,0 +1,17 @@
+tracepoint:syscalls:sys_enter_accept4
+{
+  @accepts[comm] = count();
+}
+
+tracepoint:syscalls:sys_enter_listen
+{
+  @listens[comm] = count();
+}
+
+END
+{
+  print(@accepts);
+  clear(@accepts);
+  print(@listens);
+  clear(@listens);
+}

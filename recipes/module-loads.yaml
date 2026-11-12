@@ -1,0 +1,9 @@
+id: module-loads
+title: Kernel module loads
+description: Streams kernel module load events with the module name. Unexpected loads on a locked-down host deserve a look.
+tags: [security, kernel, module, audit]
+view: events
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:module:module_load"]
+params: []

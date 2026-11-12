@@ -1,0 +1,9 @@
+id: dns-lookups-by-process
+title: DNS lookups by process
+description: Counts getaddrinfo calls by process. A quiet host suddenly resolving names is worth investigating.
+tags: [network, dns, resolution, process]
+view: bar
+duration_default: 10
+min_kernel: "5.8"
+requires: ["uprobe:libc:getaddrinfo"]
+params: []

@@ -1,0 +1,8 @@
+tracepoint:syscalls:sys_enter_execve
+{
+  $argc = 0;
+  while ($argc < 16 && *(uint64*)((uint64)args->argv + $argc * 8) != 0) {
+    $argc += 1;
+  }
+  printf("%s pid=%d argc=%d file=%s\n", comm, pid, $argc, str(args->filename));
+}

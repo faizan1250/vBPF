@@ -1,0 +1,18 @@
+tracepoint:sched:sched_wakeup
+{
+  @qtime[args->pid] = nsecs;
+}
+
+tracepoint:sched:sched_switch
+/@qtime[args->next_pid]/
+{
+  @runqlat_us = hist((nsecs - @qtime[args->next_pid]) / 1000);
+  delete(@qtime[args->next_pid]);
+}
+
+END
+{
+  print(@runqlat_us);
+  clear(@runqlat_us);
+  clear(@qtime);
+}

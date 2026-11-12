@@ -1,0 +1,13 @@
+// TCP_ESTABLISHED == 1, AF_INET == 2.
+tracepoint:sock:inet_sock_set_state
+{
+  if (args->newstate == 1 && args->family == 2) {
+    @connects[comm] = count();
+  }
+}
+
+END
+{
+  print(@connects);
+  clear(@connects);
+}

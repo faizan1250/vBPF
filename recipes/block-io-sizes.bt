@@ -1,0 +1,10 @@
+tracepoint:block:block_bio_queue
+{
+  @bytes = hist(args->nr_sector * 512);
+}
+
+END
+{
+  print(@bytes);
+  clear(@bytes);
+}

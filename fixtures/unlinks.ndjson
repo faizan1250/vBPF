@@ -1,0 +1,8 @@
+{"type": "printf", "data": "rm pid=3208004 path=/tmp/vbpf-test/vbpf-unlink-test\n"}
+{"type": "printf", "data": "rm pid=3208005 path=/tmp/vbpf-test/vbpf-unlink-test\n"}
+{"type": "printf", "data": "rm pid=3208006 path=/tmp/vbpf-test/vbpf-unlink-test\n"}
+{"type": "printf", "data": "rm pid=3208007 path=/tmp/vbpf-test/vbpf-unlink-test\n"}
+{"type": "printf", "data": "rm pid=3208008 path=/tmp/vbpf-test/vbpf-unlink-test\n"}
+{"type": "printf", "data": "rm pid=3208009 path=/tmp/vbpf-test/vbpf-unlink-test\n"}
+{"type": "printf", "data": "rm pid=3208010 path=/tmp/vbpf-test/vbpf-unlink-test\n"}
+{"type": "printf", "data": "rm pid=3208011 path=/tmp/vbpf-test/vbpf-unlink-test\n"}

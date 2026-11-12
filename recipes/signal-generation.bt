@@ -1,0 +1,10 @@
+tracepoint:signal:signal_generate
+{
+  @signals[comm, args->sig] = count();
+}
+
+END
+{
+  print(@signals);
+  clear(@signals);
+}

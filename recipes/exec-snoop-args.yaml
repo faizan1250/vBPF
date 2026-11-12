@@ -1,0 +1,9 @@
+id: exec-snoop-args
+title: Exec snoop with argument count
+description: Streams process executions with pid, executable path, and the number of argument vector entries (up to 16).
+tags: [process, exec, audit, argv]
+view: events
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:syscalls:sys_enter_execve"]
+params: []

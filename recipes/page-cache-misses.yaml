@@ -1,0 +1,9 @@
+id: page-cache-misses
+title: Page-cache misses by process
+description: Counts file-backed page insertions by process. Cold readers that should be warm show up here.
+tags: [memory, cache, io, process]
+view: bar
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:filemap:mm_filemap_add_to_page_cache"]
+params: []

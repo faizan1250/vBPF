@@ -3,27 +3,50 @@
   "status": "verified",
   "kernel": "6.6.87.2-microsoft-standard-WSL2",
   "distro": "Ubuntu 24.04.5 LTS (Noble) userspace on the Microsoft WSL2 kernel",
-  "bpftrace_version": "v0.20.2",
+  "bpftrace_version": "bpftrace v0.20.2",
   "btf": true,
-  "recorded_at": "2026-11-10",
+  "recorded_at": "2026-11-12",
   "recipes": {
+    "accepts-listens": "available",
+    "bind-calls": "available",
+    "block-io-sizes": "available",
     "block-latency-histogram": "available",
+    "connects-by-process": "available",
     "cpu-by-process": "available",
     "dns-lookups": "available",
+    "dns-lookups-by-process": "available",
+    "exec-snoop-args": "available",
     "files-opened-by-process": "available",
+    "fork-rate": "available",
+    "module-loads": "available",
+    "mounts": "available",
     "new-processes": "available",
+    "oom-kills": "available",
+    "openat-errors": "available",
+    "page-cache-misses": "available",
     "page-faults-by-process": "available",
+    "ptrace-attach": "available",
+    "runqueue-latency": "available",
+    "setuid-calls": "available",
+    "signal-generation": "available",
     "slow-disk-io-by-process": "available",
     "syscall-counts-by-process": "available",
+    "syscall-errors": "available",
+    "syscall-io-latency": "available",
     "tcp-connects": "available",
-    "tcp-retransmits": "available"
+    "tcp-retransmits": "available",
+    "tcp-state-changes": "available",
+    "unlinks": "available"
   },
   "tests": {
     "passed": [
-      "make test-integration (-tags integration, root + bpftrace + BTF)",
-      "produced-output.sh: 9/10 recipes produced events in the 5 s window"
+      "make recipes-check (validate-recipes.sh, 30 recipes)",
+      "produced-output.sh: 28/30 recipes produced events in the 5 s window",
+      "bpftrace -d dry-run clean for all 30 recipes"
     ],
-    "failed": []
+    "failed": [
+      "make test-integration: TestLoadOrCreateToken_ChmodOrPermError fails as root (chmod succeeds for root; needs non-root)"
+    ]
   },
-  "notes": "Recorded 2026-11-10 via wsl -u root (see docs/environment.md R-04/R-05/R-09). All 10 recipe probes list via bpftrace -l. slow-disk-io produced zero events in the 5 s window (no >=10 ms block IO then; a 10 s retest produced 1 map event), recorded as a measurement, not a failure. This is WSL2 userspace on the Microsoft kernel, not the stock Ubuntu 24.04 kernel."
+  "notes": "Recorded 2026-11-12 via wsl -u root (see docs/environment.md R-04/R-05/R-09). I-19: all 30 recipes attach cleanly (bpftrace -d) and produced events through the agent except page-faults-by-process and slow-disk-io-by-process (zero events in the 5 s window, a measurement, not a failure; same as the 2026-11-10 record). openat-errors watches openat and openat2 (modern glibc opens via openat2). oom-kills verified with a 50M memcg mlockall hog. This is WSL2 userspace on the Microsoft kernel, not the stock Ubuntu 24.04 kernel."
 }

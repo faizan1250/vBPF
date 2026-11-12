@@ -1,0 +1,9 @@
+id: oom-kills
+title: OOM kill events
+description: Streams OOM-killer victim selections with pid, process name, and address-space size in KiB.
+tags: [memory, oom, reliability, audit]
+view: events
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:oom:mark_victim"]
+params: []

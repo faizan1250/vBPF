@@ -5,7 +5,7 @@
 
 SHELL := /bin/sh
 .SHELLFLAGS := -eu -c
-.PHONY: setup lint test test-determinism agent-build api-dev web-dev eval test-integration recipes-check vuln audit secrets parity compat compat-check docs-check supply-chain-check fuzz test-differential
+.PHONY: setup lint test test-determinism agent-build api-dev web-dev eval test-integration recipes-check recipe-check vuln audit secrets parity compat compat-check docs-check supply-chain-check fuzz test-differential
 
 GO ?= go
 PNPM ?= pnpm
@@ -65,6 +65,12 @@ test-integration:
 
 recipes-check:
 	@scripts/validate-recipes.sh
+
+# Per-recipe contribution gate (I-19): schema, static rules, dry-run when a
+# kernel is available, and fixture presence. Usage: make recipe-check ID=<id>
+recipe-check:
+	@if [ -z "$(ID)" ]; then echo "usage: make recipe-check ID=<id>" >&2; exit 2; fi
+	@scripts/recipe-check.sh "$(ID)"
 
 # Dependency vulnerability scan (Go). No root needed; skips when agent/ is
 # absent or govulncheck is not installed. CI runs this on every push/PR.
