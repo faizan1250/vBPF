@@ -6,5 +6,8 @@ view: table
 duration_default: 10
 min_kernel: "5.8"
 requires:
-  ["tracepoint:syscalls:sys_enter_accept4", "tracepoint:syscalls:sys_enter_listen"]
+  [
+    "tracepoint:syscalls:sys_enter_accept4",
+    "tracepoint:syscalls:sys_enter_listen",
+  ]
 params: []

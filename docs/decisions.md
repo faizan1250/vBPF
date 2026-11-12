@@ -907,3 +907,55 @@ recipe-check` green for all 30; full agent `produced-output.sh` run:
   and unrelated to recipes; recorded in the report's failed list.
   `validate-recipes` (30), `check-docs`, `compat-check`, shellcheck,
   prettier, and the Go server/parser suites are green.
+- **Verified (corrected Phase 5, D-92 scope).** The I-19 commit message
+  implied a green api suite, but RED review on `feat/i-19-recipes` found
+  2 vitest failures: `compat.test.ts > covers every recipe in the library`
+  (7 stale reports still listed only the original 10 recipes) and
+  `eval.test.ts > scores a direct hit` (direct-01 mock top-1 flipped
+  cpu-by-process to new-processes). Both are fixed in Phase 5 (D-93); the
+  WSL2 kernel measurements above stand.
+
+## I-19 Phase 5 fix: RED blockers, OOM reaping, nits (2026-11-13)
+
+- **Scope (D-93).** No recipe content changes; index, harness, reports, and
+  formatting only.
+- **Compat backfill (Blocker 1).** The 7 stale reports
+  (compose-quickstart, ubuntu-22.04/24.04, vm-kernel-5.10/5.15/6.1/6.6)
+  each gained the 20 new recipe ids as `"not-checked"` (sorted, 30 total
+  like `wsl2-ubuntu-24.04.json`). `renderCompatMd` renders a missing key
+  as `not-checked`, so `docs/compat.md` and the README table are
+  byte-identical (`render-compat.mjs --check` passes untouched) and the
+  honesty invariant holds (stale rows stay `not-run`/`verified`-as-was,
+  new cells `not-checked`).
+- **Porter-stemmed recipe index (Blocker 2, implementation fix).**
+  Root cause, measured: the prompt "Which processes are using the most
+  CPU?" builds `"processes" OR "using" OR "cpu"`; `new-processes` is the
+  only indexed doc containing the literal plural `processes` (id+title,
+  df=1), so its BM25 beat cpu-by-process 4.459 to 4.156 despite `cpu`
+  matching four cpu-by-process columns. `api/src/db.ts` is now
+  `SCHEMA_VERSION 5` with `tokenize='porter'` on `recipes_index` (both
+  sides stem: `processes`/`process`, `lookups`/`lookup`), plus
+  `migrateTo5` which rebuilds the table preserving rows. cpu-by-process
+  is top-1 again; all 10 retrieval top-3 cases stay green. Pinned by a
+  top-1 test in `retrieval.test.ts` and a v5 migration test in
+  `db.test.ts`; no expectation was edited (the direct-01 mapping to
+  cpu-by-process in `eval/prompts.yaml` is correct, so tuning — the
+  preferred option — won over justification).
+- **OOM teardown (Major).** The memcg hog parent forks one hog per cycle
+  and waitpids it, so `kill $WORKLOAD_PIDS` orphaned any in-flight hog
+  (reparented, invisible to the PID list). The OOM workload now starts
+  under `setsid` (`OOM_SESID` tracks the session leader) and
+  `stop_workloads` group-kills it (`kill -- -"$OOM_SESID"`) with
+  `pkill -f vbpf-oom-hog` (marker comment in the hog source) as backstop.
+  Also: `UNLINK_TEST_FILE` is reset after removal, and the fixed
+  `/sys/fs/cgroup/vbpf-oom-probe` path is documented as serial-only (a
+  concurrent second run would fight over the same memcg).
+- **Nits.** `prettier --write` on accepts-listens, openat-errors,
+  setuid-calls, syscall-io-latency yamls (multi-line flow arrays; the
+  `collect-compat.sh` awk accumulator and `yaml.safe_load` both accept
+  them, probes verified unchanged). `shellcheck -S warning` clean on the
+  harness edit.
+- **Verified:** full api suite green (2 RED failures fixed, porter
+  migration + top-1 pins added), `tsc --noEmit` clean, eslint/prettier
+  clean, `render-compat.mjs --check` green with byte-identical docs,
+  shellcheck clean.

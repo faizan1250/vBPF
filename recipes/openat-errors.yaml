@@ -6,5 +6,10 @@ view: events
 duration_default: 10
 min_kernel: "5.8"
 requires:
-  ["tracepoint:syscalls:sys_enter_openat", "tracepoint:syscalls:sys_exit_openat", "tracepoint:syscalls:sys_enter_openat2", "tracepoint:syscalls:sys_exit_openat2"]
+  [
+    "tracepoint:syscalls:sys_enter_openat",
+    "tracepoint:syscalls:sys_exit_openat",
+    "tracepoint:syscalls:sys_enter_openat2",
+    "tracepoint:syscalls:sys_exit_openat2",
+  ]
 params: []

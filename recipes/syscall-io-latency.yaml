@@ -6,5 +6,10 @@ view: histogram
 duration_default: 10
 min_kernel: "5.8"
 requires:
-  ["tracepoint:syscalls:sys_enter_read", "tracepoint:syscalls:sys_exit_read", "tracepoint:syscalls:sys_enter_write", "tracepoint:syscalls:sys_exit_write"]
+  [
+    "tracepoint:syscalls:sys_enter_read",
+    "tracepoint:syscalls:sys_exit_read",
+    "tracepoint:syscalls:sys_enter_write",
+    "tracepoint:syscalls:sys_exit_write",
+  ]
 params: []

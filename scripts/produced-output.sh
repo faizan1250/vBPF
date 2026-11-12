@@ -18,10 +18,15 @@ mkdir -p "$OUT_DIR"
 # never at a predictable /tmp path (symlink race as root).
 IO_TEST_FILE="$OUT_DIR/vbpf-io-test"
 # Per-recipe scratch state, set by start_workload, cleaned in stop_workloads.
+# OOM runs in its own session (setsid) so the whole hog tree — parent plus
+# any in-flight forked hog child that WORKLOAD_PIDS cannot name — dies with
+# one group kill. OOM_CG is a single fixed path: runs are serial, a second
+# concurrent run would fight over the same memcg (see the oom-kills note).
 UNLINK_TEST_FILE=""
 MNT_SRC=""
 MNT_DST=""
 OOM_CG=""
+OOM_SESID=""
 
 repo="$(cd "$(dirname "$0")/.." && pwd)"
 agent="$repo/bin/agent"
@@ -54,6 +59,14 @@ stop_workloads() {
     kill $WORKLOAD_PIDS 2>/dev/null || true
     WORKLOAD_PIDS=""
   fi
+  if [ -n "$OOM_SESID" ]; then
+    # Group kill the OOM session: the forked hog child is reparented on
+    # parent death and is never in WORKLOAD_PIDS, so kill the session group.
+    # pkill is the backstop for hogs that escaped the group (same pattern).
+    kill -- -"$OOM_SESID" 2>/dev/null || true
+    pkill -f "vbpf-oom-hog" 2>/dev/null || true
+    OOM_SESID=""
+  fi
   wait 2>/dev/null || true
   pkill -f "iperf3 -s -p 52099" 2>/dev/null || true
   if [ "$QDISC_ADDED" -eq 1 ]; then
@@ -71,6 +84,7 @@ stop_workloads() {
   rm -f "$IO_TEST_FILE"
   if [ -n "$UNLINK_TEST_FILE" ]; then
     rm -f "$UNLINK_TEST_FILE"
+    UNLINK_TEST_FILE=""
   fi
 }
 trap stop_workloads EXIT
@@ -197,7 +211,15 @@ s.close()' >/dev/null 2>&1; done) &
         OOM_OK=1
       fi
       if [ "$OOM_OK" -eq 1 ]; then
-        (python3 -c 'import ctypes,os
+        # Own session per run: the parent forks one hog per cycle and
+        # waitpids it, so killing just the parent orphans an in-flight hog
+        # (reparented to init, never in WORKLOAD_PIDS). setsid makes $! the
+        # session/group leader for the group kill in stop_workloads; the
+        # vbpf-oom-hog marker lets pkill catch strays by command line.
+        # OOM_CG above is one fixed path: runs are serial, a concurrent
+        # second run would fight over the same memcg.
+        (setsid python3 -c '# vbpf-oom-hog: memcg sentinel hog
+import ctypes,os
 cg=open("/sys/fs/cgroup/vbpf-oom-probe/cgroup.procs","w")
 libc=ctypes.CDLL("libc.so.6",use_errno=True)
 while True:
@@ -211,6 +233,7 @@ while True:
    x[i]=1
   os._exit(0)
  os.waitpid(c,0)' >/dev/null 2>&1) &
+        OOM_SESID="$!"
         WORKLOAD_PIDS="$WORKLOAD_PIDS $!"
       else
         printf 'produced-output: warning: oom-kills workload skipped (cgroup memory limit unavailable)\n' >&2
