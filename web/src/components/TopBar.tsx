@@ -25,12 +25,16 @@ const FIX_HINTS: Record<string, string> = {
 };
 
 export function TopBar() {
+  // Fixture mode is fully static: no /api/health fetch, so the demo works
+  // with the network blocked. Agent state is synthesized as ready below.
+  const isFixture = fixtureMode();
   const health = useQuery({
     queryKey: ["health"],
     queryFn: fetchHealth,
     refetchInterval: 15_000,
     retry: 1,
     staleTime: 10_000,
+    enabled: !isFixture,
   });
 
   const agent = health.data?.agent;
@@ -90,8 +94,12 @@ export function TopBar() {
           natural language to safe eBPF probes
         </span>
         <div className="ml-auto flex items-center gap-2">
-          {fixtureMode() && <Badge tone="info">fixture replay</Badge>}
-          {health.isPending ? (
+          {isFixture && <Badge tone="info">fixture replay</Badge>}
+          {isFixture ? (
+            <Badge tone="ok">
+              <Activity aria-hidden /> agent online
+            </Badge>
+          ) : health.isPending ? (
             <Badge tone="neutral">checking agent…</Badge>
           ) : ready ? (
             <Badge tone="ok">

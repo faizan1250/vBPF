@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:offline": "playwright test -c playwright.offline.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

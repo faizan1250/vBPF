@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Moon, Sun } from "lucide-react";
 
 import { ConfirmModal } from "./components/ConfirmModal.js";
+import { DemoBanner } from "./components/DemoBanner.js";
 import { HistoryPanel, recordRunToHistory } from "./components/HistoryPanel.js";
 import { PromptPanel } from "./components/PromptPanel.js";
 import { RunControls } from "./components/RunControls.js";
@@ -14,6 +15,7 @@ import { ViewSwitcher } from "./components/views/ViewSwitcher.js";
 import { useDebouncedValidate } from "./hooks/useDebouncedValidate.js";
 import { useRunStream } from "./hooks/useRunStream.js";
 import { autoView } from "./lib/events.js";
+import { fixtureMode } from "./lib/api.js";
 import { useAppStore } from "./store/useAppStore.js";
 
 function ThemeToggle() {
@@ -51,6 +53,7 @@ export function App() {
 
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
+      {fixtureMode() && <DemoBanner />}
       <div className="flex items-start">
         <div className="flex-1">
           <TopBar />

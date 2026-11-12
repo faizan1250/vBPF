@@ -5,9 +5,12 @@
 **Describe what you want to observe in plain English. Get a safe, reviewable eBPF probe and a live visualization.**
 
 [![CI](https://github.com/faizan1250/vBPF/actions/workflows/ci.yml/badge.svg)](https://github.com/faizan1250/vBPF/actions/workflows/ci.yml)
+[![Demo](https://github.com/faizan1250/vBPF/actions/workflows/pages.yml/badge.svg)](https://faizan1250.github.io/vBPF/)
 ![Linux](https://img.shields.io/badge/platform-Linux%20%7C%20WSL2-lightgrey)
 ![Go](https://img.shields.io/badge/Go-1.26%2B-00ADD8)
 ![Node](https://img.shields.io/badge/Node-22%2B-339933)
+
+Try the hosted demo (recorded data, nothing is executed): https://faizan1250.github.io/vBPF/
 
 ![vBPF demo: prompt, review, run, and live charts for three fixture scenarios](docs/assets/demo.gif)
 

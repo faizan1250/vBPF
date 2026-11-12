@@ -10,22 +10,16 @@ import {
   fetchRecipes,
   fixtureMode,
   generatePrompt,
-  type ChartType,
   type GenerateResponse,
 } from "../lib/api.js";
-import { fixtureScript } from "../lib/fixtures.js";
+import { FIXTURE_RECIPES, fixtureScenarioForPrompt } from "../lib/fixtures.js";
 import { useAppStore } from "../store/useAppStore.js";
 import { Badge } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
 import { Card, CardBody, CardHeader, CardTitle } from "./ui/card.js";
 import { FieldLabel, Input, Select, Textarea } from "./ui/field.js";
 
-const EXAMPLES = [
-  "Which processes are doing the most disk I/O?",
-  "Show new processes as they start",
-  "Count system calls by process",
-  "Histogram of block I/O latency",
-];
+const EXAMPLES = FIXTURE_RECIPES.map((r) => r.description);
 
 export function PromptPanel() {
   const prompt = useAppStore((s) => s.prompt);
@@ -44,11 +38,24 @@ export function PromptPanel() {
   const setAgentStatus = useAppStore((s) => s.setAgentStatus);
 
   const [recipeQuery, setRecipeQuery] = useState("");
+  const isFixture = fixtureMode();
   const recipes = useQuery({
     queryKey: ["recipes", recipeQuery],
     queryFn: () => fetchRecipes(recipeQuery),
     staleTime: 60_000,
+    // Fixture mode is fully static: the picker serves local entries so the
+    // demo works with the network blocked.
+    enabled: !isFixture,
   });
+  const recipeOptions = isFixture
+    ? FIXTURE_RECIPES.filter(
+        (r) =>
+          recipeQuery.trim() === "" ||
+          `${r.title} ${r.description} ${r.tags.join(" ")}`
+            .toLowerCase()
+            .includes(recipeQuery.trim().toLowerCase()),
+      )
+    : (recipes.data?.recipes ?? []);
 
   const generate = useMutation({
     mutationFn: ({
@@ -59,20 +66,14 @@ export function PromptPanel() {
       sid: string;
     }): Promise<GenerateResponse> => {
       if (fixtureMode()) {
-        const lower = p.toLowerCase();
-        const chart: ChartType = lower.includes("histogram")
-          ? "histogram"
-          : lower.includes("start")
-            ? "events"
-            : "bar";
+        const scenario = fixtureScenarioForPrompt(p);
         return Promise.resolve({
-          generation_id: `gen_fixture_${Date.now()}`,
-          script: fixtureScript(chart),
-          chart_type: chart,
-          explanation:
-            "Fixture replay: synthetic run for UI development without root.",
+          generation_id: `gen_fixture_${scenario.id}_${Date.now()}`,
+          script: scenario.script,
+          chart_type: scenario.chart,
+          explanation: scenario.explanation,
           duration_s: durationS,
-          warnings: ["Fixture mode: no real probe runs."],
+          warnings: ["Fixture mode: recorded data, nothing is executed."],
           validation: { status: "ok" as const, attempts: 1, errors: [] },
           based_on_recipe: null,
         });
@@ -156,7 +157,7 @@ export function PromptPanel() {
               aria-label="Search recipes"
             />
           </div>
-          {recipes.data && recipes.data.recipes.length > 0 && (
+          {recipeOptions.length > 0 && (
             <Select
               aria-label="Insert recipe prompt"
               className="mt-2"
@@ -167,14 +168,14 @@ export function PromptPanel() {
               }}
             >
               <option value="">Insert a recipe prompt…</option>
-              {recipes.data.recipes.slice(0, 20).map((r) => (
+              {recipeOptions.slice(0, 20).map((r) => (
                 <option key={r.id} value={r.description}>
                   {r.title} ({r.view})
                 </option>
               ))}
             </Select>
           )}
-          {recipes.isError && (
+          {recipes.isError && !isFixture && (
             <p className="mt-1 text-[11px] text-muted-foreground">
               Recipe list unavailable.
             </p>
