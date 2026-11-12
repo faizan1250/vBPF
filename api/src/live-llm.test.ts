@@ -1876,3 +1876,251 @@ describe("json modes", () => {
     }
   });
 });
+
+describe("openai preset", () => {
+  it("posts chat completions with Bearer auth", async () => {
+    const seen: Seen[] = [];
+    const chain = new LiveLlmChain({
+      env: {
+        LLM_PROVIDER_CHAIN: "openai",
+        OPENAI_API_KEY: "k",
+        LLM_OPENAI_MODEL: "m1",
+      },
+      fetchFn: stubFetch(() => chatOk(), seen),
+    });
+    expect(chain.configured).toBe(true);
+    const out = await chain.generate("cpu?");
+    expect(out.chart_type).toBe("events");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.url).toBe("https://api.openai.com/v1/chat/completions");
+    expect(seen[0]?.auth).toBe("Bearer k");
+  });
+
+  it("unconfigured without its own model", () => {
+    const chain = new LiveLlmChain({
+      env: { LLM_PROVIDER_CHAIN: "openai", OPENAI_API_KEY: "k" },
+      fetchFn: stubFetch(() => chatOk(), []),
+    });
+    expect(chain.configured).toBe(false);
+    expect(chain.health().providers).toEqual([
+      { name: "openai", state: "unconfigured", keys: 1 },
+    ]);
+  });
+});
+
+describe("anthropic native adapter", () => {
+  type Captured = { url: string; headers: Headers; body: unknown };
+
+  const captureFetch = (
+    handler: (body: unknown) => Response | Promise<Response>,
+    captured: Captured[],
+  ): typeof fetch =>
+    (async (url: unknown, init?: unknown) => {
+      const request = (init ?? {}) as RequestInit;
+      const headers = new Headers(request.headers);
+      let body: unknown = null;
+      try {
+        body = JSON.parse(String(request.body));
+      } catch {
+        body = null;
+      }
+      captured.push({ url: String(url), headers, body });
+      return handler(body);
+    }) as typeof fetch;
+
+  const messagesOk = (blocks: unknown[], usage?: unknown): Response =>
+    new Response(
+      JSON.stringify({
+        content: blocks,
+        ...(usage !== undefined ? { usage } : {}),
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+  const anthropicEnv = (extra?: Record<string, string>): NodeJS.ProcessEnv =>
+    ({
+      LLM_PROVIDER_CHAIN: "anthropic",
+      ANTHROPIC_API_KEY: "anthropic-key",
+      LLM_ANTHROPIC_MODEL: "m-anthropic",
+      ...extra,
+    }) as NodeJS.ProcessEnv;
+
+  it("discovers ANTHROPIC_API_KEY names", () => {
+    expect(
+      discoverKeys("anthropic", {
+        LLM_ANTHROPIC_API_KEY: "a",
+        ANTHROPIC_API_KEY: "b",
+      }),
+    ).toEqual(["a", "b"]);
+  });
+
+  it("posts native messages with x-api-key and version", async () => {
+    const captured: Captured[] = [];
+    const chain = new LiveLlmChain({
+      env: anthropicEnv(),
+      fetchFn: captureFetch(
+        () =>
+          messagesOk([{ type: "text", text: VALID_CONTENT }], {
+            input_tokens: 11,
+            output_tokens: 22,
+          }),
+        captured,
+      ),
+    });
+    expect(chain.configured).toBe(true);
+    const detailed = await chain.generateDetailed("cpu?");
+    expect(detailed.output.chart_type).toBe("events");
+    expect(detailed.usage).toEqual({
+      prompt_tokens: 11,
+      completion_tokens: 22,
+    });
+    expect(captured).toHaveLength(1);
+    const first = captured[0];
+    expect(first?.url).toBe("https://api.anthropic.com/v1/messages");
+    expect(first?.headers.get("x-api-key")).toBe("anthropic-key");
+    expect(first?.headers.get("anthropic-version")).toBe("2023-06-01");
+    expect(first?.headers.get("authorization")).toBeNull();
+    const body = first?.body as Record<string, unknown>;
+    expect(body["model"]).toBe("m-anthropic");
+    expect(typeof body["system"]).toBe("string");
+    expect(body["messages"]).toEqual([
+      { role: "user", content: expect.any(String) },
+    ]);
+    expect(body).not.toHaveProperty("tools");
+    expect(body).not.toHaveProperty("response_format");
+  });
+
+  it("forces submit_probe tool in tool mode", async () => {
+    const captured: Captured[] = [];
+    const chain = new LiveLlmChain({
+      env: anthropicEnv({ LLM_ANTHROPIC_JSON_MODE: "tool" }),
+      fetchFn: captureFetch(
+        () =>
+          messagesOk([
+            {
+              type: "tool_use",
+              id: "toolu_1",
+              name: SUBMIT_PROBE_TOOL_NAME,
+              input: JSON.parse(VALID_CONTENT) as unknown,
+            },
+          ]),
+        captured,
+      ),
+    });
+    const out = await chain.generate("cpu?");
+    expect(out.chart_type).toBe("events");
+    const body = captured[0]?.body as Record<string, unknown>;
+    const tools = body["tools"] as Array<Record<string, unknown>>;
+    expect(tools).toHaveLength(1);
+    expect(tools[0]?.["name"]).toBe(SUBMIT_PROBE_TOOL_NAME);
+    expect(tools[0]).toHaveProperty("input_schema");
+    expect(body["tool_choice"]).toEqual({
+      type: "tool",
+      name: SUBMIT_PROBE_TOOL_NAME,
+    });
+  });
+
+  it("rotates keys on 401", async () => {
+    const captured: Captured[] = [];
+    const chain = new LiveLlmChain({
+      env: anthropicEnv({
+        ANTHROPIC_API_KEY: "",
+        ANTHROPIC_API_KEY1: "bad",
+        ANTHROPIC_API_KEY2: "good",
+      }),
+      fetchFn: captureFetch(() => {
+        const last = captured[captured.length - 1];
+        if (last?.headers.get("x-api-key") === "good") {
+          return messagesOk([{ type: "text", text: VALID_CONTENT }]);
+        }
+        return new Response(null, { status: 401 });
+      }, captured),
+    });
+    const out = await chain.generate("cpu?");
+    expect(out.chart_type).toBe("events");
+    expect(captured).toHaveLength(2);
+  });
+
+  it.each([429, 529])("cools down on %i", async (status) => {
+    const chain = new LiveLlmChain({
+      env: anthropicEnv(),
+      fetchFn: captureFetch(() => new Response(null, { status }), []),
+    });
+    await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+      LlmUnavailableError,
+    );
+    expect(chain.health().providers).toEqual([
+      { name: "anthropic", state: "cooldown", keys: 1 },
+    ]);
+  });
+
+  it("maps 400 to model failure", async () => {
+    const chain = new LiveLlmChain({
+      env: anthropicEnv(),
+      fetchFn: captureFetch(
+        () => new Response("no such model", { status: 400 }),
+        [],
+      ),
+    });
+    await expect(chain.generate("cpu?")).rejects.toBeInstanceOf(
+      LlmRequestError,
+    );
+  });
+
+  it("rejects empty text blocks", async () => {
+    const chain = new LiveLlmChain({
+      env: anthropicEnv(),
+      fetchFn: captureFetch(() => messagesOk([]), []),
+    });
+    await expect(chain.generate("cpu?")).rejects.toThrow(
+      "missing content text",
+    );
+  });
+
+  it("rejects missing tool_use in tool mode", async () => {
+    const chain = new LiveLlmChain({
+      env: anthropicEnv({ LLM_ANTHROPIC_JSON_MODE: "tool" }),
+      fetchFn: captureFetch(
+        () => messagesOk([{ type: "text", text: "no tools here" }]),
+        [],
+      ),
+    });
+    await expect(chain.generate("cpu?")).rejects.toThrow(
+      `missing content tool_use ${SUBMIT_PROBE_TOOL_NAME}`,
+    );
+  });
+
+  it("explains via text blocks", async () => {
+    const captured: Captured[] = [];
+    const chain = new LiveLlmChain({
+      env: anthropicEnv(),
+      fetchFn: captureFetch(
+        () => messagesOk([{ type: "text", text: "  counts opens  " }]),
+        captured,
+      ),
+    });
+    const result = await chain.explainDetailed("BEGIN { @x = count(); }\n");
+    expect(result.explanation).toBe("counts opens");
+    const body = captured[0]?.body as Record<string, unknown>;
+    expect(body["system"]).toContain("plain English");
+    expect(body["messages"]).toEqual([
+      { role: "user", content: "BEGIN { @x = count(); }\n" },
+    ]);
+  });
+
+  it("parses Anthropic usage names", () => {
+    expect(
+      parseUsage({ usage: { input_tokens: 5, output_tokens: 9 } }),
+    ).toEqual({ prompt_tokens: 5, completion_tokens: 9 });
+    expect(
+      parseUsage({
+        usage: {
+          prompt_tokens: 1,
+          input_tokens: 2,
+          completion_tokens: 3,
+          output_tokens: 4,
+        },
+      }),
+    ).toEqual({ prompt_tokens: 1, completion_tokens: 3 });
+  });
+});

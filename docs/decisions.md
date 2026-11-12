@@ -658,3 +658,47 @@ after <ms>`, `cooldownMs: LIVE_DEFAULT_COOLDOWN_MS`) with log outcome
   `systemd-analyze security` 3.5 OK recorded above; `shellcheck` clean;
   base + fallback `docker compose config` valid; full agent/api/web suites
   per the report.
+
+## I-13: provider presets and native Anthropic adapter (2026-11-12)
+
+- **Decision number note (D-85).** `implementation.md` calls this D-33, but
+  D-33 is already taken in this file (R2-01 Slice 12 persistence), so it is
+  D-85 here.
+- **`openai` preset (D-85).** `https://api.openai.com/v1` on the existing
+  OpenAI-compatible client. Verified against OpenAI's official docs before
+  shipping: servers `https://api.openai.com/v1` (openai-openapi
+  `openapi.yaml` / platform `api-definition.yaml`), `POST
+/chat/completions`, and `response_format: { type: "json_object" }` JSON
+  mode per the Chat Completions reference. Key required; same
+  `LLM_OPENAI_MODEL` / fallback / JSON-mode / base-URL-override semantics
+  as every other OpenAI-kind preset.
+- **Native Anthropic Messages adapter, no compat-layer option (D-85).**
+  Anthropic's own docs disqualify the OpenAI-compatibility endpoint for
+  this chain: it is "primarily intended to test and compare model
+  capabilities, and is not considered a long-term or production-ready
+  solution", and it accepts only `json_schema` with `strict: true` — a
+  request setting `json_object` (this chain's default) returns a 400 error
+  (OpenAI SDK compatibility: limitations). So `anthropic` is a second
+  transport kind in `live-llm.ts`, reusing the shared timeout, 256 KB body
+  cap, manual-redirect, semaphore, key-rotation/cooldown, model-fallback,
+  and one-time JSON downgrade rules: `POST {base}/messages` with
+  `x-api-key` (never `Authorization: Bearer`) plus `anthropic-version:
+2023-06-01` (the long-stable version; newer versions drop the
+  `temperature` param generation still sends). Top-level `system` plus a
+  single user message; `tool` mode sends one `submit_probe` tool with a
+  forced `tool_choice: { type: "tool", name }` and parses the matching
+  `tool_use` block's `input`; `json_object`/`none` send no shaping (the
+  JSON-only system instruction still applies) and parse concatenated
+  `text` blocks. Usage maps `input_tokens`/`output_tokens` onto
+  `prompt_tokens`/`completion_tokens` in shared `parseUsage`. Error
+  mapping is status-based and unchanged, except 529 (Anthropic's overload
+  signal) cools the provider like 429. Explain posts the same short
+  system prompt as the user-visible script text and parses text blocks.
+- **Chain default stays `groq`; `.env.example` stays secret-free.** New
+  presets only extend the chain; no committed keys, CI stays mock-only.
+- **Verified:** `tsc --noEmit` clean, `live-llm.test.ts` 71/71 (13 new:
+  openai URL/Bearer/unconfigured; anthropic request shape, headers, and
+  no-Bearer-leak; native tool-call round trip; text-mode JSON parse; 401
+  rotation; 429 + 529 cooldown; 400 model failure; missing-text and
+  missing-tool_use rejections; explain text blocks; usage-name mapping;
+  key discovery), full api suite green; eslint/prettier clean.
