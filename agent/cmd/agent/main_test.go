@@ -26,6 +26,16 @@ func TestUsage(t *testing.T) {
 	}
 }
 
+func TestVersionFlag(t *testing.T) {
+	var stdout bytes.Buffer
+	if got := realMain([]string{"--version"}, &stdout, &bytes.Buffer{}); got != 0 {
+		t.Fatalf("exit=%d", got)
+	}
+	if out := strings.TrimSpace(stdout.String()); out == "" {
+		t.Fatal("empty --version output")
+	}
+}
+
 func TestMissingFile(t *testing.T) {
 	if got := realMain([]string{"run", "nonexistent.bt"}, &bytes.Buffer{}, &bytes.Buffer{}); got == 0 {
 		t.Fatal("expected non-zero exit")

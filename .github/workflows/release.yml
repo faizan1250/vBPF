@@ -1,0 +1,448 @@
+# I-16 release pipeline (D-88): a pushed tag v* builds, signs, and
+# publishes. Anything else (workflow_dispatch, or a PR touching release
+# files) is a dry run: build everything, publish nothing.
+#
+# Tag push (maintainer only; the agent never pushes tags) produces static
+# agent binaries (linux/amd64 + linux/arm64, CGO_ENABLED=0, -trimpath,
+# version injected with -ldflags), sha256sums.txt, SPDX SBOMs for the
+# binaries and the three images, multi-arch GHCR images (version + latest,
+# pinned base digests, OCI source/revision/license labels), SLSA build
+# provenance attestations, and keyless cosign signatures. Release notes
+# come from the matching CHANGELOG.md section, so the section must exist
+# before the tag is pushed.
+#
+# Mock-only CI rule still holds: this workflow reads no LLM secrets.
+# GITHUB_TOKEN only pushes images, attestations, and the GitHub release.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - docs/install.md
+      - deploy/**
+      - agent/Dockerfile
+      - agent/cmd/agent/main.go
+  # Manual runs are always dry runs: build everything, publish nothing.
+  # Publishing happens only on a pushed v* tag (see the plan job and the
+  # tag guards on every publish step below).
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY_IMAGE: ghcr.io/faizan1250/vbpf
+  GO_VERSION: "1.27.x"
+
+jobs:
+  # Single place that decides dry-run vs publish and the version string.
+  # Tag pushes publish; dispatch and PRs always dry-run. Publish steps
+  # additionally guard on the tag ref directly (see below), so a
+  # dry_run=false output off a tag could never push or release.
+  plan:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      dry_run: ${{ steps.cfg.outputs.dry_run }}
+      version: ${{ steps.cfg.outputs.version }}
+    steps:
+      - id: cfg
+        env:
+          EVENT: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          if [ "$EVENT" = "push" ] && [ "$REF_TYPE" = "tag" ]; then
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+            echo "version=$REF_NAME" >> "$GITHUB_OUTPUT"
+          else
+            echo "dry_run=true" >> "$GITHUB_OUTPUT"
+            echo "version=dryrun-$(printf '%s' "$SHA" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Full test suite plus the docs and supply-chain gates, since the
+  # release touches files all three guard. Mirrors the CI lint job pins.
+  test:
+    needs: plan
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: "9.x"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - name: Install JS deps (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+      - name: Install shellcheck
+        run: |
+          for i in 1 2 3 4 5; do
+            if sudo apt-get update -qq; then break; fi
+            if [ "$i" -eq 5 ]; then exit 1; fi
+            echo "apt-get update failed (attempt $i/5), retrying in 10s..."
+            sleep 10
+          done
+          sudo apt-get install -y -qq shellcheck
+      - name: Install golangci-lint and actionlint (pinned)
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: make lint (no root needed)
+        run: make lint
+      - name: make test (no root, mock-only)
+        run: make test
+      - name: Docs and supply-chain gates (release touches both)
+        run: |
+          make docs-check
+          make supply-chain-check
+      - name: actionlint (all workflows, including this one)
+        run: actionlint
+
+  # Static agent binaries for both release architectures.
+  binaries:
+    needs: [plan, test]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Build static binaries (trimpath, version via ldflags)
+        working-directory: agent
+        run: |
+          set -eu
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH="$arch" CGO_ENABLED=0 \
+              go build -trimpath -ldflags "-X main.version=${VERSION}" \
+              -o "dist/agent-linux-$arch" ./cmd/agent
+          done
+          ./dist/agent-linux-amd64 --version
+      - name: Upload binaries
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-binaries
+          path: agent/dist/agent-linux-*
+          if-no-files-found: error
+
+  # SPDX SBOM for the release binaries (same anchore step as CI).
+  sbom-binaries:
+    needs: [plan, test, binaries]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Download binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: agent-binaries
+          path: dist
+      - name: SBOM for release binaries
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          path: ./dist
+          format: spdx-json
+          output-file: sbom-agent-binaries.spdx.json
+      - name: Upload binary SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-sbom
+          path: sbom-agent-binaries.spdx.json
+          if-no-files-found: error
+
+  # Multi-arch images to GHCR (version + latest). Dry runs build both
+  # architectures without pushing.
+  images:
+    needs: [plan, test]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      agent_digest: ${{ steps.push-agent.outputs.digest }}
+      api_digest: ${{ steps.push-api.outputs.digest }}
+      web_digest: ${{ steps.push-web.outputs.digest }}
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      # Belt and suspenders: publish flag AND a tag ref. A non-tag run
+      # (dispatch, PR) builds both architectures without pushing, so a
+      # dryrun-* version can never move the :latest tags.
+      PUSH: ${{ needs.plan.outputs.dry_run != 'true' && startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - name: Log in to GHCR (publish only)
+        if: needs.plan.outputs.dry_run != 'true' && startsWith(github.ref, 'refs/tags/v')
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build agent image
+        id: push-agent
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ./agent/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ env.PUSH }}
+          build-args: VERSION=${{ env.VERSION }}
+          tags: |
+            ${{ env.REGISTRY_IMAGE }}-agent:${{ env.VERSION }}
+            ${{ env.REGISTRY_IMAGE }}-agent:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/faizan1250/vBPF
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.licenses=MIT
+      - name: Build api image
+        id: push-api
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ./api/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ env.PUSH }}
+          tags: |
+            ${{ env.REGISTRY_IMAGE }}-api:${{ env.VERSION }}
+            ${{ env.REGISTRY_IMAGE }}-api:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/faizan1250/vBPF
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.licenses=MIT
+      - name: Build web image
+        id: push-web
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ./web/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ env.PUSH }}
+          tags: |
+            ${{ env.REGISTRY_IMAGE }}-web:${{ env.VERSION }}
+            ${{ env.REGISTRY_IMAGE }}-web:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/faizan1250/vBPF
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ env.VERSION }}
+            org.opencontainers.image.licenses=MIT
+
+  # SPDX SBOMs for the three images (same anchore steps as the CI sbom
+  # job: local single-arch builds, no push, no registry reads, so this
+  # works identically in dry runs).
+  sbom-images:
+    needs: [plan, test]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build images with local tags (no push)
+        run: |
+          docker build -t vbpf-agent:ci -f agent/Dockerfile .
+          docker build -t vbpf-api:ci -f api/Dockerfile .
+          docker build -t vbpf-web:ci -f web/Dockerfile .
+      - name: SBOM for agent image (embeds the agent binary)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: vbpf-agent:ci
+          format: spdx-json
+          output-file: sbom-agent.spdx.json
+      - name: SBOM for api image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: vbpf-api:ci
+          format: spdx-json
+          output-file: sbom-api.spdx.json
+      - name: SBOM for web image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: vbpf-web:ci
+          format: spdx-json
+          output-file: sbom-web.spdx.json
+      - name: Upload image SBOMs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: image-sboms
+          path: sbom-*.spdx.json
+          if-no-files-found: error
+
+  # One checksums file over every shippable artifact; the signature
+  # covers it, so SBOM and binary integrity share one trust root.
+  assemble:
+    needs: [plan, binaries, sbom-binaries, sbom-images]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Download binaries
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: agent-binaries
+          path: dist
+      - name: Download SBOMs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: agent-sbom
+          path: dist
+      - name: Download image SBOMs
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: image-sboms
+          path: dist
+      - name: Write sha256sums.txt
+        working-directory: dist
+        run: |
+          set -eu
+          sha256sum -- agent-linux-* *.spdx.json > sha256sums.txt
+          cat sha256sums.txt
+      - name: Upload release dist
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-dist
+          path: dist/*
+          if-no-files-found: error
+
+  # Keyless signing (publish only): cosign signs the pushed image digests
+  # and the checksums file, so one signature covers binaries and SBOMs.
+  # Tag guard mirrors the images job: dry_run alone never publishes.
+  sign:
+    needs: [plan, images, assemble]
+    if: needs.plan.outputs.dry_run != 'true' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+      - name: Download release dist
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: dist
+      - name: Sign pushed images (keyless)
+        env:
+          AGENT_DIGEST: ${{ needs.images.outputs.agent_digest }}
+          API_DIGEST: ${{ needs.images.outputs.api_digest }}
+          WEB_DIGEST: ${{ needs.images.outputs.web_digest }}
+        run: |
+          set -eu
+          cosign sign --yes "${REGISTRY_IMAGE}-agent@${AGENT_DIGEST}"
+          cosign sign --yes "${REGISTRY_IMAGE}-api@${API_DIGEST}"
+          cosign sign --yes "${REGISTRY_IMAGE}-web@${WEB_DIGEST}"
+      - name: Sign checksums file (keyless bundle)
+        working-directory: dist
+        run: |
+          set -eu
+          cosign sign-blob --yes --bundle sha256sums.txt.bundle sha256sums.txt
+      - name: Upload signature bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-sig
+          path: dist/sha256sums.txt.bundle
+          if-no-files-found: error
+
+  # SLSA build provenance for the binaries and the pushed images
+  # (publish only; attestations need the registry digests).
+  # Tag guard mirrors the images job: dry_run alone never publishes.
+  attest:
+    needs: [plan, images, assemble]
+    if: needs.plan.outputs.dry_run != 'true' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download release dist
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: dist
+      - name: Attest binaries and SBOMs
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: dist/*
+      - name: Attest agent image
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ${{ env.REGISTRY_IMAGE }}-agent
+          subject-digest: ${{ needs.images.outputs.agent_digest }}
+      - name: Attest api image
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ${{ env.REGISTRY_IMAGE }}-api
+          subject-digest: ${{ needs.images.outputs.api_digest }}
+      - name: Attest web image
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-name: ${{ env.REGISTRY_IMAGE }}-web
+          subject-digest: ${{ needs.images.outputs.web_digest }}
+
+  # GitHub release from the CHANGELOG.md section matching the tag
+  # (v0.3.0 reads ## [0.3.0]); publish only, via preinstalled gh.
+  # Tag guard mirrors the images job: dry_run alone never releases.
+  publish:
+    needs: [plan, assemble, sign, attest]
+    if: needs.plan.outputs.dry_run != 'true' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Download release dist
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-dist
+          path: dist
+      - name: Download signature bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: release-sig
+          path: dist
+      - name: Extract notes from CHANGELOG.md
+        run: |
+          set -eu
+          VER="${VERSION#v}"
+          grep -q "^\#\# \[$VER\]" CHANGELOG.md || (echo "no CHANGELOG section [${VER}]" >&2; exit 1)
+          awk -v ver="$VER" '
+            $0 ~ "^## \\[" ver "\\]" { in_sec=1; print; next }
+            in_sec && /^## / { exit }
+            in_sec { print }
+          ' CHANGELOG.md > release-notes.md
+          cat release-notes.md
+      - name: Create GitHub release
+        run: |
+          set -eu
+          gh release create "$VERSION" --title "$VERSION" --notes-file release-notes.md ./dist/*
