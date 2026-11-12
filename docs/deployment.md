@@ -56,7 +56,7 @@ Native `pnpm -C api run dev` keeps the default: loopback socket address.
 - HSTS is intentionally absent: this front door serves plain HTTP on
   loopback. Terminate TLS in front of it and set HSTS there.
 
-## Container constraints (api, web)
+## Container constraints (all services)
 
 - `cap_drop: [ALL]` drops every Linux capability; neither service needs
   any (no low-port bind, no raw sockets).
@@ -68,8 +68,27 @@ Native `pnpm -C api run dev` keeps the default: loopback socket address.
 - `mem_limit` (api 512m, web 128m) and `pids_limit` (api 100, web 50)
   bound a runaway worker. `restart: unless-stopped` keeps the stack up
   across daemon restarts.
-- The agent is intentionally untouched here: it still needs `privileged`
-  and host mounts for tracing. Its reduction is issue I-08.
+
+## Container constraints (agent)
+
+- The agent runs with the minimal tracing capability set instead of full
+  root (I-08, D-84): `cap_add: [BPF, PERFMON, SYS_RESOURCE]` plus
+  `cap_drop: [ALL]` and `security_opt: [no-new-privileges:true]`. No
+  `privileged`, no `pid: host` (probes are kernel-wide; the container's
+  own PID namespace is enough for the startup `pgrep` sweep, which only
+  ever matches the agent's own `vbpf-*.bt` children).
+- Tracefs/debugfs are mounted `:ro`. On kernels where bpftrace needs a
+  tracefs write, use the documented fallback override instead of
+  widening the default:
+  `docker compose -f docker-compose.yml -f docker-compose.privileged.yml up --build -d`
+  (re-grants `privileged`, `pid: host`, `:rw` mounts).
+- At startup the agent additionally sets `no_new_privs` and masks its own
+  sets to the retain set via `capset`, logging the final set
+  (`agent/internal/priv`; best-effort, warned-and-continued when
+  unprivileged).
+- `scripts/check-privilege.sh` (manual, Docker + BPF-capable kernel)
+  verifies the limited stack: health, validate + dry-run, run, stop,
+  exact PID 1 caps, and failing `mknod`/`mount`/tracefs-write negatives.
 
 ## Smoke checks
 

@@ -101,12 +101,12 @@ flowchart LR
   T --> K["Kernel verifier and eBPF probes"]
 ```
 
-| Component                | Role                                                                                                                                              |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Web UI** (`/web`)      | Prompt box, script editor, confirmation modal, live views, browser-local history (localStorage + JSON export)                                     |
-| **API** (`/api`)         | Retrieval, LLM generation, static validation, run orchestration, WebSocket relay, SQLite storage                                                  |
-| **Agent** (`/agent`)     | The only privileged component. Re-validates scripts, dry-run compiles, runs bpftrace in its own process group, enforces limits, normalizes output |
-| **Recipes** (`/recipes`) | Hand-written, tested `.bt` scripts with metadata; used as examples for the LLM and as a template picker                                           |
+| Component                | Role                                                                                                                                                                                                             |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Web UI** (`/web`)      | Prompt box, script editor, confirmation modal, live views, browser-local history (localStorage + JSON export)                                                                                                    |
+| **API** (`/api`)         | Retrieval, LLM generation, static validation, run orchestration, WebSocket relay, SQLite storage                                                                                                                 |
+| **Agent** (`/agent`)     | The only privileged component (minimal `BPF`/`PERFMON`/`SYS_RESOURCE` caps, never full root). Re-validates scripts, dry-run compiles, runs bpftrace in its own process group, enforces limits, normalizes output |
+| **Recipes** (`/recipes`) | Hand-written, tested `.bt` scripts with metadata; used as examples for the LLM and as a template picker                                                                                                          |
 
 Generation rules live in [`api/prompts/system.md`](api/prompts/system.md). CI picture: [`docs/ci.md`](docs/ci.md).
 
@@ -114,7 +114,7 @@ Generation rules live in [`api/prompts/system.md`](api/prompts/system.md). CI pi
 
 ## Safety model
 
-You are asking a language model to write code that runs in your kernel with root privileges. The design assumes the model will sometimes be wrong and treats every layer as untrusted by the next.
+You are asking a language model to write code that runs in your kernel with tracing privileges. The design assumes the model will sometimes be wrong and treats every layer as untrusted by the next.
 
 | Layer                   | Protection                                                                                                                                                                                                                                                                                                                                    |
 | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -139,7 +139,12 @@ Default limits:
 | Output per run   | 5 MB            |
 | Concurrent runs  | 1               |
 
-> **Important:** the agent runs as root. Run it on a development machine, a VM, or a host where you are comfortable granting root-level tracing. Never expose the agent or API beyond loopback without adding your own network controls.
+> **Important:** the agent needs kernel-tracing privilege (minimal
+> `BPF`/`PERFMON`/`SYS_RESOURCE` caps in compose, a systemd unit with the
+> same bounding set natively — never `privileged` by default). Run it on a
+> development machine, a VM, or a host where you are comfortable granting
+> kernel-level tracing. Never expose the agent or API beyond loopback
+> without adding your own network controls.
 
 ---
 
@@ -150,7 +155,7 @@ Default limits:
 | OS          | Linux (WSL2 tested; native installs and VMs untested — see [Supported platforms](#supported-platforms)) |
 | Kernel      | 5.8+ with BTF (`/sys/kernel/btf/vmlinux` must exist)                                                    |
 | bpftrace    | 0.20+ recommended                                                                                       |
-| Privileges  | Root for the agent only                                                                                 |
+| Privileges  | Tracing caps for the agent only (compose default; natively the systemd unit or root)                    |
 | Node / Go   | Node 22+ with pnpm 9+, Go 1.26+ (native development only)                                               |
 | LLM access  | A provider API key (Groq by default; optional: recipe-only mode works without it)                       |
 
@@ -497,7 +502,14 @@ Being explicit about what the project does not (yet) do:
 - **Live eval is local-only.** Real-LLM generation scores are published above from paced local runs (latest: real-kernel live+agent); CI stays mock-only, and the stubbed-agent `run-live` mode never compiles or executes scripts.
 - **The LLM can be wrong.** Generated probes may compile but measure the wrong thing. Read the explanation and the script before trusting a result.
 - **Overhead is real.** Tracing hot paths (for example every syscall) costs CPU. Limits reduce but do not eliminate this.
-- **Root agent.** Treat the host accordingly.
+- **Minimal agent privilege, still kernel-level.** The agent keeps only
+  the `BPF`/`PERFMON`/`SYS_RESOURCE` capabilities (compose default and
+  `deploy/vbpf-agent.service`), drops the rest at startup, and mounts
+  tracefs/debugfs read-only. Treat the host accordingly.
+- **Container uprobes see the container's libc.** Uprobes attach by inode
+  in the agent's mount namespace, so `uprobe:libc:...` in compose targets
+  the container's libc, not the host's. Trace host user-space natively,
+  or bind-mount host library dirs read-only into the agent container.
 - **Short history.** SQLite storage with capped event retention per run; not a metrics system. Probe history itself lives in browser localStorage; server-side sessions are deferred to v0.3.
 
 ---

@@ -1,5 +1,5 @@
-# vBPF agent: privileged bpftrace runner. Must run as root with host PID
-# namespace and debugfs/tracefs mounts (see docker-compose.yml). The port is
+# vBPF agent: bpftrace runner with the minimal tracing capability set
+# (BPF, PERFMON, SYS_RESOURCE — see docker-compose.yml). The port is
 # never published to the host; the API reaches it over the compose network.
 FROM golang:1.26.11-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0 AS builder
 

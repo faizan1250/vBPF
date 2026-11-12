@@ -1,0 +1,23 @@
+# vBPF agent privileged fallback (I-08, D-84). Use ONLY when the minimal
+# capability set in docker-compose.yml proves insufficient for bpftrace on
+# a given kernel, and record the missing capability or mount in
+# docs/decisions.md before relying on it.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.privileged.yml up --build -d
+#
+# `privileged: true` re-grants every capability (overriding the cap_drop in
+# the base file) and `pid: host` restores host-PID visibility for the
+# startup pgrep sweep. The :rw mounts restore write access to tracefs and
+# debugfs (needed on kernels where kprobe attach still writes
+# kprobe_events; the base file mounts both :ro).
+services:
+  agent:
+    privileged: true
+    pid: host
+    cap_add: !reset []
+    cap_drop: !reset []
+    security_opt: !reset []
+    volumes:
+      - /sys/kernel/debug:/sys/kernel/debug:rw
+      - /sys/kernel/tracing:/sys/kernel/tracing:rw

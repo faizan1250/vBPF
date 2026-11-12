@@ -219,6 +219,69 @@ Known design trade-offs (documented, not silently unhandled):
   inspect `ok`, `errors`, `warnings`, and `probe_count` rather than checking
   `res.status === 400` or `body.code`.
 
+## Agent privilege (I-08)
+
+The agent is the only privileged component; everything below shrinks what a
+validator bypass could inherit.
+
+- **Compose (default): minimal caps, no `privileged`, no `pid: host`.**
+  The agent keeps exactly `BPF` (load programs/maps), `PERFMON`
+  (perf-event attach), `SYS_RESOURCE` (raise memlock for BPF maps);
+  `cap_drop: [ALL]` plus `security_opt: [no-new-privileges:true]` remove
+  the rest, notably `CAP_SYS_ADMIN` and `CAP_DAC_READ_SEARCH` (neither was
+  needed in testing — see `docs/decisions.md` D-84). Tracefs/debugfs are
+  mounted `:ro`. Probes are kernel-wide, so the container's own PID
+  namespace is enough; the startup `pgrep` sweep only ever sees the
+  agent's own bpftrace children. If a kernel ever needs more (e.g. a
+  tracefs write for kprobe attach), the previous behavior is kept as a
+  documented fallback override, not the default:
+  `docker compose -f docker-compose.yml -f docker-compose.privileged.yml up --build -d`.
+  `scripts/check-privilege.sh` (manual, needs Docker + a BPF-capable
+  kernel) verifies the limited stack end to end: health, validate +
+  dry-run, run, stop, exact PID 1 `CapEff`/`CapPrm`, and failing `mknod`,
+  `mount`, and tracefs-write negative probes.
+- **Native: `deploy/vbpf-agent.service`.** Runs as the dedicated
+  `vbpf-agent` user with
+  `AmbientCapabilities`/`CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE`,
+  `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`,
+  `PrivateTmp=yes`, `RuntimeDirectory=vbpf` (the `0600` token lives in
+  `/run/vbpf`), `LimitMEMLOCK=infinity` (BPF maps),
+  `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`, and
+  `SystemCallFilter=@system-service bpf perf_event_open`. `MemoryDenyWriteExecute` is
+  deliberately absent: bpftrace JIT-compiles BPF programs, so WX mappings
+  are required at runtime. `systemd-analyze security` scores the unit
+  **3.5 OK** (systemd 255, 2026-11-12): remaining exposure is the intended
+  surface (ambient tracing caps, no private-devices/clock/kernel-module
+  lockdown, no `RootImage`), each accepted because tracing needs it.
+- **In-process drop.** At startup the agent sets `no_new_privs` and masks
+  its own effective/permitted sets to the retain set (inheritable cleared)
+  via `capset`, then logs the final set
+  (`priv: capabilities reduced to tracing retain set`). Best-effort: a
+  failure logs a warning and continues, so unprivileged dev/CI runs are
+  unaffected. Covered by `agent/internal/priv` unit tests with injected
+  operations (SYS_ADMIN dropped, retain set reported).
+- **Tracefs access without world-readable mounts.** The service user needs
+  read access to `/sys/kernel/tracing`, `/sys/kernel/debug`, and
+  `/sys/kernel/btf/vmlinux`. Remount with a group instead of opening
+  modes, e.g. `groupadd -r vbpf-trace; usermod -aG vbpf-trace vbpf-agent`
+  plus `mount -o remount,gid=vbpf-trace,mode=750` on both filesystems
+  (and `chgrp`/`g+r` on the BTF file where the filesystem allows). See
+  the header comments in `deploy/vbpf-agent.service`.
+
+## Uprobe container limitation
+
+Uprobes attach by file inode **as seen in the agent's mount namespace**,
+so inside a container `uprobe:libc:...` targets the **container's** libc,
+never the host's — host user-space tracing from the compose stack is not
+supported by design (pinned by
+`TestUprobeResolvesWithinAgentMountNamespace`, which proves resolution
+never leaves the checker's root). To trace host libraries, run the agent
+natively on the host, or bind-mount the host library directories
+read-only into the agent container at their canonical paths (e.g.
+`- /lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu:ro`); the agent still
+verifies root ownership, safe modes, and `bpftrace -l` symbol existence
+for whatever it sees.
+
 ## Reporting a vulnerability
 
 Do not open a public issue. Use a GitHub private vulnerability report or
