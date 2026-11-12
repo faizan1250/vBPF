@@ -491,6 +491,9 @@ export interface EvalRunnerOptions {
 export const LIVE_CALL_BUDGET = 400;
 export const MAX_ATTEMPTS = 3;
 export const CORE_SUBSET_SIZE = 30;
+// Single run unless --repeat is given; the canonical variance run is
+// --repeat 3 on the core subset (see eval/Makefile).
+export const DEFAULT_REPEAT = 1;
 
 export function assertCallBudget(caseCount: number, rounds = 1): void {
   if (caseCount * MAX_ATTEMPTS * rounds > LIVE_CALL_BUDGET) {
@@ -1109,6 +1112,53 @@ export function coreSubset(entries: EvalPrompt[]): EvalPrompt[] {
 
 // A full (non-core) live run is allowed at most once per calendar day:
 // refuse when today's v2 report already exists unless --force re-runs it.
+// Both live full-run filenames are guarded: static live (`-v2-live.md`)
+// and agent real mode (`-v2-live-real.md`). The names come from the same
+// reportFileName helper the CLI uses, so guard and writer cannot drift.
+export interface EvalReportNameOpts {
+  live: boolean;
+  agent: boolean;
+  coreOnly: boolean;
+  repeat: number;
+}
+
+export function reportFileName(date: string, opts: EvalReportNameOpts): string {
+  const { live, agent, coreOnly, repeat } = opts;
+  const repeated = coreOnly && repeat > 1;
+  if (!live) {
+    return repeated ? `${date}-v2-core-repeat${repeat}.md` : `${date}-v2.md`;
+  }
+  if (agent) {
+    if (repeated) return `${date}-v2-core-repeat${repeat}-live-real.md`;
+    if (coreOnly) return `${date}-v2-core-live-real.md`;
+    return `${date}-v2-live-real.md`;
+  }
+  if (repeated) return `${date}-v2-core-repeat${repeat}-live.md`;
+  if (coreOnly) return `${date}-v2-core-live.md`;
+  return `${date}-v2-live.md`;
+}
+
+export function fullRunReportNames(date: string): string[] {
+  return [
+    reportFileName(date, {
+      live: true,
+      agent: false,
+      coreOnly: false,
+      repeat: 1,
+    }),
+    reportFileName(date, {
+      live: true,
+      agent: true,
+      coreOnly: false,
+      repeat: 1,
+    }),
+  ];
+}
+
+export function dailyBudgetPaths(reportsDir: string, date: string): string[] {
+  return fullRunReportNames(date).map((name) => join(reportsDir, name));
+}
+
 export function dailyBudgetPath(reportsDir: string, date: string): string {
   return join(reportsDir, `${date}-v2-live-real.md`);
 }
@@ -1118,9 +1168,11 @@ export function assertDailyBudget(
   date: string,
   force: boolean,
 ): void {
-  if (!force && existsSync(dailyBudgetPath(reportsDir, date))) {
+  if (force) return;
+  const hit = dailyBudgetPaths(reportsDir, date).find((p) => existsSync(p));
+  if (hit !== undefined) {
     throw new Error(
-      `daily full-run budget exhausted: ${date}-v2-live-real.md already exists (use --force to re-run or --core-only for the subset)`,
+      `daily full-run budget exhausted: ${fullRunReportNames(date).join(" / ")} already exists (use --force to re-run or --core-only for the subset)`,
     );
   }
 }

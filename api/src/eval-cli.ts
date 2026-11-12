@@ -11,9 +11,11 @@ import {
   assertDailyBudget,
   checkAgentPreflight,
   coreSubset,
+  DEFAULT_REPEAT,
   loadPrompts,
   parseEvalArgs,
   renderMarkdown,
+  reportFileName,
   runEval,
   runEvalRepeat,
   summarize,
@@ -49,7 +51,7 @@ if (!opts.live) {
     : opts.limit === null
       ? entries
       : entries.slice(0, opts.limit);
-  const repeat = opts.repeat ?? 1;
+  const repeat = opts.repeat ?? DEFAULT_REPEAT;
   if (repeat > 1) {
     const {
       rounds,
@@ -71,7 +73,16 @@ if (!opts.live) {
       stats.round_summaries[stats.round_summaries.length - 1] ??
       summarize(first);
     const outPath =
-      opts.outPath ?? join(reportsDir, `${date}-v2-core-repeat${repeat}.md`);
+      opts.outPath ??
+      join(
+        reportsDir,
+        reportFileName(date, {
+          live: false,
+          agent: false,
+          coreOnly: opts.coreOnly,
+          repeat,
+        }),
+      );
     writeScriptsNdjson(outPath.replace(/\.md$/, "-scripts.ndjson"), first);
     writeFileSync(
       outPath,
@@ -89,7 +100,17 @@ if (!opts.live) {
     });
     closeDb(db);
     mkdirSync(reportsDir, { recursive: true });
-    const outPath = opts.outPath ?? join(reportsDir, `${date}-v2.md`);
+    const outPath =
+      opts.outPath ??
+      join(
+        reportsDir,
+        reportFileName(date, {
+          live: false,
+          agent: false,
+          coreOnly: opts.coreOnly,
+          repeat,
+        }),
+      );
     writeScriptsNdjson(outPath.replace(/\.md$/, "-scripts.ndjson"), cases);
     writeFileSync(
       outPath,
@@ -104,7 +125,7 @@ if (!opts.live) {
     : opts.limit === null
       ? entries
       : entries.slice(0, opts.limit);
-  const repeat = opts.repeat ?? 1;
+  const repeat = opts.repeat ?? DEFAULT_REPEAT;
   assertCallBudget(selected.length, repeat);
   if (!opts.coreOnly) assertDailyBudget(reportsDir, date, opts.force);
   const chain = new LiveLlmChain({ env: process.env });
@@ -130,12 +151,12 @@ if (!opts.live) {
     probeArgsFn: async () => "",
     delayMs: opts.delayMs,
   } as const;
-  const name =
-    opts.coreOnly && repeat > 1
-      ? `${date}-v2-core-repeat${repeat}-live.md`
-      : opts.coreOnly
-        ? `${date}-v2-core-live.md`
-        : `${date}-v2-live.md`;
+  const name = reportFileName(date, {
+    live: true,
+    agent: false,
+    coreOnly: opts.coreOnly,
+    repeat,
+  });
   if (repeat > 1) {
     const {
       rounds,
@@ -193,7 +214,7 @@ if (!opts.live) {
     : opts.limit === null
       ? entries
       : entries.slice(0, opts.limit);
-  const repeat = opts.repeat ?? 1;
+  const repeat = opts.repeat ?? DEFAULT_REPEAT;
   assertCallBudget(selected.length, repeat);
   if (!opts.coreOnly) assertDailyBudget(reportsDir, date, opts.force);
   const chain = new LiveLlmChain({ env: process.env });
@@ -217,12 +238,12 @@ if (!opts.live) {
       runScriptAndCountEvents(agentUrl, tokenFile, script, 5),
     delayMs: opts.delayMs,
   } as const;
-  const name =
-    opts.coreOnly && repeat > 1
-      ? `${date}-v2-core-repeat${repeat}-live-real.md`
-      : opts.coreOnly
-        ? `${date}-v2-core-live-real.md`
-        : `${date}-v2.md`;
+  const name = reportFileName(date, {
+    live: true,
+    agent: true,
+    coreOnly: opts.coreOnly,
+    repeat,
+  });
   if (repeat > 1) {
     const {
       rounds,

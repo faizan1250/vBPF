@@ -20,11 +20,14 @@ import {
   checkOracle,
   coreSubset,
   dailyBudgetPath,
+  dailyBudgetPaths,
+  fullRunReportNames,
   loadPrompts,
   makeSentinel,
   parseEvalArgs,
   probeFamiliesMatch,
   renderMarkdown,
+  reportFileName,
   resolveCategory,
   resolveExpected,
   resolveOracleNeedles,
@@ -1250,5 +1253,51 @@ describe("eval v2 incomplete runs and daily budget", () => {
       /daily full-run budget exhausted/,
     );
     expect(() => assertDailyBudget(dir, "2026-11-12", true)).not.toThrow();
+  });
+
+  it("guards the exact filenames the CLI writes for full live runs", () => {
+    const date = "2026-11-12";
+    const staticFull = reportFileName(date, {
+      live: true,
+      agent: false,
+      coreOnly: false,
+      repeat: 1,
+    });
+    const agentFull = reportFileName(date, {
+      live: true,
+      agent: true,
+      coreOnly: false,
+      repeat: 1,
+    });
+    expect(staticFull).toBe(`${date}-v2-live.md`);
+    expect(agentFull).toBe(`${date}-v2-live-real.md`);
+    expect(fullRunReportNames(date)).toEqual(
+      expect.arrayContaining([staticFull, agentFull]),
+    );
+    // Each live full-run file alone exhausts the budget; core files do not.
+    for (const name of fullRunReportNames(date)) {
+      const dir = mkdtempSync(join(tmpdir(), "vbpf-eval-budget-wire-"));
+      writeFileSyncNode(join(dir, name), "# report\n");
+      expect(() => assertDailyBudget(dir, date, false)).toThrow(
+        /daily full-run budget exhausted/,
+      );
+    }
+    expect(dailyBudgetPaths("/reports", date)).toEqual(
+      fullRunReportNames(date).map((name) => join("/reports", name)),
+    );
+    const coreDir = mkdtempSync(join(tmpdir(), "vbpf-eval-budget-core-"));
+    writeFileSyncNode(
+      join(
+        coreDir,
+        reportFileName(date, {
+          live: true,
+          agent: false,
+          coreOnly: true,
+          repeat: 1,
+        }),
+      ),
+      "# report\n",
+    );
+    expect(() => assertDailyBudget(coreDir, date, false)).not.toThrow();
   });
 });
