@@ -34,6 +34,7 @@ import {
 } from "./agent-client.js";
 import {
   closeDb,
+  deriveRunOrigin,
   failRunWithReason,
   generationExists,
   getGeneration,
@@ -45,11 +46,13 @@ import {
   openDb,
   persistRunSummary,
   searchRecipes,
+  sha256Hex,
 } from "./db.js";
 import { ExplainValidationError, explainScriptText } from "./explain.js";
 import {
   RefusalError,
   ValidationFailedError,
+  loadRecipeBodies,
   makeMockLlm,
   runGenerate,
 } from "./generate.js";
@@ -397,7 +400,19 @@ export async function buildApp(
 
   const database = db ?? openDb(opts.dbPath);
   migrate(database);
-  indexRecipes(database, loadRecipes(opts.recipesDir));
+  const indexed = loadRecipes(opts.recipesDir);
+  indexRecipes(database, indexed);
+  // Stock-script hashes for origin derivation (I-14): trimmed bodies, so a
+  // pasted recipe with a different trailing newline still matches. Built
+  // once; recipes change only on restart.
+  const recipeHashes = new Set(
+    [
+      ...loadRecipeBodies(
+        opts.recipesDir,
+        indexed.map((r) => r.id),
+      ).values(),
+    ].map((body) => sha256Hex(body.trim())),
+  );
 
   const activeObservers = new Set<WebSocket>();
   const observerTimers = new Set<NodeJS.Timeout>();
@@ -940,6 +955,8 @@ export async function buildApp(
     // the script itself on run creation.
     const generationId = parsed.data.generation_id ?? null;
     let edited = false;
+    let generation:
+      { script: string; based_on_recipe: string | null } | undefined;
     if (generationId !== null) {
       if (!generationExists(database, generationId)) {
         return reply
@@ -948,7 +965,15 @@ export async function buildApp(
       }
       const gen = getGeneration(database, generationId);
       edited = gen !== undefined && script !== gen.script;
+      generation = gen;
     }
+    // Origin is derived here from the generation binding and the recipe
+    // library, never trusted from the client (I-14).
+    const origin = deriveRunOrigin({
+      generation,
+      script,
+      recipeHashes,
+    });
     const duration = durationS ?? DEFAULT_DURATION_S;
     let created: { run_id: string; state: string };
     try {
@@ -977,7 +1002,9 @@ export async function buildApp(
         }
         return reply.code(res.status).send(json);
       }
-      created = CreateRunResponseSchema.parse(json);
+      // The agent knows nothing of provenance: parse its {run_id, state}
+      // shape, then attach the server-derived origin for the API response.
+      created = CreateRunResponseSchema.omit({ origin: true }).parse(json);
     } catch (err) {
       if (err instanceof AgentOfflineError) {
         return reply
@@ -993,6 +1020,7 @@ export async function buildApp(
         script_sha256: createHash("sha256").update(script).digest("hex"),
         script_text: script,
         edited,
+        origin,
         duration_s: duration,
         state: created.state,
         started_at: Date.now(),
@@ -1014,7 +1042,7 @@ export async function buildApp(
         .send({ error: "failed to persist run", code: "INTERNAL_ERROR" });
     }
     startRunObserver(created.run_id, duration);
-    return reply.code(201).send(created);
+    return reply.code(201).send({ ...created, origin });
   });
 
   app.post(
@@ -1064,13 +1092,14 @@ export async function buildApp(
     }
     const row = database
       .prepare(
-        "SELECT id, generation_id, edited, duration_s, state, started_at, ended_at, events_count, bytes, dropped, exit_reason FROM runs WHERE id = ?",
+        "SELECT id, generation_id, edited, origin, duration_s, state, started_at, ended_at, events_count, bytes, dropped, exit_reason FROM runs WHERE id = ?",
       )
       .get(id) as
       | {
           id: string;
           generation_id: string | null;
           edited: number;
+          origin: "generated" | "edited" | "recipe";
           duration_s: number;
           state: string;
           started_at: number;
@@ -1094,6 +1123,7 @@ export async function buildApp(
         ended_at: row.ended_at,
         generation_id: row.generation_id,
         edited: row.edited === 1,
+        origin: row.origin,
         summary:
           row.exit_reason === null
             ? null

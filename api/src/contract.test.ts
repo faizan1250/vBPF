@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +16,7 @@ import { createConnection, Socket } from "node:net";
 import { PassThrough } from "node:stream";
 
 import type { FastifyInstance } from "fastify";
+import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 
@@ -441,7 +443,6 @@ describe("runs proxy", () => {
   });
 
   it("propagates insertRun failure as 500 and releases agent slot", async () => {
-    const { default: Database } = await import("better-sqlite3");
     const testDb = new Database(join(dir, "api.sqlite3"));
     try {
       testDb.exec(
@@ -523,6 +524,7 @@ describe("run summaries", () => {
         ended_at: expect.any(Number),
         generation_id: null,
         edited: false,
+        origin: "edited",
         summary: {
           events_count: 1,
           bytes: 5,
@@ -1213,10 +1215,13 @@ describe("run generation links", () => {
     const created = (await res.json()) as { run_id: string };
     try {
       const got = await fetch(`${base}/api/runs/${created.run_id}`);
+      // The mock echoes the cpu recipe body for this prompt, so a pristine
+      // run is a recipe run that still links its generation.
       expect(await got.json()).toMatchObject({
         run_id: created.run_id,
         generation_id: gen.generation_id,
         edited: false,
+        origin: "recipe",
       });
     } finally {
       await fetch(`${base}/api/runs/${created.run_id}/stop`, {
@@ -1243,6 +1248,7 @@ describe("run generation links", () => {
         run_id: created.run_id,
         generation_id: gen.generation_id,
         edited: true,
+        origin: "edited",
       });
     } finally {
       await fetch(`${base}/api/runs/${created.run_id}/stop`, {
@@ -1289,6 +1295,191 @@ describe("run generation links", () => {
     });
     expect(res.status).toBe(400);
     expect(await res.json()).toMatchObject({ code: "VALIDATION_FAILED" });
+  });
+});
+
+describe("run origins (I-14)", () => {
+  function storedRow(runId: string): {
+    origin: string;
+    script_sha256: string;
+    generation_id: string | null;
+  } {
+    // The suite database lives on disk; a read-only handle sees committed
+    // rows while the app keeps running.
+    const reader = new Database(join(dir, "api.sqlite3"), { readonly: true });
+    try {
+      const row = reader
+        .prepare(
+          "SELECT origin, script_sha256, generation_id FROM runs WHERE id = ?",
+        )
+        .get(runId) as
+        | {
+            origin: string;
+            script_sha256: string;
+            generation_id: string | null;
+          }
+        | undefined;
+      if (row === undefined) throw new Error(`missing run row ${runId}`);
+      return row;
+    } finally {
+      reader.close();
+    }
+  }
+
+  function sha256Hex(value: string): string {
+    return createHash("sha256").update(value).digest("hex");
+  }
+
+  async function createRun(
+    body: Record<string, unknown>,
+  ): Promise<{ run_id: string; origin: string }> {
+    const res = await fetch(`${base}/api/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    expect(res.status).toBe(201);
+    return (await res.json()) as { run_id: string; origin: string };
+  }
+
+  async function stopRun(runId: string): Promise<void> {
+    await fetch(`${base}/api/runs/${runId}/stop`, { method: "POST" });
+  }
+
+  it("stores generated for a pristine fallback generation", async () => {
+    const genRes = await fetch(`${base}/api/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "zzzqqq wobblewidgets frobnicate" }),
+    });
+    expect(genRes.status).toBe(200);
+    const gen = (await genRes.json()) as {
+      generation_id: string;
+      script: string;
+      based_on_recipe: string | null;
+    };
+    expect(gen.based_on_recipe).toBeNull();
+    const created = await createRun({
+      script: gen.script,
+      generation_id: gen.generation_id,
+    });
+    try {
+      expect(created.origin).toBe("generated");
+      const got = (await (
+        await fetch(`${base}/api/runs/${created.run_id}`)
+      ).json()) as {
+        generation_id: string | null;
+        edited: boolean;
+        origin: string;
+      };
+      expect(got).toMatchObject({
+        generation_id: gen.generation_id,
+        edited: false,
+        origin: "generated",
+      });
+      expect(storedRow(created.run_id)).toEqual({
+        origin: "generated",
+        script_sha256: sha256Hex(gen.script),
+        generation_id: gen.generation_id,
+      });
+    } finally {
+      await stopRun(created.run_id);
+    }
+  });
+
+  it("stores recipe for a pristine recipe-based generation", async () => {
+    const genRes = await fetch(`${base}/api/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "Which processes are using the most CPU?",
+      }),
+    });
+    expect(genRes.status).toBe(200);
+    const gen = (await genRes.json()) as {
+      generation_id: string;
+      script: string;
+      based_on_recipe: string | null;
+    };
+    expect(gen.based_on_recipe).not.toBeNull();
+    const created = await createRun({
+      script: gen.script,
+      generation_id: gen.generation_id,
+    });
+    try {
+      expect(created.origin).toBe("recipe");
+      const got = (await (
+        await fetch(`${base}/api/runs/${created.run_id}`)
+      ).json()) as { origin: string };
+      expect(got.origin).toBe("recipe");
+      expect(storedRow(created.run_id)).toMatchObject({
+        origin: "recipe",
+        script_sha256: sha256Hex(gen.script),
+      });
+    } finally {
+      await stopRun(created.run_id);
+    }
+  });
+
+  it("stores edited for a modified generation script", async () => {
+    const genRes = await fetch(`${base}/api/generate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "Which processes are using the most CPU?",
+      }),
+    });
+    const gen = (await genRes.json()) as {
+      generation_id: string;
+      script: string;
+    };
+    const created = await createRun({
+      script: `${gen.script}\n`,
+      generation_id: gen.generation_id,
+    });
+    try {
+      expect(created.origin).toBe("edited");
+      const got = (await (
+        await fetch(`${base}/api/runs/${created.run_id}`)
+      ).json()) as { origin: string };
+      expect(got.origin).toBe("edited");
+    } finally {
+      await stopRun(created.run_id);
+    }
+  });
+
+  it("stores recipe for a generation-less stock script", async () => {
+    const stock = readFileSync(join(recipesDir, "cpu-by-process.bt"), "utf8");
+    const created = await createRun({ script: stock });
+    try {
+      expect(created.origin).toBe("recipe");
+      const got = (await (
+        await fetch(`${base}/api/runs/${created.run_id}`)
+      ).json()) as { generation_id: string | null; origin: string };
+      expect(got).toMatchObject({ generation_id: null, origin: "recipe" });
+      expect(storedRow(created.run_id)).toEqual({
+        origin: "recipe",
+        script_sha256: sha256Hex(stock),
+        generation_id: null,
+      });
+    } finally {
+      await stopRun(created.run_id);
+    }
+  });
+
+  it("stores edited for a generation-less custom script", async () => {
+    const script = "BEGIN { @custom = 1; }";
+    const created = await createRun({ script });
+    try {
+      expect(created.origin).toBe("edited");
+      const got = (await (
+        await fetch(`${base}/api/runs/${created.run_id}`)
+      ).json()) as { origin: string };
+      expect(got.origin).toBe("edited");
+      expect(storedRow(created.run_id).script_sha256).toBe(sha256Hex(script));
+    } finally {
+      await stopRun(created.run_id);
+    }
   });
 });
 

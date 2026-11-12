@@ -1,7 +1,12 @@
 import { useMutation } from "@tanstack/react-query";
 import { Play, TriangleAlert } from "lucide-react";
 
-import { ApiError, createRun, fixtureMode } from "../lib/api.js";
+import {
+  ApiError,
+  createRun,
+  fixtureMode,
+  localRunOrigin,
+} from "../lib/api.js";
 import { useAppStore } from "../store/useAppStore.js";
 import { Badge } from "./ui/badge.js";
 import { Button } from "./ui/button.js";
@@ -27,6 +32,7 @@ export function ConfirmModal() {
   );
   const request = { script, durationS, warnings };
   const setRunId = useAppStore((s) => s.setRunId);
+  const setRunOrigin = useAppStore((s) => s.setRunOrigin);
   const setRunPhase = useAppStore((s) => s.setRunPhase);
   const setRunError = useAppStore((s) => s.setRunError);
   const clearRun = useAppStore((s) => s.clearRun);
@@ -37,6 +43,7 @@ export function ConfirmModal() {
         return Promise.resolve({
           run_id: `run_fixture_${Date.now()}`,
           state: "running",
+          origin: localRunOrigin(request.script, generation),
         });
       }
       return createRun(
@@ -48,6 +55,7 @@ export function ConfirmModal() {
     onSuccess: (result) => {
       clearRun();
       setRunId(result.run_id);
+      setRunOrigin(result.origin);
       setRunPhase("starting");
       setConfirmOpen(false);
     },

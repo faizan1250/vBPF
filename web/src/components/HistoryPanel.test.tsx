@@ -14,6 +14,7 @@ describe("recordRunToHistory", () => {
       generation: null,
       durationS: 10,
       runId: "run_once",
+      runOrigin: "edited",
       summary: null,
     });
   });
@@ -24,5 +25,18 @@ describe("recordRunToHistory", () => {
     const entries = listHistory();
     expect(entries).toHaveLength(1);
     expect(entries[0]!.runId).toBe("run_once");
+  });
+
+  it("records the server-derived origin for every run", () => {
+    for (const origin of ["generated", "edited", "recipe"] as const) {
+      const runId = `run_origin_${origin}`;
+      useAppStore.setState({ runId, runOrigin: origin });
+      recordRunToHistory(runId);
+    }
+    expect(listHistory().map((entry) => entry.origin)).toEqual([
+      "recipe",
+      "edited",
+      "generated",
+    ]);
   });
 });

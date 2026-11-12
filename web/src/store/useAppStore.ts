@@ -1,7 +1,7 @@
 import type { CatalogState } from "@vbpf/schemas";
 import { create } from "zustand";
 
-import type { EventEnvelope, GenerateResponse } from "../lib/api.js";
+import type { EventEnvelope, GenerateResponse, RunOrigin } from "../lib/api.js";
 import type { SummaryInfo, ViewKind } from "../lib/events.js";
 import { MAX_DURATION_S, MIN_DURATION_S } from "../lib/api.js";
 
@@ -50,6 +50,7 @@ interface AppState {
   confirmOpen: boolean;
   runPhase: RunPhase;
   runId: string | null;
+  runOrigin: RunOrigin | null;
   runError: string | null;
   events: EventEnvelope[];
   dropped: number;
@@ -77,6 +78,7 @@ interface AppState {
   setConfirmOpen: (open: boolean) => void;
   setRunPhase: (phase: RunPhase) => void;
   setRunId: (runId: string | null) => void;
+  setRunOrigin: (origin: RunOrigin | null) => void;
   setRunError: (error: string | null) => void;
   pushEvents: (incoming: EventEnvelope[]) => void;
   pushStderr: (line: string) => void;
@@ -112,6 +114,7 @@ export const useAppStore = create<AppState>()((set) => ({
   confirmOpen: false,
   runPhase: "idle",
   runId: null,
+  runOrigin: null,
   runError: null,
   events: [],
   dropped: 0,
@@ -156,6 +159,7 @@ export const useAppStore = create<AppState>()((set) => ({
   setConfirmOpen: (open) => set({ confirmOpen: open }),
   setRunPhase: (phase) => set({ runPhase: phase }),
   setRunId: (runId) => set({ runId }),
+  setRunOrigin: (origin) => set({ runOrigin: origin }),
   setRunError: (error) => set({ runError: error }),
   pushEvents: (incoming) =>
     set((state) => {
@@ -178,6 +182,7 @@ export const useAppStore = create<AppState>()((set) => ({
     set({
       runPhase: "idle",
       runId: null,
+      runOrigin: null,
       runError: null,
       events: [],
       dropped: 0,

@@ -9,6 +9,7 @@ import {
   createRun,
   explainScript,
   generatePrompt,
+  localRunOrigin,
   validateScript,
 } from "./api.js";
 
@@ -155,6 +156,39 @@ describe("createRun generation binding", () => {
     );
     await createRun("BEGIN { }", 10);
     expect(body).not.toHaveProperty("generation_id");
+  });
+});
+
+describe("localRunOrigin", () => {
+  it("marks a pristine generation without a recipe as generated", () => {
+    expect(
+      localRunOrigin("BEGIN { }", {
+        script: "BEGIN { }",
+        based_on_recipe: null,
+      }),
+    ).toBe("generated");
+  });
+
+  it("marks a pristine recipe-based generation as recipe", () => {
+    expect(
+      localRunOrigin("BEGIN { }", {
+        script: "BEGIN { }",
+        based_on_recipe: "cpu-by-process",
+      }),
+    ).toBe("recipe");
+  });
+
+  it("marks a modified script as edited", () => {
+    expect(
+      localRunOrigin("BEGIN { @b = 2; }", {
+        script: "BEGIN { @a = 1; }",
+        based_on_recipe: null,
+      }),
+    ).toBe("edited");
+  });
+
+  it("marks a run without a generation as edited", () => {
+    expect(localRunOrigin("BEGIN { }", null)).toBe("edited");
   });
 });
 

@@ -702,3 +702,52 @@ after <ms>`, `cooldownMs: LIVE_DEFAULT_COOLDOWN_MS`) with log outcome
   rotation; 429 + 529 cooldown; 400 model failure; missing-text and
   missing-tool_use rejections; explain text blocks; usage-name mapping;
   key discovery), full api suite green; eslint/prettier clean.
+
+## I-14: run provenance end to end (2026-11-12)
+
+- **Decision number note (D-86).** `implementation.md` calls this D-30+ like
+  several earlier issues, but those numbers are taken in this file; I-14 is
+  D-86 here.
+- **Taxonomy (D-86).** `origin` is derived server-side in one place
+  (`deriveRunOrigin` in `api/src/db.ts`), never from client input
+  (`CreateRunRequest` unchanged, still `.strict()`). The generation binding
+  decides first: pristine script plus `generations.based_on_recipe` set
+  (the recipe ID the generation names) reads `recipe`; pristine with no
+  recipe reads `generated`; any byte difference reads `edited` (R-18 exact
+  inequality kept). Only generation-less runs consult the recipe library:
+  sha256 of the trimmed script against trimmed `recipes/*.bt` bodies
+  (trailing-newline robust, mirroring the explain mock) reads `recipe`,
+  anything else `edited`. A generation-linked script that happens to match
+  a recipe body still reads `edited`: the binding wins, so the rule stays
+  predictable. Rationale for `based_on_recipe` over pure hashing: the mock
+  LLM echoes recipe bodies verbatim, so hashing alone would label almost
+  every pristine mock generation `recipe` and leave `generated`
+  untestable; the recipe-ID branch keeps all three origins reachable.
+- **Storage (D-86).** v4 migration (`SCHEMA_VERSION` 3→4, `origin TEXT NOT
+NULL DEFAULT 'edited'` in both the baseline DDL and the step, following
+  the v3 precedent). Backfill is SQL-only and conservative: pristine
+  generation-bound rows become `generated`/`recipe` via `based_on_recipe`;
+  generation-less rows keep `edited` (a pre-upgrade pasted recipe reads
+  `edited` — accepted, dev databases only). `insertRun` takes the derived
+  origin; the hash set is built once at startup from the recipe library.
+- **API surface (D-86).** `RunOriginSchema` in `@vbpf/schemas`; `origin` is
+  required on both `CreateRunResponse` (201 carries the derived origin so
+  the web never guesses) and `GetRunResponse`. The agent's own `{run_id,
+state}` shape is parsed with `.omit({ origin: true })` since the agent
+  knows nothing of provenance. `script_sha256` stays out of GET (R-13);
+  tests assert the stored hash by reading the suite database file instead.
+- **Web (D-86).** `createRun` result gains `origin`, stored as `runOrigin`
+  and recorded into history; `HistoryEntry` gains `origin`, shown as a
+  badge (`generated` ok, `recipe` info, `edited` warn) and included in the
+  JSON export. The only client-side derivation is `localRunOrigin`
+  (fixture mode, no backend), mirroring the server's generation branch;
+  fixture scripts are synthetic so generation-less fixture runs read
+  `edited`. ConfirmModal still forwards `generation_id` for
+  generated/edited runs and omits it for recipe runs — that behavior was
+  already correct; tests now pin all three shapes plus the stored origin.
+- **Verified:** `tsc --noEmit` clean (api, web); eslint clean on touched
+  files; prettier clean; api vitest 346/346 (12 new: 7 in `db.test.ts`
+  derivation/backfill, 5 black-box in `contract.test.ts` covering the 201,
+  GET, and stored `script_sha256` for generated/edited/recipe×2 paths);
+  web vitest 77/77 (new: `localRunOrigin` 4/4, origin-storage on run
+  success, per-origin history recording, export carries origin).

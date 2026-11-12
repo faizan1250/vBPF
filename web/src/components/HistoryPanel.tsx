@@ -65,6 +65,17 @@ export function HistoryPanel() {
               ) : (
                 <Badge tone="neutral">draft</Badge>
               )}
+              <Badge
+                tone={
+                  entry.origin === "generated"
+                    ? "ok"
+                    : entry.origin === "recipe"
+                      ? "info"
+                      : "warn"
+                }
+              >
+                {entry.origin}
+              </Badge>
             </div>
             <div className="mt-1.5 flex gap-1.5">
               <Button
@@ -135,6 +146,8 @@ export function recordRunToHistory(runId: string | null): void {
     durationS: s.durationS,
     warnings: s.generation?.warnings ?? [],
     runId: s.runId,
+    // Authoritative origin from the create-run response (fixture: local).
+    origin: s.runOrigin ?? "edited",
     exitReason: s.summary?.exitReason ?? null,
     eventsSample: sampleEvents(s.events),
   });
