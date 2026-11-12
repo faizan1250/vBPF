@@ -1,0 +1,25 @@
+{
+  "env": "ubuntu-24.04",
+  "status": "not-run",
+  "kernel": "n/a",
+  "distro": "Ubuntu 24.04 (GitHub-hosted runner, stock kernel)",
+  "bpftrace_version": "n/a",
+  "btf": false,
+  "recipes": {
+    "block-latency-histogram": "not-checked",
+    "cpu-by-process": "not-checked",
+    "dns-lookups": "not-checked",
+    "files-opened-by-process": "not-checked",
+    "new-processes": "not-checked",
+    "page-faults-by-process": "not-checked",
+    "slow-disk-io-by-process": "not-checked",
+    "syscall-counts-by-process": "not-checked",
+    "tcp-connects": "not-checked",
+    "tcp-retransmits": "not-checked"
+  },
+  "tests": {
+    "passed": [],
+    "failed": []
+  },
+  "notes": "Unverified (workflow added): .github/workflows/kernel-matrix.yml fills this in on its first manual or scheduled run. Values above are placeholders, not measurements. WSL2 Ubuntu 24.04 userspace (compat/wsl2-ubuntu-24.04.json) does not count as testing this kernel."
+}

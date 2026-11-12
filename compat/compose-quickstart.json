@@ -1,0 +1,29 @@
+{
+  "env": "compose-quickstart",
+  "status": "verified",
+  "kernel": "host kernel (tested on 6.6.87.2-microsoft-standard-WSL2)",
+  "distro": "agent image (Ubuntu 24.04) on Docker Desktop 4.98.0, engine 29.9.2",
+  "bpftrace_version": "v0.20.2",
+  "btf": true,
+  "recorded_at": "2026-11-10",
+  "recipes": {
+    "block-latency-histogram": "available",
+    "cpu-by-process": "available",
+    "dns-lookups": "available",
+    "files-opened-by-process": "available",
+    "new-processes": "available",
+    "page-faults-by-process": "available",
+    "slow-disk-io-by-process": "available",
+    "syscall-counts-by-process": "available",
+    "tcp-connects": "available",
+    "tcp-retransmits": "available"
+  },
+  "tests": {
+    "passed": [
+      "docker compose up: web/api/agent healthy via service-healthy chain",
+      "one-recipe E2E (syscall-counts-by-process): 5 s openat probe streamed 587 events"
+    ],
+    "failed": []
+  },
+  "notes": "Recorded 2026-11-10 (see docs/environment.md R-10). Recipe probes resolve on this kernel with the same list as the WSL2 survey; only syscall-counts-by-process was run end to end through the compose stack."
+}

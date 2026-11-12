@@ -1,0 +1,29 @@
+{
+  "env": "wsl2-ubuntu-24.04",
+  "status": "verified",
+  "kernel": "6.6.87.2-microsoft-standard-WSL2",
+  "distro": "Ubuntu 24.04.5 LTS (Noble) userspace on the Microsoft WSL2 kernel",
+  "bpftrace_version": "v0.20.2",
+  "btf": true,
+  "recorded_at": "2026-11-10",
+  "recipes": {
+    "block-latency-histogram": "available",
+    "cpu-by-process": "available",
+    "dns-lookups": "available",
+    "files-opened-by-process": "available",
+    "new-processes": "available",
+    "page-faults-by-process": "available",
+    "slow-disk-io-by-process": "available",
+    "syscall-counts-by-process": "available",
+    "tcp-connects": "available",
+    "tcp-retransmits": "available"
+  },
+  "tests": {
+    "passed": [
+      "make test-integration (-tags integration, root + bpftrace + BTF)",
+      "produced-output.sh: 9/10 recipes produced events in the 5 s window"
+    ],
+    "failed": []
+  },
+  "notes": "Recorded 2026-11-10 via wsl -u root (see docs/environment.md R-04/R-05/R-09). All 10 recipe probes list via bpftrace -l. slow-disk-io produced zero events in the 5 s window (no >=10 ms block IO then; a 10 s retest produced 1 map event), recorded as a measurement, not a failure. This is WSL2 userspace on the Microsoft kernel, not the stock Ubuntu 24.04 kernel."
+}

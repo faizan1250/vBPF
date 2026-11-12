@@ -14,6 +14,7 @@ no service code: every `make` target prints SKIP when its dir is absent.
 | e2e-mocked    | Playwright, chromium only, mock fixtures                                                         |
 | eval-mock     | `make eval` with `LLM_MODE=mock`, no secrets                                                     |
 | fuzz-short    | `make fuzz` (FUZZ_TIME=30s per target), seed corpora committed                                   |
+| compat-check  | `render-compat.mjs --check` (generated matrix docs fresh, no root)                               |
 | docker-build  | Image build only — no push, no privileged run                                                    |
 
 Go floor: `agent/go.mod` (`go 1.26.11`, resolved from the file by
@@ -39,5 +40,20 @@ token fields).
 `integration-manual.yml` (`workflow_dispatch` only) needs root, bpftrace,
 and kernel BTF. It is expected to fail on stock runners; use a prepared
 self-hosted runner. Go integration tests use `//go:build integration`.
+
+## Kernel/platform matrix
+
+`kernel-matrix.yml` (`workflow_dispatch` plus a weekly Monday schedule) is
+the only workflow that needs root and bpftrace, and it never fails on
+kernel gaps: test steps use `continue-on-error`, every outcome is recorded
+into `compat/<env>.json` (a finding, not a failure), and the JSON is
+uploaded as an artifact. A maintainer downloads the artifact, reviews it,
+and commits it to `compat/`; `node scripts/render-compat.mjs` (or
+`make compat`) regenerates `docs/compat.md` and the README platform table
+from those files, and `compat-check` in `ci.yml` keeps the generated files
+fresh. The optional `vm-kernels` job tries specific kernels
+(5.10/5.15/6.1/6.6) via virtme-ng and records `not-run` when the runner
+has no KVM or kernel image. Hosted actions are SHA-pinned like the rest of
+CI; `runs-on` images are GitHub-hosted labels (not SHA-pinnable).
 
 Ports (reserved, loopback): web 5173, api 8080, agent 8787.

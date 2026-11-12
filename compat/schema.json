@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "vBPF compatibility report",
+  "description": "One file per tested environment in compat/<env>.json (see I-12). Rendered by scripts/render-compat.mjs into docs/compat.md and the README platform table. Statuses stay honest: nothing is marked verified without a recorded run.",
+  "type": "object",
+  "required": [
+    "env",
+    "status",
+    "kernel",
+    "distro",
+    "bpftrace_version",
+    "btf",
+    "recipes",
+    "tests",
+    "notes"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "env": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9+._-]*$",
+      "description": "Environment key, matches the compat/<env>.json filename."
+    },
+    "status": {
+      "enum": ["verified", "unverified", "not-run"],
+      "description": "verified: a matrix run completed and recorded this data. unverified: workflow exists but no green run yet. not-run: no run attempted."
+    },
+    "kernel": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "description": "uname -r output, or \"n/a\" when no run has recorded one."
+    },
+    "distro": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "bpftrace_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "description": "First line of bpftrace --version, or \"n/a\" when unrecorded."
+    },
+    "btf": {
+      "type": "boolean",
+      "description": "Whether /sys/kernel/btf/vmlinux was present at record time."
+    },
+    "recorded_at": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Optional record date (YYYY-MM-DD). Omitted for not-run stubs."
+    },
+    "recipes": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "Per-recipe probe availability. fallback is reserved for recipes that declare a fallback path (none do yet).",
+      "additionalProperties": {
+        "enum": ["available", "fallback", "unavailable", "not-checked"]
+      }
+    },
+    "tests": {
+      "type": "object",
+      "required": ["passed", "failed"],
+      "additionalProperties": false,
+      "properties": {
+        "passed": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+        },
+        "failed": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 256 }
+        }
+      }
+    },
+    "notes": { "type": "string", "maxLength": 2048 }
+  }
+}
