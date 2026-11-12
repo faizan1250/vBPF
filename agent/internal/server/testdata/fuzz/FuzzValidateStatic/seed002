@@ -1,0 +1,2 @@
+go test fuzz v1
+string("uprobe:libc:getaddrinfo\n{\n  printf(\"%s pid=%d node=%s service=%s\\n\", comm, pid, str(arg0), str(arg1));\n}\n")

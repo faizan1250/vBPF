@@ -1,0 +1,2 @@
+go test fuzz v1
+string("tracepoint:raw_syscalls:sys_enter\n{\n  @syscalls[comm] = count();\n}\nEND\n{\n  print(@syscalls);\n}")

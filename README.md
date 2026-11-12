@@ -417,6 +417,8 @@ Common tasks (run inside Linux or WSL, from the repository root):
 | Install dependencies and build          | `make setup`                                                          |
 | Lint and typecheck                      | `make lint`                                                           |
 | Unit and contract tests (no root)       | `make test`                                                           |
+| Fuzzing (short pass, no root)           | `make fuzz` (see [`docs/fuzzing.md`](docs/fuzzing.md))                |
+| Differential oracle (needs bpftrace)    | `make test-differential` (skips without bpftrace)                     |
 | Integration tests (real bpftrace, root) | `sudo make test-integration`                                          |
 | Run the agent / API / web               | `sudo ./scripts/dev-agent.sh serve` / `make api-dev` / `make web-dev` |
 | End-to-end test (mocked agent)          | `pnpm -C web run test:e2e`                                            |

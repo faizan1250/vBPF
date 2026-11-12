@@ -1,0 +1,2 @@
+go test fuzz v1
+string("tracepoint:sock:inet_sock_set_state{if(args->newstate==1&&args->family==2){printf(\"%s %s:%d -> %s:%d\\n\",comm,ntop(args->saddr),args->sport,ntop(args->daddr),args->dport);}}")

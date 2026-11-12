@@ -126,6 +126,17 @@ func TestTracepointShortPrefixHasNoFloor(t *testing.T) {
 	require.Contains(t, strings.Join(resK.Errors, "; "), "wildcard too broad")
 }
 
+func TestExpandCountStarlessReturnsZero(t *testing.T) {
+	// Found by FuzzWildcard: expandCount sliced pattern[:IndexByte('*')]
+	// without checking for -1, panicking on star-less input. The validator
+	// only calls it after the shape check (which requires a trailing star),
+	// but the helper must be total for direct and fuzzed callers.
+	known := map[string]bool{"kprobe:vfs_read": true}
+	require.Zero(t, expandCount("kprobe:vfs_read", known))
+	require.Zero(t, expandCount("", known))
+	require.Equal(t, 1, expandCount("kprobe:vfs_*", known))
+}
+
 func TestMaxProbesOccurrenceSumAndEndpointProbeCount(t *testing.T) {
 	cat := wildcardCatalog(t)
 

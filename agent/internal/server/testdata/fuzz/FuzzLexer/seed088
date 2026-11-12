@@ -1,0 +1,2 @@
+go test fuzz v1
+string("tracepoint:block:block_rq_issue\n{\n    @start[args->dev, args->sector] = nsecs;\n}\n\ntracepoint:block:block_rq_complete\n/@start[args->dev, args->sector]/\n{\n    $lat_ms = (nsecs - @start[args->dev, args->sector]) / 1000000;\n    if ($lat_ms >= 10) {\n        @slow[comm] = count();\n    }\n    delete(@start[args->dev, args->sector]);\n}\n\ninterval:s:1\n{\n    print(@slow);\n    clear(@slow);\n}\n")

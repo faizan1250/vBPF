@@ -1,0 +1,2 @@
+go test fuzz v1
+string("software:page-faults\n{\n  @faults[comm] = count();\n}\n\nEND\n{\n  print(@faults);\n  clear(@faults);\n}\n")

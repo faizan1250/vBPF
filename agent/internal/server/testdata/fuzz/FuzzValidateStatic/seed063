@@ -1,0 +1,2 @@
+go test fuzz v1
+string("usdt:/lib/x86_64-linux-gnu/libc.so.6:probe { @x = count(); }")

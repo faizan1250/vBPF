@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"type\": \"map\", \"data\": {\"@retrans\": {\"swapper/4\": 3, \"swapper/0\": 5, \"swapper/2\": 7, \"swapper/7\": 9, \"iperf3\": 40}}}")

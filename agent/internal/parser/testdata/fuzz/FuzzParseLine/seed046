@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"type\": \"map\", \"data\": {\"@faults\": {\"bash\": 1, \"find\": 7}}}")

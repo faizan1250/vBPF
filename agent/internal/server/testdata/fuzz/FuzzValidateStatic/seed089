@@ -1,0 +1,2 @@
+go test fuzz v1
+string("tracepoint:tcp:tcp_retransmit_skb\n{\n  @retrans[comm] = count();\n}\ninterval:s:1\n{\n  print(@retrans);\n  clear(@retrans);\n}\n")

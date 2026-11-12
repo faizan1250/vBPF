@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"type\": \"printf\", \"data\": \"find pid=39453 file=/etc/ld.so.cache\\n\"}")

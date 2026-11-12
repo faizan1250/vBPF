@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"type\": \"printf\", \"data\": \"head pid=39454 file=/usr/lib/x86_64-linux-gnu/gconv/gconv-modules.cache\\n\"}")

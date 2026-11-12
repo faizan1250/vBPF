@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"type\": \"printf\", \"data\": \"curl 127.0.0.1:50798 -> 127.0.0.1:18080\\n\"}")

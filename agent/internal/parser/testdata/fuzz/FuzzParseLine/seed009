@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"type\": \"printf\", \"data\": \"head pid=39454 file=/lib/x86_64-linux-gnu/libc.so.6\\n\"}")

@@ -1,0 +1,2 @@
+go test fuzz v1
+string("profile:hz:99\n{\n  @cpu[comm] = count();\n}\n\nEND\n{\n  print(@cpu);\n}\n")

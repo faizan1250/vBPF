@@ -1,0 +1,2 @@
+go test fuzz v1
+string("tracepoint:syscalls:sys_enter_*")

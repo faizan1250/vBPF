@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"type\": \"printf\", \"data\": \"pid=39511 comm=ls file=/bin/ls\\n\"}")

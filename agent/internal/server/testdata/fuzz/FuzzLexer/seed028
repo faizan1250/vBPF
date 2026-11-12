@@ -1,0 +1,2 @@
+go test fuzz v1
+string("/* system(\"id\"); */ BEGIN { @x = count(); }")

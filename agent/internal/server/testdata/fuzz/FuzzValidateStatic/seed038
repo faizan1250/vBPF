@@ -1,0 +1,2 @@
+go test fuzz v1
+string("struct Foo { int x; } BEGIN { @x = count(); }")

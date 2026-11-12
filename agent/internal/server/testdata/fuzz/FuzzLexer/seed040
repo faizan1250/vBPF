@@ -1,0 +1,2 @@
+go test fuzz v1
+string("BEGIN { @a = count(); @b = sum(1); @c = avg(1); @d = min(1); @e = max(1); printf(\"x\"); }")
