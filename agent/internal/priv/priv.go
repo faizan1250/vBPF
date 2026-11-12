@@ -128,7 +128,7 @@ func Harden(ops Ops, log zerolog.Logger) string {
 		return "unknown"
 	}
 	newEff, newPrm, newInh := DropToRetain(eff, prm, inh)
-	dropped := (eff | prm) &^ (newEff | newPrm)
+	dropped := (eff | prm | inh) &^ (newEff | newPrm | newInh)
 	if err := ops.SetCaps(newEff, newPrm, newInh); err != nil {
 		log.Warn().Err(err).Str("current", FormatCaps(eff, prm, inh)).Msg("priv: capability drop failed, continuing")
 		return FormatCaps(eff, prm, inh)

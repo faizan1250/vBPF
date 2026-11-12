@@ -247,10 +247,10 @@ validator bypass could inherit.
   `PrivateTmp=yes`, `RuntimeDirectory=vbpf` (the `0600` token lives in
   `/run/vbpf`), `LimitMEMLOCK=infinity` (BPF maps),
   `RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6`, and
-  `SystemCallFilter=@system-service @bpf`. `MemoryDenyWriteExecute` is
+  `SystemCallFilter=@system-service bpf perf_event_open`. `MemoryDenyWriteExecute` is
   deliberately absent: bpftrace JIT-compiles BPF programs, so WX mappings
   are required at runtime. `systemd-analyze security` scores the unit
-  **3.3 OK** (systemd 255, 2026-11-12): remaining exposure is the intended
+  **3.5 OK** (systemd 255, 2026-11-12): remaining exposure is the intended
   surface (ambient tracing caps, no private-devices/clock/kernel-module
   lockdown, no `RootImage`), each accepted because tracing needs it.
 - **In-process drop.** At startup the agent sets `no_new_privs` and masks

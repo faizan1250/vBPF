@@ -630,7 +630,8 @@ after <ms>`, `cooldownMs: LIVE_DEFAULT_COOLDOWN_MS`) with log outcome
   dedicated `vbpf-agent` user, ambient/bounding retain set,
   `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`,
   `PrivateTmp`, `RuntimeDirectory=vbpf`, `LimitMEMLOCK=infinity`,
-  `AF_UNIX/INET/INET6` + `@system-service @bpf`) scores **3.3 OK** under
+  `AF_UNIX/INET/INET6` + `@system-service bpf perf_event_open`) scores
+  **3.5 OK** under
   `systemd-analyze security` (systemd 255); in-process
   (`agent/internal/priv`: `PR_SET_NO_NEW_PRIVS` + `capset` mask to the
   retain set, inheritable cleared, final set logged, best-effort so
@@ -648,12 +649,12 @@ after <ms>`, `cooldownMs: LIVE_DEFAULT_COOLDOWN_MS`) with log outcome
   pins that resolution never leaves the checker's root. Documented in
   README limitations and `docs/security.md`, with the read-only host-lib
   bind-mount escape hatch. Native runs are unaffected.
-- **Verified:** new `internal/priv` unit tests 5/5 (retain mask, fake-ops
+- **Verified:** new `internal/priv` unit tests 8/8 (retain mask, fake-ops
   Harden asserting SYS_ADMIN dropped + final set logged, failure
   tolerance, status parsing); new uprobe namespace test passes;
   `scripts/check-privilege.sh` PASS on Docker Desktop (health, validate +
   dry-run, run, stop + 404 re-stop, PID 1 caps exact, `privileged=false`,
   no pid mode, `:ro` tracefs write fails, `mknod`/`mount` fail);
-  `systemd-analyze security` 3.3 OK recorded above; `shellcheck` clean;
+  `systemd-analyze security` 3.5 OK recorded above; `shellcheck` clean;
   base + fallback `docker compose config` valid; full agent/api/web suites
   per the report.
