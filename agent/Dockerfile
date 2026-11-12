@@ -3,12 +3,16 @@
 # never published to the host; the API reaches it over the compose network.
 FROM golang:1.26.11-bookworm@sha256:dc40a13b61304647ed7e5d581d246b86413dfc29d63c6d018310feb93cd98fc0 AS builder
 
+# Release tag (v0.3.0); injected into the agent --version output. Defaults
+# to "dev" for local and CI builds that pass no build arg.
+ARG VERSION=dev
+
 WORKDIR /src
 COPY agent/go.mod agent/go.sum ./
 RUN go mod download
 COPY agent/cmd ./cmd
 COPY agent/internal ./internal
-RUN CGO_ENABLED=0 go build -trimpath -o /out/agent ./cmd/agent
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=$VERSION" -o /out/agent ./cmd/agent
 
 FROM ubuntu:24.04@sha256:fe81560990fae86dc4743202b2cb4d3df98d0bcf949173cecef15ce1127ef852
 

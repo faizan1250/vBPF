@@ -786,3 +786,41 @@ state}` shape is parsed with `.omit({ origin: true })` since the agent
   actionlint green (installed v1.7.12 locally for the check);
   `prettier --check` + eslint clean on touched files; `make lint`
   and `make test` green (or SKIP-equivalent where the runner lacks root).
+
+## I-16: release pipeline (2026-11-12)
+
+- **Scope (D-88).** Tag push `v*` publishes; `workflow_dispatch`
+  (default dry run) and PRs touching release files, `docs/install.md`,
+  `deploy/`, the agent Dockerfile, or `agent/cmd/agent/main.go` only
+  build. One `plan` job derives `dry_run`/`version` so every publish
+  step gates on a single output; a tag never publishes without the
+  full test suite and both doc/supply-chain gates passing first.
+- **No nfpm .deb (D-88).** Spec marks it optional; skipped so the diff
+  stays reviewable. Static binaries plus GHCR images cover the
+  documented install paths; revisit only on maintainer request.
+- **Version injection (D-88).** `var version = "dev"` in
+  `agent/cmd/agent/main.go` with a `--version` flag and a serve-startup
+  log line; release builds inject the tag with
+  `-ldflags "-X main.version=..."`, and `agent/Dockerfile` takes it as
+  `ARG VERSION=dev` (CI builds without the arg still say `dev`).
+  No version constants bumped anywhere else.
+- **One trust root (D-88).** Binaries and all four SPDX SBOMs land in
+  one `dist/`, `sha256sums.txt` covers every file, and keyless cosign
+  signs the checksums bundle plus the three pushed image digests; SLSA
+  provenance attests the same set. Release notes are the `CHANGELOG.md`
+  section matching the tag, extracted by awk (missing section fails
+  the job); the GitHub release is created with preinstalled `gh`
+  instead of a third pinned action.
+- **Action SHAs (D-88).** Resolved from the GitHub API at write time:
+  setup-qemu v3 `c7c5346`, setup-buildx v3 `8d2750c`, login v3
+  `c94ce9f`, build-push v6 `10e90e3`, attest v2 `e8998f9`,
+  cosign-installer v3 `398d4b0`, download-artifact v4 `d3f86a1`;
+  existing checkout/setup/upload/sbom pins reused verbatim (a local
+  pin cross-check caught two single-char transcription slips before
+  commit).
+- **Verified:** actionlint green on all workflows; `check-docs.sh`
+  and `check-supply-chain.sh` green; `go vet` clean and
+  `TestVersionFlag` green (`TestRunWithFake` fails on this Windows
+  checkout only — fork/exec of the `.sh` fixture — and is untouched by
+  this diff). Live dry run marked unverified: no tag pushed and no
+  GHCR publish performed locally, per the no-push hard stop.

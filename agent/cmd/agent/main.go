@@ -23,11 +23,20 @@ import (
 	"github.com/faizan1250/vBPF/agent/internal/server"
 )
 
+// version is the release tag (for example v0.3.0), injected with
+// -ldflags "-X main.version=...". Release builds pass it in; local and
+// image builds without VERSION report "dev".
+var version = "dev"
+
 func main() {
 	os.Exit(realMain(os.Args[1:], os.Stdout, os.Stderr))
 }
 
 func realMain(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 1 && args[0] == "--version" {
+		fmt.Fprintln(stdout, "agent", version)
+		return 0
+	}
 	if len(args) == 0 {
 		efprintf(stderr, "usage: agent <run|serve> ...")
 		return 2
@@ -145,6 +154,7 @@ func realServe(args []string, _, stderr io.Writer) int {
 		}
 	}
 	log := zerolog.New(os.Stderr).With().Timestamp().Logger()
+	log.Info().Str("version", version).Str("addr", addr).Msg("agent starting")
 	// Drop to the tracing retain set before binding or spawning bpftrace;
 	// best-effort (logs and continues) so unprivileged dev runs keep working.
 	priv.Harden(priv.DefaultOps(), log)
