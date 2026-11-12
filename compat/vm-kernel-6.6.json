@@ -1,0 +1,25 @@
+{
+  "env": "vm-kernel-6.6",
+  "status": "not-run",
+  "kernel": "n/a",
+  "distro": "specific kernel 6.6 booted via virtme-ng (optional matrix job)",
+  "bpftrace_version": "n/a",
+  "btf": false,
+  "recipes": {
+    "block-latency-histogram": "not-checked",
+    "cpu-by-process": "not-checked",
+    "dns-lookups": "not-checked",
+    "files-opened-by-process": "not-checked",
+    "new-processes": "not-checked",
+    "page-faults-by-process": "not-checked",
+    "slow-disk-io-by-process": "not-checked",
+    "syscall-counts-by-process": "not-checked",
+    "tcp-connects": "not-checked",
+    "tcp-retransmits": "not-checked"
+  },
+  "tests": {
+    "passed": [],
+    "failed": []
+  },
+  "notes": "Not run: recorded when the optional VM-kernel job boots this kernel; until then this stub keeps the matrix honest. Values above are placeholders, not measurements."
+}

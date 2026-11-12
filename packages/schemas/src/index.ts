@@ -322,3 +322,44 @@ export type ChartType = z.infer<typeof ChartTypeSchema>;
 export type GenerateRequest = z.infer<typeof GenerateRequestSchema>;
 export type GenerateResponse = z.infer<typeof GenerateResponseSchema>;
 export type GenerateValidation = z.infer<typeof GenerateValidationSchema>;
+
+// Kernel/platform matrix (I-12): one compat/<env>.json per environment.
+// Mirrors compat/schema.json; scripts/render-compat.mjs enforces the same
+// shape dependency-free so the matrix workflow needs no JS install.
+export const CompatStatusSchema = z.enum(["verified", "unverified", "not-run"]);
+
+export const CompatRecipeStatusSchema = z.enum([
+  "available",
+  "fallback",
+  "unavailable",
+  "not-checked",
+]);
+
+export const CompatReportSchema = z
+  .object({
+    env: z.string().min(1).max(128),
+    status: CompatStatusSchema,
+    kernel: z.string().min(1).max(256),
+    distro: z.string().min(1).max(256),
+    bpftrace_version: z.string().min(1).max(64),
+    btf: z.boolean(),
+    recorded_at: z
+      .string()
+      .regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/)
+      .optional(),
+    recipes: z
+      .record(z.string(), CompatRecipeStatusSchema)
+      .refine((r) => Object.keys(r).length >= 1, {
+        message: "recipes must cover at least one recipe",
+      }),
+    tests: z
+      .object({
+        passed: z.array(z.string().min(1).max(256)),
+        failed: z.array(z.string().min(1).max(256)),
+      })
+      .strict(),
+    notes: z.string().max(2048),
+  })
+  .strict();
+
+export type CompatReport = z.infer<typeof CompatReportSchema>;

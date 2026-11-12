@@ -337,12 +337,23 @@ Probe availability depends on your kernel. A recipe that needs a missing tracepo
 
 ## Supported platforms
 
-| Environment                                    | Kernel                                                     | Status                                                                             |
-| ---------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| Ubuntu 24.04 (VM, stock kernel)                | n/a                                                        | Untested — no Multipass binary and no second VM available on this machine          |
-| Ubuntu 22.04 (VM, stock kernel)                | n/a                                                        | Untested — no Multipass binary and no second VM available on this machine          |
-| WSL2 Ubuntu 24.04 userspace                    | `6.6.87.2-microsoft-standard-WSL2`                         | Tested 2026-11-10: BTF present, bpftrace `v0.20.2`, all 10 recipe probes listed    |
-| Compose quickstart (agent image, Ubuntu 24.04) | Host kernel (tested on `6.6.87.2-microsoft-standard-WSL2`) | Verified 2026-11-09: web/api/agent healthy, 5 s `openat` probe streamed 587 events |
+<!-- prettier-ignore-start -->
+<!-- compat:begin -->
+| Environment | Kernel | Status |
+| ----------- | ------ | ------ |
+| `compose-quickstart` | `host kernel (tested on 6.6.87.2-microsoft-standard-WSL2)` | Verified 2026-11-10 |
+| `ubuntu-22.04` | `n/a` | Not run |
+| `ubuntu-24.04` | `n/a` | Not run |
+| `vm-kernel-5.10` | `n/a` | Not run |
+| `vm-kernel-5.15` | `n/a` | Not run |
+| `vm-kernel-6.1` | `n/a` | Not run |
+| `vm-kernel-6.6` | `n/a` | Not run |
+| `wsl2-ubuntu-24.04` | `6.6.87.2-microsoft-standard-WSL2` | Verified 2026-11-10 |
+
+Per-recipe availability and full notes: [`docs/compat.md`](docs/compat.md).
+This table is generated from `compat/*.json` by `scripts/render-compat.mjs`; statuses stay honest — nothing is marked verified without a recorded run.
+<!-- compat:end -->
+<!-- prettier-ignore-end -->
 
 **Supported kernels:** 5.8+ with BTF (`/sys/kernel/btf/vmlinux` must exist).
 Verified only on `6.6.87.2-microsoft-standard-WSL2` (x86_64); stock Ubuntu
@@ -351,7 +362,7 @@ needs a missing tracepoint reports `PROBE_NOT_FOUND` with a suggestion.
 WSL2 runs Ubuntu 24.04 userspace on the Microsoft WSL2 kernel, which is not
 equivalent to testing the stock Ubuntu 24.04 kernel.
 
-Per-environment recipe notes and fallbacks: [`docs/environment.md`](docs/environment.md).
+Per-environment recipe notes and fallbacks: [`docs/compat.md`](docs/compat.md) (generated matrix) and [`docs/environment.md`](docs/environment.md) (dated survey log).
 
 ---
 

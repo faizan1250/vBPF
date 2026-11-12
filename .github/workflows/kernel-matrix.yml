@@ -1,0 +1,126 @@
+# Kernel and platform matrix (I-12). Manual (`workflow_dispatch`) plus a
+# weekly schedule; mock-only, no secrets, no privileged containers.
+# Hosted-runner kernels may lack BTF or some tracepoints: the test steps
+# below use continue-on-error and every outcome is RECORDED into
+# compat/<env>.json (a finding, not a failure). Setup steps (checkout,
+# toolchain, bpftrace install, agent build) still fail the job when broken.
+# Each job uploads its JSON as an artifact; a maintainer downloads it,
+# reviews it, and commits it to compat/ (generated docs follow via
+# `node scripts/render-compat.mjs`).
+name: kernel-matrix
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1" # weekly, Monday 06:00 UTC
+
+env:
+  LLM_MODE: mock # mock-only CI; real LLM runs never happen here (LLM_UNAVAILABLE fallback)
+
+concurrency:
+  group: kernel-matrix
+  cancel-in-progress: false
+
+jobs:
+  # Stock GitHub kernels: install bpftrace, build the agent, run the
+  # root suite, verify recipes, collect the report.
+  hosted:
+    strategy:
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: agent/go.mod
+      - name: Install bpftrace and workloads
+        run: |
+          for i in 1 2 3 4 5; do
+            if sudo apt-get update -qq; then break; fi
+            if [ "$i" -eq 5 ]; then exit 1; fi
+            echo "apt-get update failed (attempt $i/5), retrying in 10s..."
+            sleep 10
+          done
+          sudo apt-get install -y -qq bpftrace iperf3 python3-pip
+          pip install --quiet pyyaml jsonschema
+      - name: Build agent
+        run: make agent-build
+      - name: Recipe verification
+        id: recipes
+        continue-on-error: true
+        run: make recipes-check
+      - name: Integration tests (root + bpftrace)
+        id: integration
+        continue-on-error: true
+        timeout-minutes: 20
+        run: sudo make test-integration
+      - name: Produced-output script
+        id: produced
+        continue-on-error: true
+        timeout-minutes: 15
+        run: sudo scripts/produced-output.sh /tmp/vbpf-produced
+      - name: Collect compat report (always runs, never fails the job)
+        if: always()
+        run: |
+          args=()
+          if [ "${{ steps.recipes.outcome }}" = "success" ]; then args+=(--pass "make recipes-check"); else args+=(--fail "make recipes-check (${{ steps.recipes.outcome }})"); fi
+          if [ "${{ steps.integration.outcome }}" = "success" ]; then args+=(--pass "make test-integration (root + bpftrace)"); else args+=(--fail "make test-integration (${{ steps.integration.outcome }})"); fi
+          if [ "${{ steps.produced.outcome }}" = "success" ]; then args+=(--pass "scripts/produced-output.sh"); else args+=(--fail "scripts/produced-output.sh (${{ steps.produced.outcome }})"); fi
+          scripts/collect-compat.sh "${{ matrix.os }}" --out compat \
+            --notes "Recorded by .github/workflows/kernel-matrix.yml (hosted ${{ matrix.os }})." \
+            "${args[@]}"
+      - name: Upload compat artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: compat-${{ matrix.os }}
+          path: |
+            compat/${{ matrix.os }}.json
+            /tmp/vbpf-produced/summary.tsv
+          if-no-files-found: warn
+
+  # Specific older kernels via virtme-ng. Stock GitHub runners have no
+  # /dev/kvm and no virtme-ng, so this job normally records not-run (an
+  # honest stub, not a failure). With KVM + virtme-ng present it boots the
+  # given kernel and runs the same suite inside the guest.
+  vm-kernels:
+    strategy:
+      matrix:
+        kernel: ["5.10", "5.15", "6.1", "6.6"]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Attempt VM boot (optional tooling)
+        id: vmboot
+        continue-on-error: true
+        run: |
+          ran=false
+          if [ -c /dev/kvm ] && command -v vng >/dev/null 2>&1; then
+            if vng -r "v${{ matrix.kernel }}" --exec 'uname -r'; then
+              ran=true
+            else
+              echo "VM boot of v${{ matrix.kernel }} failed; recording not-run"
+            fi
+          else
+            echo "SKIP: /dev/kvm or virtme-ng missing on this runner; recording not-run"
+          fi
+          echo "ran=$ran" >>"$GITHUB_OUTPUT"
+      - name: Collect compat report (always runs, never fails the job)
+        if: always()
+        run: |
+          if [ "${{ steps.vmboot.outputs.ran }}" = "true" ]; then
+            scripts/collect-compat.sh "vm-kernel-${{ matrix.kernel }}" --out compat \
+              --notes "Recorded by .github/workflows/kernel-matrix.yml inside virtme-ng guest v${{ matrix.kernel }}." \
+              --pass "vm boot v${{ matrix.kernel }}"
+          else
+            scripts/collect-compat.sh "vm-kernel-${{ matrix.kernel }}" --out compat \
+              --status not-run \
+              --notes "Not run: no /dev/kvm, virtme-ng, or kernel ${{ matrix.kernel }} image on this runner (recorded by kernel-matrix.yml)."
+          fi
+      - name: Upload compat artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: compat-vm-kernel-${{ matrix.kernel }}
+          path: compat/vm-kernel-${{ matrix.kernel }}.json

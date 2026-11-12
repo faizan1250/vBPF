@@ -5,7 +5,7 @@
 
 SHELL := /bin/sh
 .SHELLFLAGS := -eu -c
-.PHONY: setup lint test test-determinism agent-build api-dev web-dev eval test-integration recipes-check vuln secrets parity fuzz test-differential
+.PHONY: setup lint test test-determinism agent-build api-dev web-dev eval test-integration recipes-check vuln secrets parity compat compat-check fuzz test-differential
 
 GO ?= go
 PNPM ?= pnpm
@@ -78,6 +78,14 @@ parity:
 	node scripts/parity-vectors.mjs
 	@if [ -d agent ]; then cd agent && $(GO) test ./internal/server/ -run 'TestValidatorVectors' -count=1; else echo "SKIP: no agent/ yet"; fi
 	@if [ -d api ]; then $(PNPM) -C api exec vitest run src/validator-vectors.test.ts; else echo "SKIP: no api/ yet"; fi
+
+# Kernel/platform matrix (I-12): render docs/compat.md and the README
+# platform table from compat/*.json. Pure node, no root, no secrets.
+compat:
+	node scripts/render-compat.mjs
+
+compat-check:
+	node scripts/render-compat.mjs --check
 
 # Go native fuzzing (I-05): short pass per target for CI; longer manual runs
 # via `make fuzz FUZZ_TIME=5m`. Seed corpora live in
