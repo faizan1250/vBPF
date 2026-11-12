@@ -442,7 +442,7 @@ Common tasks (run inside Linux or WSL, from the repository root):
 | End-to-end test (mocked agent)          | `pnpm -C web run test:e2e`                                            |
 | Evaluation (mock-only)                  | `make eval`                                                           |
 
-CI ([`ci.yml`](.github/workflows/ci.yml)) runs the same checks mock-only on every push/PR to `main`: lint, unit tests, contract check, mocked Playwright e2e, mock eval, and image-build checks. No secrets, no root, no privileged runs. Real-probe tests live in [`integration-manual.yml`](.github/workflows/integration-manual.yml) (`workflow_dispatch` only).
+CI ([`ci.yml`](.github/workflows/ci.yml)) runs the same checks mock-only on every push/PR to `main`: lint, unit tests, contract check, mocked Playwright e2e, mock eval, docs truthfulness (`bash scripts/check-docs.sh`), and image-build checks. No secrets, no root, no privileged runs. Real-probe tests live in [`integration-manual.yml`](.github/workflows/integration-manual.yml) (`workflow_dispatch` only).
 
 **Testing without root.** `scripts/fake-bpftrace.sh` replays recorded output from `fixtures/` (all 10 recipes have captured fixtures), so the parser, API, and UI can be developed and tested without a privileged environment.
 

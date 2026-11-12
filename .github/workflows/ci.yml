@@ -124,6 +124,16 @@ jobs:
       - name: render-compat --check (generated docs fresh, no root needed)
         run: node scripts/render-compat.mjs --check
 
+  # Docs truthfulness (I-09): documented agent flags, env vars, make
+  # targets, ports, helper scripts, and relative links match the code.
+  # Static check, mock-only, no root, no secrets.
+  docs-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: bash scripts/check-docs.sh (no root needed)
+        run: bash scripts/check-docs.sh
+
   # Go native fuzzing (I-05): short pass per target with committed seeds.
   # No root, no bpftrace needed. Longer soaks are manual via FUZZ_TIME.
   fuzz-short:
