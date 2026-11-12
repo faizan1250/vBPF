@@ -1004,7 +1004,7 @@ recipe-check` green for all 30; full agent `produced-output.sh` run:
   and SECURITY.md. No implementation, no version bump (target stays
   0.3.x).
 - **Grounding (D-97).** Every table row cites a path verified to exist
-  in this tree (agent/internal/server/*, api/src/*,
+  in this tree (agent/internal/server/\*, api/src/\*,
   packages/schemas/validator-vectors.json, eval/prompts.yaml,
   deploy/vbpf-agent.service); no test names are invented. New doc uses
   only env names, make targets, ports, and helper scripts the
