@@ -190,6 +190,79 @@ jobs:
           if [ -d contract ]; then pnpm -C contract run check; \
           else echo "SKIP: no contract/ fixtures yet (fake-agent check deferred)"; fi
 
+  # JS vulnerability gate (I-15): fails on high/critical findings unless
+  # each is covered by an unexpired .github/audit-allowlist.json entry
+  # (reason + expiry required). Mock-only, no secrets.
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: "9.x"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - name: Install JS deps (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+      - name: make audit (high/critical gate, no secrets needed)
+        run: make audit
+
+  # SBOM (I-15): SPDX JSON for the agent binary (inside the agent image)
+  # and all three container images, kept as a CI artifact. The release
+  # workflow (I-16) reuses the same anchore step and attaches the files.
+  sbom:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build images with local tags (no push)
+        run: |
+          docker build -t vbpf-agent:ci -f agent/Dockerfile .
+          docker build -t vbpf-api:ci -f api/Dockerfile .
+          docker build -t vbpf-web:ci -f web/Dockerfile .
+      - name: SBOM for agent image (embeds the agent binary)
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: vbpf-agent:ci
+          format: spdx-json
+          output-file: sbom-agent.spdx.json
+      - name: SBOM for api image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: vbpf-api:ci
+          format: spdx-json
+          output-file: sbom-api.spdx.json
+      - name: SBOM for web image
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: vbpf-web:ci
+          format: spdx-json
+          output-file: sbom-web.spdx.json
+      - name: Upload SBOM artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom
+          path: sbom-*.spdx.json
+          if-no-files-found: error
+
+  # Supply-chain gate (I-15): actionlint over every workflow plus the
+  # static checks (pins, dependabot/codeql/scorecard config, allowlist,
+  # docs). Mock-only, no secrets.
+  supply-chain:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: agent/go.mod
+      - name: Install actionlint (pinned)
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: actionlint (all workflows)
+        run: actionlint
+      - name: make supply-chain-check (static, no secrets needed)
+        run: make supply-chain-check
+
   # Mocked end-to-end: Playwright, chromium only, mock fixtures only.
   e2e-mocked:
     runs-on: ubuntu-24.04

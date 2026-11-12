@@ -5,7 +5,7 @@
 
 SHELL := /bin/sh
 .SHELLFLAGS := -eu -c
-.PHONY: setup lint test test-determinism agent-build api-dev web-dev eval test-integration recipes-check vuln secrets parity compat compat-check docs-check fuzz test-differential
+.PHONY: setup lint test test-determinism agent-build api-dev web-dev eval test-integration recipes-check vuln audit secrets parity compat compat-check docs-check supply-chain-check fuzz test-differential
 
 GO ?= go
 PNPM ?= pnpm
@@ -92,6 +92,11 @@ compat-check:
 docs-check:
 	@bash scripts/check-docs.sh
 
+# Supply-chain gate (I-15): Dependabot, CodeQL, Scorecard, SBOM, audit
+# allowlist, and SECURITY/supply-chain docs. Static, no root, no secrets.
+supply-chain-check:
+	@bash scripts/check-supply-chain.sh
+
 # Go native fuzzing (I-05): short pass per target for CI; longer manual runs
 # via `make fuzz FUZZ_TIME=5m`. Seed corpora live in
 # agent/internal/*/testdata/fuzz (regenerate with
@@ -113,6 +118,14 @@ fuzz:
 test-differential:
 	@if [ -d agent ]; then cd agent && $(GO) test -tags integration ./internal/server/ -run 'TestDifferentialOracle' -count=1 -v; \
 		else echo "SKIP: no agent/ yet"; fi
+
+# JS vulnerability gate (I-15): fails on high/critical findings unless
+# each is covered by an unexpired .github/audit-allowlist.json entry
+# (reason + expiry required). No root, no secrets. CI runs this on every
+# push/PR (the `audit` job).
+audit:
+	@if [ -f pnpm-workspace.yaml ]; then node scripts/check-audit.mjs; \
+		else echo "SKIP: no pnpm workspace yet"; fi
 
 # Secret scan (R-22 keys hygiene). No root needed; skips when gitleaks is
 # not installed. CI runs gitleaks-action on every push/PR instead.
