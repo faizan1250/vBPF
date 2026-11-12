@@ -9,9 +9,21 @@ services:
     build:
       context: .
       dockerfile: ./agent/Dockerfile
-    # The agent needs root, the host PID namespace, and kernel tracing mounts.
-    privileged: true
-    pid: host
+    # Minimal tracing caps instead of full root (I-08, D-84): BPF program
+    # load (BPF), kprobe/tracepoint attach (PERFMON), BPF map memlock
+    # (SYS_RESOURCE). No `privileged`, no `pid: host` (probes are
+    # kernel-wide; the container's own PID namespace is enough), and
+    # no-new-privileges blocks setuid escalation. Tracefs/debugfs are
+    # mounted read-only; if bpftrace ever needs a write there, use the
+    # documented fallback in docker-compose.privileged.yml and record why.
+    cap_add:
+      - BPF
+      - PERFMON
+      - SYS_RESOURCE
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     # Separate loopbacks per container, so the agent binds the wildcard here;
     # the code only allows it with AGENT_ALLOW_WILDCARD_BIND=1 (see security.md).
     command:
@@ -20,8 +32,8 @@ services:
       AGENT_ALLOW_WILDCARD_BIND: "1"
     volumes:
       - agent-token:/token
-      - /sys/kernel/debug:/sys/kernel/debug:rw
-      - /sys/kernel/tracing:/sys/kernel/tracing:rw
+      - /sys/kernel/debug:/sys/kernel/debug:ro
+      - /sys/kernel/tracing:/sys/kernel/tracing:ro
     networks:
       - vbpf
     healthcheck:

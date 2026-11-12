@@ -1,0 +1,71 @@
+# vBPF agent (I-08, D-84): bpftrace runner with the minimal capability set.
+#
+# Install:
+#   useradd -r -s /usr/sbin/nologin vbpf-agent
+#   install -m 0755 bin/agent /usr/local/bin/agent
+#   install -m 0644 deploy/vbpf-agent.service /etc/systemd/system/vbpf-agent.service
+#   systemctl daemon-reload
+#   systemctl enable --now vbpf-agent
+#
+# The service user keeps NO ambient capabilities except the tracing retain
+# set (BPF: load programs/maps, PERFMON: perf-event attach,
+# SYS_RESOURCE: raise memlock for BPF maps). CAP_SYS_ADMIN and
+# CAP_DAC_READ_SEARCH are deliberately absent.
+#
+# Tracefs/debugfs/BTF access for the vbpf-agent user (without making them
+# world-readable): remount with a group the service user belongs to, e.g.
+#   groupadd -r vbpf-trace
+#   usermod -aG vbpf-trace vbpf-agent
+#   mount -o remount,gid=vbpf-trace,mode=750 /sys/kernel/tracing
+#   mount -o remount,gid=vbpf-trace,mode=750 /sys/kernel/debug
+# and grant the BTF file similarly (chgrp vbpf-trace + chmod g+r on
+# /sys/kernel/btf/vmlinux where the filesystem allows). See
+# docs/security.md for the full note and verification status.
+[Unit]
+Description=vBPF agent (bpftrace runner, minimal capabilities)
+Documentation=https://github.com/faizan1250/vBPF
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=vbpf-agent
+Group=vbpf-agent
+ExecStart=/usr/local/bin/agent serve --addr 127.0.0.1:8787 --token-file /run/vbpf/agent.token
+
+# Tracing retain set only; the agent drops everything else at startup too.
+AmbientCapabilities=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_SYS_RESOURCE
+NoNewPrivileges=yes
+
+# BPF maps account against locked memory; the agent raises its own rlimit
+# with CAP_SYS_RESOURCE, but start from unlimited so the unit file does not
+# depend on the compiled-in default.
+LimitMEMLOCK=infinity
+
+# Filesystem lockdown. /run/vbpf (RuntimeDirectory) holds the 0600 bearer
+# token; PrivateTmp gives the agent its own /tmp for 0600 probe scripts.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RuntimeDirectory=vbpf
+RuntimeDirectoryMode=0700
+ReadWritePaths=/run/vbpf
+
+# Loopback serve only: stdout/stderr pipes to bpftrace plus TCP to 127.0.0.1.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallFilter=@system-service @bpf
+SystemCallArchitectures=native
+
+# MemoryDenyWriteExecute is deliberately absent: bpftrace JIT-compiles BPF
+# programs (LLVM emits executable memory at runtime), so MDWE would break
+# every run. NoNewPrivileges + the capability bounding set carry the
+# hardening instead.
+RestrictNamespaces=yes
+LockPersonality=yes
+
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

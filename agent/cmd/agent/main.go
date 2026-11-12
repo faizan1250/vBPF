@@ -18,6 +18,7 @@ import (
 
 	"github.com/faizan1250/vBPF/agent/internal/limits"
 	"github.com/faizan1250/vBPF/agent/internal/parser"
+	"github.com/faizan1250/vBPF/agent/internal/priv"
 	"github.com/faizan1250/vBPF/agent/internal/runner"
 	"github.com/faizan1250/vBPF/agent/internal/server"
 )
@@ -144,6 +145,9 @@ func realServe(args []string, _, stderr io.Writer) int {
 		}
 	}
 	log := zerolog.New(os.Stderr).With().Timestamp().Logger()
+	// Drop to the tracing retain set before binding or spawning bpftrace;
+	// best-effort (logs and continues) so unprivileged dev runs keep working.
+	priv.Harden(priv.DefaultOps(), log)
 	sweepCtx, sweepCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	swept, err := runner.SweepStale(sweepCtx, bin)
 	sweepCancel()

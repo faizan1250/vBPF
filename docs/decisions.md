@@ -612,3 +612,48 @@ after <ms>`, `cooldownMs: LIVE_DEFAULT_COOLDOWN_MS`) with log outcome
 - **nginx second layer (D-83).** `server_tokens off`, `client_max_body_size 64k` on API locations (matches the API's own 64 KB cap), `proxy_connect_timeout 5s` / `proxy_send_timeout 30s` with read kept at 120 s (90 s LLM budget + 60 s max run stream), `limit_req` 10r/m on the exact `/api/generate` and `/api/explain` locations mirroring the API's shared bucket, `Permissions-Policy` header; no HSTS (plain-HTTP loopback front door; set it at the TLS terminator).
 - **Verified:** new `parseTrustProxy` unit tests (default false, hop-count fail-closed, allowlist passthrough), new spoofed-header rate-limit test (untrusted peer ignored), `config.test.ts` TRUST_PROXY defaults, `nginx.conf.test.ts` shape tests (banner, 64k, timeouts, limit_req, Permissions-Policy), `scripts/check-headers.sh` smoke script, CI `nginx -t` against the pinned image + `docker compose config` + `docker compose build`.
 - **Verified:** `collect-compat.sh` run in WSL against the real kernel/bpftrace (facts correct; unprivileged listing honestly records unavailable); `render-compat.mjs --check` green; new `api/src/compat.test.ts` 8/8 (schema parse/reject, loader order, honesty invariants, full recipe coverage, generated-file freshness); full api suite green, `tsc --noEmit` clean (api + schemas), eslint/prettier clean, `shellcheck` clean; workflow YAML parses; ci.yml `compat-check` job is static (node only). `actionlint` unavailable on this machine — noted, not substituted.
+
+## I-08: reduce agent privilege (2026-11-12)
+
+- **Minimal caps are enough, no SYS_ADMIN/DAC_READ_SEARCH (D-84).** Number
+  note: `implementation.md` calls this D-29, but D-29 is already taken in
+  this file (prompt budget), so it is D-84 here. Compose drops
+  `privileged`/`pid: host` for `cap_add: [BPF, PERFMON, SYS_RESOURCE]` +
+  `cap_drop: [ALL]` + `no-new-privileges:true` with `:ro` tracefs/debugfs;
+  `SYS_ADMIN`/`DAC_READ_SEARCH` were not added because nothing needed
+  them: the limited container binds, catalogs (`bpftrace -l`, 107555
+  probes on the Docker Desktop 6.6.87.2-microsoft-standard-WSL2 kernel),
+  dry-run compiles, runs, and stops a tracepoint recipe
+  (`scripts/check-privilege.sh` PASS). Previous behavior is kept only as
+  `docker-compose.privileged.yml` (fallback override, documented use).
+- **Hardening at three layers.** Systemd (`deploy/vbpf-agent.service`,
+  dedicated `vbpf-agent` user, ambient/bounding retain set,
+  `NoNewPrivileges`, `ProtectSystem=strict`, `ProtectHome`,
+  `PrivateTmp`, `RuntimeDirectory=vbpf`, `LimitMEMLOCK=infinity`,
+  `AF_UNIX/INET/INET6` + `@system-service @bpf`) scores **3.3 OK** under
+  `systemd-analyze security` (systemd 255); in-process
+  (`agent/internal/priv`: `PR_SET_NO_NEW_PRIVS` + `capset` mask to the
+  retain set, inheritable cleared, final set logged, best-effort so
+  unprivileged dev/CI keeps working) reports
+  `eff=[cap_bpf,cap_perfmon,cap_sys_resource]` in the container log.
+  `MemoryDenyWriteExecute` omitted on purpose: bpftrace JITs BPF programs
+  (LLVM needs WX at runtime), so MDWE would break every run. No `USER`
+  line in the agent image: the in-process drop already confines PID 1
+  (`CapEff=000000c001000000`, `CapInh=0`).
+- **Container uprobe scope is namespace-local.** Uprobes resolve by inode
+  in the agent's mount namespace, so `uprobe:libc` in compose targets the
+  container's libc, never the host's: the same path stat'ed
+  `151:284263` (dev:inode) inside the agent image vs `2128:435056` on the
+  WSL2 host (2026-11-12). `TestUprobeResolvesWithinAgentMountNamespace`
+  pins that resolution never leaves the checker's root. Documented in
+  README limitations and `docs/security.md`, with the read-only host-lib
+  bind-mount escape hatch. Native runs are unaffected.
+- **Verified:** new `internal/priv` unit tests 5/5 (retain mask, fake-ops
+  Harden asserting SYS_ADMIN dropped + final set logged, failure
+  tolerance, status parsing); new uprobe namespace test passes;
+  `scripts/check-privilege.sh` PASS on Docker Desktop (health, validate +
+  dry-run, run, stop + 404 re-stop, PID 1 caps exact, `privileged=false`,
+  no pid mode, `:ro` tracefs write fails, `mknod`/`mount` fail);
+  `systemd-analyze security` 3.3 OK recorded above; `shellcheck` clean;
+  base + fallback `docker compose config` valid; full agent/api/web suites
+  per the report.
