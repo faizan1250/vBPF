@@ -12,9 +12,10 @@ func DefaultOps() Ops {
 		return 0, 0, 0, errors.New("priv: capabilities unsupported on this OS")
 	}
 	return Ops{
-		SetNoNewPrivs: func() error { return errors.New("priv: no_new_privs unsupported on this OS") },
-		GetCaps:       unsupported,
-		SetCaps:       func(_, _, _ uint64) error { return errors.New("priv: capabilities unsupported on this OS") },
+		SetNoNewPrivs:  func() error { return errors.New("priv: no_new_privs unsupported on this OS") },
+		GetCaps:        unsupported,
+		SetCaps:        func(_, _, _ uint64) error { return errors.New("priv: capabilities unsupported on this OS") },
+		ReadStatusCaps: ReadStatusCaps,
 	}
 }
 

@@ -15,8 +15,9 @@ func DefaultOps() Ops {
 		SetNoNewPrivs: func() error {
 			return unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
 		},
-		GetCaps: getCaps,
-		SetCaps: setCaps,
+		GetCaps:        getCaps,
+		SetCaps:        setCaps,
+		ReadStatusCaps: ReadStatusCaps,
 	}
 }
 

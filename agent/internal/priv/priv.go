@@ -80,9 +80,11 @@ func FormatCaps(eff, prm, inh uint64) string {
 }
 
 // ParseStatusCaps extracts the hex capability masks from /proc/self/status
-// text (CapEff/CapPrm/CapInh lines).
+// text (CapEff/CapPrm/CapInh lines). All three keys must be present;
+// a missing key returns an error instead of a silent zero mask.
 func ParseStatusCaps(status string) (eff, prm, inh uint64, err error) {
 	got := map[string]*uint64{"CapEff:": &eff, "CapPrm:": &prm, "CapInh:": &inh}
+	seen := map[string]bool{}
 	for _, line := range strings.Split(status, "\n") {
 		for key, dst := range got {
 			if !strings.HasPrefix(line, key) {
@@ -93,16 +95,24 @@ func ParseStatusCaps(status string) (eff, prm, inh uint64, err error) {
 				return 0, 0, 0, fmt.Errorf("priv: bad %s: %w", strings.TrimSuffix(key, ":"), perr)
 			}
 			*dst = v
+			seen[key] = true
+		}
+	}
+	for key := range got {
+		if !seen[key] {
+			return 0, 0, 0, fmt.Errorf("priv: missing %s", strings.TrimSuffix(key, ":"))
 		}
 	}
 	return eff, prm, inh, nil
 }
 
 // Ops injects the privileged operations so Harden is hermetically testable.
+// ReadStatusCaps is the /proc/self/status cross-check; nil skips verification.
 type Ops struct {
-	SetNoNewPrivs func() error
-	GetCaps       func() (eff, prm, inh uint64, err error)
-	SetCaps       func(eff, prm, inh uint64) error
+	SetNoNewPrivs  func() error
+	GetCaps        func() (eff, prm, inh uint64, err error)
+	SetCaps        func(eff, prm, inh uint64) error
+	ReadStatusCaps func() (eff, prm, inh uint64, err error)
 }
 
 // Harden sets no_new_privs and drops to the retain set, logging the final
@@ -124,6 +134,13 @@ func Harden(ops Ops, log zerolog.Logger) string {
 		return FormatCaps(eff, prm, inh)
 	}
 	final := FormatCaps(newEff, newPrm, newInh)
+	if ops.ReadStatusCaps != nil {
+		if oEff, oPrm, oInh, rerr := ops.ReadStatusCaps(); rerr != nil {
+			log.Warn().Err(rerr).Msg("priv: status cross-check unreadable, continuing")
+		} else if oEff != newEff || oPrm != newPrm || oInh != newInh {
+			log.Warn().Str("expected", final).Str("observed", FormatCaps(oEff, oPrm, oInh)).Msg("priv: status cross-check mismatch, continuing")
+		}
+	}
 	log.Info().Str("final", final).Str("dropped", NameSet(dropped)).Msg("priv: capabilities reduced to tracing retain set")
 	return final
 }

@@ -15,6 +15,9 @@ services:
   agent:
     privileged: true
     pid: host
+    cap_add: !reset []
+    cap_drop: !reset []
+    security_opt: !reset []
     volumes:
       - /sys/kernel/debug:/sys/kernel/debug:rw
       - /sys/kernel/tracing:/sys/kernel/tracing:rw
