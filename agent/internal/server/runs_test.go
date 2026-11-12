@@ -382,3 +382,17 @@ func TestBurstDoesNotDropTerminalSummary(t *testing.T) {
 		}
 	}
 }
+
+func TestRegistryPassesTempDirToRunner(t *testing.T) {
+	dir := t.TempDir()
+	var got string
+	reg := NewRegistry(func(ctx context.Context, opts runner.Options, emit func(parser.Event) error) error {
+		got = opts.TempDir
+		return emit(parser.Summarize(opts.RunID, 0, parser.Summary{ExitReason: runner.ReasonCompleted}))
+	}, "", testLogger(), WithTempDir(dir))
+	t.Cleanup(reg.Shutdown)
+	run, err := reg.Start(context.Background(), "BEGIN {}", 5*time.Second)
+	require.NoError(t, err)
+	<-run.done
+	require.Equal(t, dir, got)
+}

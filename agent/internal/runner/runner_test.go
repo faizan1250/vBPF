@@ -32,6 +32,9 @@ func fakePath(t *testing.T) string {
 
 func run(t *testing.T, opts Options) ([]parser.Event, error) {
 	t.Helper()
+	if opts.TempDir == "" {
+		opts.TempDir = t.TempDir()
+	}
 	var events []parser.Event
 	err := Run(context.Background(), opts, func(ev parser.Event) error {
 		events = append(events, ev)
@@ -51,23 +54,20 @@ func summaryOf(t *testing.T, events []parser.Event) parser.Summary {
 }
 
 func TestReplayFixture(t *testing.T) {
-	// Isolate os.TempDir so the leak glob below sees only this test's files,
-	// not other packages' in-flight vbpf-*.bt files during parallel runs.
-	isolated := t.TempDir()
-	t.Setenv("TMPDIR", isolated)
-	t.Setenv("TMP", isolated)
-	t.Setenv("TEMP", isolated)
+	// Each test owns its temp dir via Options.TempDir, so the leak glob
+	// below never sees other packages' in-flight vbpf-*.bt files.
+	dir := t.TempDir()
 	fake := fakePath(t)
 	t.Setenv("FAKE_MODE", "replay")
 	t.Setenv("FAKE_FIXTURE", filepath.Join("..", "..", "..", "fixtures", "syscall-counts-by-process.ndjson"))
-	events, err := run(t, Options{BPFtracePath: fake, Script: "tracepoint:raw_syscalls:sys_enter {}", Duration: time.Second, RunID: "run_replay"})
+	events, err := run(t, Options{BPFtracePath: fake, Script: "tracepoint:raw_syscalls:sys_enter {}", Duration: time.Second, RunID: "run_replay", TempDir: dir})
 	require.NoError(t, err)
 	require.Equal(t, parser.KindStatus, events[0].Kind)
 	s := summaryOf(t, events)
 	require.Equal(t, ReasonCompleted, s.ExitReason)
 	require.Positive(t, s.Events)
 	require.Positive(t, s.Bytes)
-	matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "vbpf-*.bt"))
+	matches, _ := filepath.Glob(filepath.Join(dir, "vbpf-*.bt"))
 	require.Empty(t, matches, "temp files leaked")
 }
 

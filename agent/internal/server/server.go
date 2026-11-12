@@ -25,6 +25,9 @@ type Config struct {
 	Addr         string
 	TokenFile    string
 	BPFtracePath string
+	// TempDir overrides os.TempDir() for runner and dry-run temp scripts.
+	// Tests pass a t.TempDir() so each test scans only its own directory.
+	TempDir string
 	// AllowedOrigins is the WebSocket cross-origin allowlist, passed to
 	// websocket.Accept as OriginPatterns. Empty (the default) denies every
 	// browser origin; requests without an Origin header (server-to-server,
@@ -86,7 +89,7 @@ func New(cfg Config) (*Server, error) {
 	catalog := NewCatalog(cfg.BPFtracePath, cfg.CatalogFn)
 	dryRun := cfg.DryRun
 	if dryRun == nil {
-		dryRun = DefaultDryRun(cfg.BPFtracePath)
+		dryRun = DefaultDryRunInDir(cfg.BPFtracePath, cfg.TempDir)
 	}
 	probeArgs := cfg.ProbeArgs
 	if probeArgs == nil {
@@ -109,7 +112,7 @@ func New(cfg Config) (*Server, error) {
 		token:             tok,
 		allowedOrigins:    cfg.AllowedOrigins,
 		mux:               http.NewServeMux(),
-		runs:              NewRegistry(cfg.RunFn, cfg.BPFtracePath, cfg.Logger),
+		runs:              NewRegistry(cfg.RunFn, cfg.BPFtracePath, cfg.Logger, WithTempDir(cfg.TempDir)),
 		catalog:           catalog,
 		catalogRetryBase:  cfg.CatalogRetryBase,
 		catalogRetryMax:   cfg.CatalogRetryMax,

@@ -78,6 +78,19 @@ jobs:
       - name: go test -race on minimum Go (agent, no root)
         run: cd agent && go test -race ./...
 
+  # Deterministic Go tests (I-06): repeat + race + shuffle so ordering and
+  # flake bugs surface. No root, no bpftrace needed (integration-tagged
+  # tests skip without them).
+  test-determinism:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: agent/go.mod
+      - name: make test-determinism (repeat + race + shuffle, no root)
+        run: make test-determinism
+
   # Shared validator parity (I-04): shape gate plus the Go and TS vector
   # suites. Fails when a vector exists that only one side executes.
   parity:

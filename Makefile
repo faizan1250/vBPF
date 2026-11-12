@@ -5,7 +5,7 @@
 
 SHELL := /bin/sh
 .SHELLFLAGS := -eu -c
-.PHONY: setup lint test agent-build api-dev web-dev eval test-integration recipes-check vuln secrets parity fuzz test-differential
+.PHONY: setup lint test test-determinism agent-build api-dev web-dev eval test-integration recipes-check vuln secrets parity fuzz test-differential
 
 GO ?= go
 PNPM ?= pnpm
@@ -33,6 +33,12 @@ test:
 	@if [ -d agent ]; then cd agent && $(GO) test ./...; else echo "SKIP: no agent/ yet"; fi
 	@if [ -d api ]; then $(PNPM) -C api run test --run; else echo "SKIP: no api/ yet"; fi
 	@if [ -d web ]; then $(PNPM) -C web run test --run; else echo "SKIP: no web/ yet"; fi
+
+# Deterministic Go tests (I-06): repeat, race detector, and shuffle so
+# ordering and flake bugs surface. Keep `make test` fast; run this in CI
+# and before release.
+test-determinism:
+	@if [ -d agent ]; then cd agent && $(GO) test -race -count=3 -shuffle=on ./...; else echo "SKIP: no agent/ yet"; fi
 
 agent-build:
 	@if [ -d agent ]; then cd agent && $(GO) build -o ../bin/agent ./cmd/agent; else echo "SKIP: no agent/ yet"; fi

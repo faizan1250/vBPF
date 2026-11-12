@@ -77,6 +77,7 @@ type Registry struct {
 	closed                  bool
 	runFn                   RunnerFunc
 	bpftracePath            string
+	tempDir                 string
 	logger                  zerolog.Logger
 }
 
@@ -97,6 +98,16 @@ func WithFinishedHistoryTTL(ttl time.Duration) RegistryOption {
 	return func(r *Registry) {
 		if ttl > 0 {
 			r.finishedHistoryTTL = ttl
+		}
+	}
+}
+
+// WithTempDir directs runner temp scripts at dir instead of os.TempDir,
+// so tests can isolate each run's files with t.TempDir().
+func WithTempDir(dir string) RegistryOption {
+	return func(r *Registry) {
+		if dir != "" {
+			r.tempDir = dir
 		}
 	}
 }
@@ -230,6 +241,7 @@ func (r *Registry) execute(ctx context.Context, run *Run, log zerolog.Logger, sc
 		Script:       script,
 		Duration:     duration,
 		RunID:        run.id,
+		TempDir:      r.tempDir,
 	}
 	err := r.runFn(ctx, opts, func(ev parser.Event) error {
 		run.publish(ev)

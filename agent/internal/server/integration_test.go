@@ -41,16 +41,20 @@ func requireRootBpftrace(t *testing.T) {
 	}
 }
 
-func integrationServer(t *testing.T) *Server {
+func integrationServer(t *testing.T) (*Server, string) {
 	t.Helper()
+	// Own temp dir for runner and dry-run scripts, so leak scans never see
+	// other packages' in-flight vbpf-*.bt files during parallel runs.
+	dir := t.TempDir()
 	s, err := New(Config{
 		TokenFile: filepath.Join(t.TempDir(), "agent.token"),
+		TempDir:   dir,
 		Logger:    zerolog.Nop(),
 		StartTime: time.Now(),
 	})
 	require.NoError(t, err)
 	require.NoError(t, s.catalog.Refresh(context.Background()))
-	return s
+	return s, dir
 }
 
 func loadRecipe(t *testing.T, id string) string {
@@ -108,7 +112,7 @@ func streamUntilSummary(t *testing.T, s *Server, ts *httptest.Server, id string)
 
 func TestIntegrationThreeRecipes(t *testing.T) {
 	requireRootBpftrace(t)
-	s := integrationServer(t)
+	s, tmpDir := integrationServer(t)
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
@@ -133,12 +137,12 @@ func TestIntegrationThreeRecipes(t *testing.T) {
 		require.Contains(t, []string{"completed", "timeout"}, sum.ExitReason, id)
 		require.Zero(t, s.runs.Active())
 	}
-	assertNoLeak(t)
+	assertNoLeak(t, tmpDir)
 }
 
 func TestIntegrationKillMidRun(t *testing.T) {
 	requireRootBpftrace(t)
-	s := integrationServer(t)
+	s, tmpDir := integrationServer(t)
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
@@ -158,10 +162,10 @@ func TestIntegrationKillMidRun(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	require.Zero(t, s.runs.Active())
-	assertNoLeak(t)
+	assertNoLeak(t, tmpDir)
 }
 
-func assertNoLeak(t *testing.T) {
+func assertNoLeak(t *testing.T, dir string) {
 	t.Helper()
 	if _, err := exec.LookPath("pgrep"); err != nil {
 		t.Log("pgrep missing, skipping process check")
@@ -175,7 +179,7 @@ func assertNoLeak(t *testing.T) {
 	} else if len(strings.TrimSpace(string(out))) > 0 {
 		t.Fatalf("leaked BPF programs:\n%s", out)
 	}
-	matches, _ := filepath.Glob(filepath.Join(os.TempDir(), "vbpf-*.bt"))
+	matches, _ := filepath.Glob(filepath.Join(dir, "vbpf-*.bt"))
 	require.Empty(t, matches, "temp scripts leaked")
 }
 
@@ -198,7 +202,7 @@ func waitForBpftraceChild(t *testing.T) string {
 
 func TestIntegrationKillBpftraceMidRun(t *testing.T) {
 	requireRootBpftrace(t)
-	s := integrationServer(t)
+	s, tmpDir := integrationServer(t)
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
@@ -213,12 +217,12 @@ func TestIntegrationKillBpftraceMidRun(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	require.Zero(t, s.runs.Active())
-	assertNoLeak(t)
+	assertNoLeak(t, tmpDir)
 }
 
 func TestIntegrationCloseTabMidRun(t *testing.T) {
 	requireRootBpftrace(t)
-	s := integrationServer(t)
+	s, tmpDir := integrationServer(t)
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
@@ -247,12 +251,12 @@ func TestIntegrationCloseTabMidRun(t *testing.T) {
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	sum := streamUntilSummary(t, s, ts, runID)
 	require.Equal(t, runner.ReasonCancelled, sum.ExitReason)
-	assertNoLeak(t)
+	assertNoLeak(t, tmpDir)
 }
 
 func TestIntegrationAPIKillMidRun(t *testing.T) {
 	requireRootBpftrace(t)
-	s := integrationServer(t)
+	s, tmpDir := integrationServer(t)
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
@@ -274,14 +278,18 @@ func TestIntegrationAPIKillMidRun(t *testing.T) {
 	require.Zero(t, s.runs.Active())
 	sum := streamUntilSummary(t, s, ts, runID)
 	require.Equal(t, runner.ReasonTimeout, sum.ExitReason)
-	assertNoLeak(t)
+	assertNoLeak(t, tmpDir)
 }
 
 func TestIntegrationAgentRestartSweep(t *testing.T) {
 	requireRootBpftrace(t)
+	// Own temp dir, published via TMPDIR so the sweep allowlist
+	// (os.TempDir()-based) accepts the orphan script path.
+	tmpDir := t.TempDir()
+	t.Setenv("TMPDIR", tmpDir)
 	// Orphaned child as left by a SIGKILLed agent: own process group, argv
 	// carries a vbpf-*.bt temp path, never reaped by the dead parent.
-	tmp, err := os.CreateTemp("", "vbpf-orphan-*.bt")
+	tmp, err := os.CreateTemp(tmpDir, "vbpf-orphan-*.bt")
 	require.NoError(t, err)
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }()
@@ -316,5 +324,5 @@ func TestIntegrationAgentRestartSweep(t *testing.T) {
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
-	assertNoLeak(t)
+	assertNoLeak(t, tmpDir)
 }
