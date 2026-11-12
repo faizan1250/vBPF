@@ -9,6 +9,9 @@ no service code: every `make` target prints SKIP when its dir is absent.
 | test-unit     | `go test ./...` + `go test -race ./...` on latest verified Go (1.27.x), api/web vitest — no root |
 | test-unit-min | `go test -race ./...` on the minimum Go from `agent/go.mod` — no root                            |
 | vuln          | `govulncheck ./...` via `make vuln` — no root, no secrets                                        |
+| audit         | `pnpm audit` high/critical gate via `make audit` (allowlist needs reason + expiry) — no secrets  |
+| sbom          | SPDX JSON SBOMs for agent/api/web images via pinned anchore action — kept as `sbom` artifact     |
+| supply-chain  | `actionlint` + `bash scripts/check-supply-chain.sh` (pins, bot/scan config, docs) — no secrets   |
 | secrets       | gitleaks secret scan (R-22 keys hygiene) — no secrets                                            |
 | contract      | API contract vs fake agent fixture                                                               |
 | e2e-mocked    | Playwright, chromium only, mock fixtures                                                         |

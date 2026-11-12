@@ -751,3 +751,38 @@ state}` shape is parsed with `.omit({ origin: true })` since the agent
   GET, and stored `script_sha256` for generated/edited/recipe×2 paths);
   web vitest 77/77 (new: `localRunOrigin` 4/4, origin-storage on run
   success, per-origin history recording, export carries origin).
+
+## I-15: supply-chain automation (2026-11-12)
+
+- **Scope (D-87).** Dependabot, CodeQL, Scorecard, SBOM-as-CI-artifact,
+  audit/vuln gates, `SECURITY.md` versions, `docs/supply-chain.md`. The
+  release workflow itself (tag builds, signing, publishing) stays in I-16;
+  the CI `sbom` job uses the exact anchore step I-16 will reuse so the
+  release only adds attachment, not new tooling.
+- **Verify-first (D-87).** `scripts/check-supply-chain.sh` was written
+  before any config and failed 10/12 checks on `main` (no dependabot,
+  codeql, scorecard, sbom/audit jobs, stale `SECURITY.md`, no
+  supply-chain doc); existing SHA pins and the empty allowlist passed.
+- **CodeQL default suite (D-87).** Default `security-and-quality` queries,
+  no `security-extended`: extended adds noise that blocks PRs on
+  non-exploitable paths; the validator/parser already carry targeted
+  security tests (I-03 to I-05).
+- **SPDX, not CycloneDX (D-87).** `anchore/sbom-action` defaults to
+  SPDX JSON and the release checklist (checksums, attestations) already
+  speaks SPDX; one format everywhere.
+- **No Scorecard badge yet (D-87).** Per the spec the badge lands only
+  after the first successful run, so this diff adds no README badge.
+- **Gate asymmetry (D-87).** `govulncheck` fails on any finding (no
+  severity gate exists, so this is stricter than asked); `pnpm audit`
+  fails only on high/critical with waivers confined to
+  `.github/audit-allowlist.json` entries that each carry a reason and an
+  unexpired `YYYY-MM-DD` expiry. Moderate/low audit findings are logged,
+  not fatal. gitleaks stays zero-tolerance.
+- **Action SHAs (D-87).** Resolved from the GitHub API at write time:
+  codeql-action v3 `9418214`, scorecard-action v2.5.0 `fa7117d`,
+  sbom-action v0.24.3 `66cbf4b`; existing checkout/setup/upload pins
+  reused verbatim. actionlint v1.7.12 via pinned `go install`.
+- **Verified:** gate green; `make audit` green (0 findings);
+  actionlint green (installed v1.7.12 locally for the check);
+  `prettier --check` + eslint clean on touched files; `make lint`
+  and `make test` green (or SKIP-equivalent where the runner lacks root).

@@ -6,8 +6,8 @@ Threat model and hardening details: [`docs/security.md`](docs/security.md).
 
 | Version | Supported |
 | ------- | --------- |
-| 0.1.x   | Yes       |
-| < 0.1   | No        |
+| 0.3.x   | Yes       |
+| < 0.3   | No        |
 
 Only the latest minor release line receives security fixes.
 
