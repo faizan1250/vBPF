@@ -959,3 +959,23 @@ recipe-check` green for all 30; full agent `produced-output.sh` run:
   migration + top-1 pins added), `tsc --noEmit` clean, eslint/prettier
   clean, `render-compat.mjs --check` green with byte-identical docs,
   shellcheck clean.
+
+## I-20: launch content drafts (2026-11-13)
+
+- **Scope (D-94).** Drafts only, never posted from this diff: new
+  docs/launch-post.md plus Lobsters, eBPF-community, shared-FAQ,
+  checklist, and metrics sections in docs/launch.md. No version
+  bumps, no tags, no publish, no posting. Target stays 0.3.x.
+- **Numbers discipline (D-95).** Every numeric claim traces to a
+  tracked report, and only eval/reports/2026-11-10-live-real.md
+  (live+agent, groq/openai/gpt-oss-120b, 6.6.87.2-microsoft-standard-WSL2,
+  bpftrace v0.20.2) is quoted for compile/execution: static 26/26,
+  dry-run 20/26 first-try (23/26 retries), produced 20/23, refusal
+  30/30. Static-only reports (2026-11-09.md, 2026-11-09-live.md) are
+  named for the honesty story and never quoted as compiles. Variance
+  is the observed tuning-round spread (n=1 full run), never a
+  standard deviation. PR/commit links use full GitHub URLs (remote is
+  faizan1250/vBPF) with SHAs verified in the local git log.
+- **Verified:** ash scripts/check-docs.sh green, prettier --check
+  clean on touched markdown, article and post drafts committed marked
+  DRAFT.
