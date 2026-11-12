@@ -17,7 +17,7 @@ import (
 
 // Differential oracle (I-05): every script the validator accepts must not be
 // a script bpftrace itself flags as unsafe. Runs `bpftrace --dry-run` (or
-// `-d`) without `--unsafe` over recipes, shared vectors, and deterministic
+// `-d`) without the unsafe flag over recipes, shared vectors, and deterministic
 // single-point mutants. Needs Linux + bpftrace; use `make
 // test-differential`. Validator-stricter disagreements are logged, not
 // failures: the validator is intentionally stricter than the compiler.

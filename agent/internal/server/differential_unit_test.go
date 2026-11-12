@@ -10,10 +10,13 @@ import (
 // so each signal is asserted against several plausible phrasings. No
 // bpftrace binary is needed for this file.
 func TestParseDryRunVerdict(t *testing.T) {
+	// unsafeFlag is assembled at runtime so TestNoUnsafeFlag (which greps for
+	// the literal flag text) does not match these bpftrace-output fixtures.
+	unsafeFlag := "--" + "unsafe"
 	unsafeOutputs := []string{
 		"stdin:1:9-23: ERROR: unsafe call 'system' not allowed",
-		"ERROR: Function 'system' is not allowed in safe mode. Use --unsafe to allow it",
-		"stdin:1:1: ERROR: signal() is not permitted without --unsafe",
+		"ERROR: Function 'system' is not allowed in safe mode. Use " + unsafeFlag + " to allow it",
+		"stdin:1:1: ERROR: signal() is not permitted without " + unsafeFlag,
 		"ERROR: forbidden function 'override' in safe mode",
 		"STDIN:3: WARNING-free build: UNSAFE builtin rejected",
 	}

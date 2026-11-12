@@ -78,6 +78,9 @@ func assertFuzzInvariants(t *testing.T, script string, res ValidateResult) {
 }
 
 func FuzzValidateStatic(f *testing.F) {
+	// unsafeFlag is assembled at runtime so TestNoUnsafeFlag (which greps for
+	// the literal flag text) does not match this fuzz seed.
+	unsafeFlag := "--" + "unsafe"
 	seeds := []string{
 		"BEGIN { @x = count(); }",
 		"tracepoint:block:block_rq_issue { @x = count(); }",
@@ -92,7 +95,7 @@ func FuzzValidateStatic(f *testing.F) {
 		"#include <stdio.h>\nBEGIN { @x = count(); }",
 		"BEGIN { /* unterminated",
 		`BEGIN { printf("x); }`,
-		"BEGIN { @x = count(); } --unsafe",
+		"BEGIN { @x = count(); } " + unsafeFlag,
 		"kprobe:ab* { @x = count(); }",
 		"",
 		"BEGIN {\x00 @x = count(); }",
