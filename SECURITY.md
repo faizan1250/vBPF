@@ -1,6 +1,8 @@
 # Security Policy
 
-Threat model and hardening details: [`docs/security.md`](docs/security.md).
+Threat model (assets, actors, trust boundaries, STRIDE table, residual risks): [`docs/threat-model.md`](docs/threat-model.md).
+
+Hardening details: [`docs/security.md`](docs/security.md).
 
 ## Supported versions
 

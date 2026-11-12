@@ -514,7 +514,7 @@ More detail: [`docs/environment.md`](docs/environment.md).
 
 **Reporting a vulnerability:** please do not open a public issue. See [`SECURITY.md`](SECURITY.md).
 
-Details: [`docs/security.md`](docs/security.md). Overhead method and (pending) numbers: [`docs/overhead.md`](docs/overhead.md).
+Details: [`docs/security.md`](docs/security.md) and the published [`docs/threat-model.md`](docs/threat-model.md). Overhead method and (pending) numbers: [`docs/overhead.md`](docs/overhead.md).
 
 ---
 

@@ -994,3 +994,23 @@ recipe-check` green for all 30; full agent `produced-output.sh` run:
   the deferred-to-v0.3 sessions note already match the new order.
 - **Verified:** bash scripts/check-docs.sh green, prettier --check
   clean on touched markdown.
+
+## I-23: published threat model (2026-11-12)
+
+- **Scope (D-97).** Docs-only: new docs/threat-model.md per the issue
+  (assets, six actors, four trust boundaries, 16-row STRIDE table with
+  every mitigation pointing at a file or test, four residual risks
+  stated plainly), plus one-line links from the README privacy section
+  and SECURITY.md. No implementation, no version bump (target stays
+  0.3.x).
+- **Grounding (D-97).** Every table row cites a path verified to exist
+  in this tree (agent/internal/server/*, api/src/*,
+  packages/schemas/validator-vectors.json, eval/prompts.yaml,
+  deploy/vbpf-agent.service); no test names are invented. New doc uses
+  only env names, make targets, ports, and helper scripts the
+  docs-check gate already knows, so `bash scripts/check-docs.sh` stays
+  green.
+- **Verified:** bash scripts/check-docs.sh green; prettier --check
+  clean on docs/threat-model.md, README.md, and SECURITY.md
+  (docs/decisions.md carries pre-existing prettier drift outside this
+  diff, verified against HEAD and left untouched).
