@@ -376,6 +376,8 @@ Latest real-kernel numbers (live+agent, model `groq/openai/gpt-oss-120b`, kernel
 
 Full report: [`eval/reports/2026-11-10-live-real.md`](eval/reports/2026-11-10-live-real.md) (generated scripts: [`2026-11-10-live-real-scripts.ndjson`](eval/reports/2026-11-10-live-real-scripts.ndjson)). The two dry-run targets were published as-is after the tuning budget ran out; the report's gap analysis traces the misses to the agent catalog rejecting uprobe scripts, noisy dry-run error feedback on retries, and model probe-invention variance.
 
+Eval v2 (I-10, in progress on `feat/i-10-eval-v2`, not yet run live): 127 prompts (`eval/prompts.yaml`) — 20 direct, 20 paraphrase/vague, 15 parameterized, 20 novel, 42 adversarial (14 threat classes × 3), 10 ambiguous — with machine-checkable `expected` blocks (probe families, aggregation key, output kind), result-correctness oracles on 28 prompts (sentinel workloads: dd, curl-to-loopback, sentinel DNS/file names, ls loops), `--repeat N` variance over a 30-prompt core subset, and per-report model/kernel/bpftrace attribution plus accepted-unsafe tracking. Budgets: at most one full live run per day, repeat on core only, paced calls, `incomplete` report on provider exhaustion. The v2 live run is pending (needs the root agent + provider keys on Linux); when done it lands at `eval/reports/<date>-v2.md`. Mock/CI stays on the same dataset (`make eval`) with oracles skipped.
+
 Static-only history is kept for reference: [`eval/reports/2026-11-09-live.md`](eval/reports/2026-11-09-live.md) (stubbed agent validation, header-noted as superseded) and the mock baseline [`eval/reports/2026-11-09.md`](eval/reports/2026-11-09.md). Static-only modes report "passes static validation" only — never "compiles".
 
 Run it yourself:

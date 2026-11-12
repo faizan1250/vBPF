@@ -1,4 +1,5 @@
 import { mkdirSync, writeFileSync } from "node:fs";
+import { platform, release } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -7,11 +8,17 @@ import { config as loadDotenv } from "dotenv";
 import {
   FAKE_EVAL_PROBES,
   assertCallBudget,
+  assertDailyBudget,
   checkAgentPreflight,
+  coreSubset,
+  DEFAULT_REPEAT,
   loadPrompts,
   parseEvalArgs,
   renderMarkdown,
+  reportFileName,
   runEval,
+  runEvalRepeat,
+  summarize,
   writeScriptsNdjson,
 } from "./eval.js";
 import {
@@ -34,24 +41,93 @@ loadDotenv({ path: join(repoRoot, ".env") });
 
 const opts = parseEvalArgs(process.argv.slice(2), repoRoot);
 const date = new Date().toISOString().slice(0, 10);
+// Runner kernel label for non-agent modes (scripts never execute there).
+const runner = `${platform()} ${release()} (runner)`;
 
 if (!opts.live) {
   const entries = loadPrompts(opts.promptsPath);
-  const selected = opts.limit === null ? entries : entries.slice(0, opts.limit);
-  const { cases, summary, db } = await runEval(selected, {
-    recipesDir,
-    model: "mock",
-    delayMs: opts.delayMs,
-  });
-  closeDb(db);
-  mkdirSync(reportsDir, { recursive: true });
-  const outPath = opts.outPath ?? join(reportsDir, `${date}.md`);
-  writeFileSync(outPath, renderMarkdown(date, "mock", summary, cases));
-  process.stdout.write(`${JSON.stringify(summary)}\n${outPath}\n`);
+  const selected = opts.coreOnly
+    ? coreSubset(entries)
+    : opts.limit === null
+      ? entries
+      : entries.slice(0, opts.limit);
+  const repeat = opts.repeat ?? DEFAULT_REPEAT;
+  if (repeat > 1) {
+    const {
+      rounds,
+      repeat: stats,
+      db,
+    } = await runEvalRepeat(
+      selected,
+      {
+        recipesDir,
+        model: "mock",
+        delayMs: opts.delayMs,
+      },
+      repeat,
+    );
+    closeDb(db);
+    mkdirSync(reportsDir, { recursive: true });
+    const first = rounds[0] ?? [];
+    // Headline matches the rendered first-round cases; the full variance
+    // across all rounds is in stats (rendered as ## Variance).
+    const summary = summarize(first);
+    const outPath =
+      opts.outPath ??
+      join(
+        reportsDir,
+        reportFileName(date, {
+          live: false,
+          agent: false,
+          coreOnly: opts.coreOnly,
+          repeat,
+        }),
+      );
+    writeScriptsNdjson(outPath.replace(/\.md$/, "-scripts.ndjson"), first);
+    writeFileSync(
+      outPath,
+      renderMarkdown(date, "mock", summary, first, "mock", {
+        repeat: stats,
+        runner,
+      }),
+    );
+    process.stdout.write(`${JSON.stringify(summary)}\n${outPath}\n`);
+  } else {
+    const { cases, summary, db } = await runEval(selected, {
+      recipesDir,
+      model: "mock",
+      delayMs: opts.delayMs,
+    });
+    closeDb(db);
+    mkdirSync(reportsDir, { recursive: true });
+    const outPath =
+      opts.outPath ??
+      join(
+        reportsDir,
+        reportFileName(date, {
+          live: false,
+          agent: false,
+          coreOnly: opts.coreOnly,
+          repeat,
+        }),
+      );
+    writeScriptsNdjson(outPath.replace(/\.md$/, "-scripts.ndjson"), cases);
+    writeFileSync(
+      outPath,
+      renderMarkdown(date, "mock", summary, cases, "mock", { runner }),
+    );
+    process.stdout.write(`${JSON.stringify(summary)}\n${outPath}\n`);
+  }
 } else if (!opts.agent) {
   const entries = loadPrompts(opts.promptsPath);
-  const selected = opts.limit === null ? entries : entries.slice(0, opts.limit);
-  assertCallBudget(selected.length);
+  const selected = opts.coreOnly
+    ? coreSubset(entries)
+    : opts.limit === null
+      ? entries
+      : entries.slice(0, opts.limit);
+  const repeat = opts.repeat ?? DEFAULT_REPEAT;
+  assertCallBudget(selected.length, repeat);
+  if (!opts.coreOnly) assertDailyBudget(reportsDir, date, opts.force);
   const chain = new LiveLlmChain({ env: process.env });
   if (!chain.configured) {
     process.stderr.write(
@@ -59,7 +135,7 @@ if (!opts.live) {
     );
     process.exit(1);
   }
-  const { cases, summary, db } = await runEval(selected, {
+  const runOpts = {
     recipesDir,
     model: chain.model,
     llmFactory: () => chain,
@@ -74,25 +150,53 @@ if (!opts.live) {
     // No agent on a stock runner: reuse the static fallback text.
     probeArgsFn: async () => "",
     delayMs: opts.delayMs,
+  } as const;
+  const name = reportFileName(date, {
+    live: true,
+    agent: false,
+    coreOnly: opts.coreOnly,
+    repeat,
   });
-  let modelLabel = chain.model;
-  try {
-    const rows = db
-      .prepare("SELECT DISTINCT model FROM generations")
-      .all() as Array<{ model: string }>;
-    const seen = [...new Set(rows.map((r) => r.model).filter(Boolean))];
-    if (seen.length > 0) modelLabel = seen.join(", ");
-  } catch {
-    // Report label only; keep the chain attribution.
+  if (repeat > 1) {
+    const {
+      rounds,
+      repeat: stats,
+      db,
+    } = await runEvalRepeat(
+      selected,
+      {
+        ...runOpts,
+      },
+      repeat,
+    );
+    const first = rounds[0] ?? [];
+    // Headline matches the rendered first-round cases; the full variance
+    // across all rounds is in stats (rendered as ## Variance).
+    const summary = summarize(first);
+    closeDb(db);
+    mkdirSync(reportsDir, { recursive: true });
+    const outPath = opts.outPath ?? join(reportsDir, name);
+    writeScriptsNdjson(outPath.replace(/\.md$/, "-scripts.ndjson"), first);
+    writeFileSync(
+      outPath,
+      renderMarkdown(date, chain.model, summary, first, "live", {
+        repeat: stats,
+        runner,
+      }),
+    );
+    process.stdout.write(`${JSON.stringify(summary)}\n${outPath}\n`);
+  } else {
+    const { cases, summary, db } = await runEval(selected, runOpts);
+    closeDb(db);
+    mkdirSync(reportsDir, { recursive: true });
+    const outPath = opts.outPath ?? join(reportsDir, name);
+    writeScriptsNdjson(outPath.replace(/\.md$/, "-scripts.ndjson"), cases);
+    writeFileSync(
+      outPath,
+      renderMarkdown(date, chain.model, summary, cases, "live", { runner }),
+    );
+    process.stdout.write(`${JSON.stringify(summary)}\n${outPath}\n`);
   }
-  closeDb(db);
-  mkdirSync(reportsDir, { recursive: true });
-  const outPath = opts.outPath ?? join(reportsDir, `${date}-live.md`);
-  writeFileSync(
-    outPath,
-    renderMarkdown(date, modelLabel, summary, cases, "live"),
-  );
-  process.stdout.write(`${JSON.stringify(summary)}\n${outPath}\n`);
 } else {
   // Real mode: no stubs, no silent fallback. Preflight first.
   let health;
@@ -105,8 +209,14 @@ if (!opts.live) {
     process.exit(1);
   }
   const entries = loadPrompts(opts.promptsPath);
-  const selected = opts.limit === null ? entries : entries.slice(0, opts.limit);
-  assertCallBudget(selected.length);
+  const selected = opts.coreOnly
+    ? coreSubset(entries)
+    : opts.limit === null
+      ? entries
+      : entries.slice(0, opts.limit);
+  const repeat = opts.repeat ?? DEFAULT_REPEAT;
+  assertCallBudget(selected.length, repeat);
+  if (!opts.coreOnly) assertDailyBudget(reportsDir, date, opts.force);
   const chain = new LiveLlmChain({ env: process.env });
   if (!chain.configured) {
     process.stderr.write(
@@ -114,7 +224,7 @@ if (!opts.live) {
     );
     process.exit(1);
   }
-  const { cases, summary, db } = await runEval(selected, {
+  const runOpts = {
     recipesDir,
     model: chain.model,
     llmFactory: () => chain,
@@ -124,33 +234,78 @@ if (!opts.live) {
     searchProbesFn: searchProbes,
     validateAgentFn: validateScript,
     probeArgsFn: fetchProbeArgs,
-    runScriptFn: (agentUrl, tokenFile, script) =>
+    runScriptFn: (agentUrl: string, tokenFile: string, script: string) =>
       runScriptAndCountEvents(agentUrl, tokenFile, script, 5),
     delayMs: opts.delayMs,
+  } as const;
+  const name = reportFileName(date, {
+    live: true,
+    agent: true,
+    coreOnly: opts.coreOnly,
+    repeat,
   });
-  let modelLabel = chain.model;
-  try {
-    const rows = db
-      .prepare("SELECT DISTINCT model FROM generations")
-      .all() as Array<{ model: string }>;
-    const seen = [...new Set(rows.map((r) => r.model).filter(Boolean))];
-    if (seen.length > 0) modelLabel = seen.join(", ");
-  } catch {
-    // Report label only; keep the chain attribution.
+  if (repeat > 1) {
+    const {
+      rounds,
+      repeat: stats,
+      db,
+    } = await runEvalRepeat(
+      selected,
+      {
+        ...runOpts,
+      },
+      repeat,
+    );
+    const first = rounds[0] ?? [];
+    // Headline matches the rendered first-round cases; the full variance
+    // across all rounds is in stats (rendered as ## Variance).
+    const summary = summarize(first);
+    let modelLabel = chain.model;
+    try {
+      const rows = db
+        .prepare("SELECT DISTINCT model FROM generations")
+        .all() as Array<{ model: string }>;
+      const seen = [...new Set(rows.map((r) => r.model).filter(Boolean))];
+      if (seen.length > 0) modelLabel = seen.join(", ");
+    } catch {
+      // Report label only; keep the chain attribution.
+    }
+    closeDb(db);
+    mkdirSync(reportsDir, { recursive: true });
+    const outPath = opts.outPath ?? join(reportsDir, name);
+    writeFileSync(
+      outPath,
+      renderMarkdown(date, modelLabel, summary, first, "live+agent", {
+        kernel: health.kernel,
+        bpftrace: health.bpftrace_version,
+        repeat: stats,
+      }),
+    );
+    writeScriptsNdjson(outPath.replace(/\.md$/, "-scripts.ndjson"), first);
+    process.stdout.write(`${JSON.stringify(summary)}\n${outPath}\n`);
+  } else {
+    const { cases, summary, db } = await runEval(selected, runOpts);
+    let modelLabel = chain.model;
+    try {
+      const rows = db
+        .prepare("SELECT DISTINCT model FROM generations")
+        .all() as Array<{ model: string }>;
+      const seen = [...new Set(rows.map((r) => r.model).filter(Boolean))];
+      if (seen.length > 0) modelLabel = seen.join(", ");
+    } catch {
+      // Report label only; keep the chain attribution.
+    }
+    closeDb(db);
+    mkdirSync(reportsDir, { recursive: true });
+    const outPath = opts.outPath ?? join(reportsDir, name);
+    writeFileSync(
+      outPath,
+      renderMarkdown(date, modelLabel, summary, cases, "live+agent", {
+        kernel: health.kernel,
+        bpftrace: health.bpftrace_version,
+      }),
+    );
+    writeScriptsNdjson(outPath.replace(/\.md$/, "-scripts.ndjson"), cases);
+    process.stdout.write(`${JSON.stringify(summary)}\n${outPath}\n`);
   }
-  closeDb(db);
-  mkdirSync(reportsDir, { recursive: true });
-  const outPath = opts.outPath ?? join(reportsDir, `${date}-live-real.md`);
-  writeFileSync(
-    outPath,
-    renderMarkdown(date, modelLabel, summary, cases, "live+agent", {
-      kernel: health.kernel,
-      bpftrace: health.bpftrace_version,
-    }),
-  );
-  writeScriptsNdjson(
-    join(reportsDir, `${date}-live-real-scripts.ndjson`),
-    cases,
-  );
-  process.stdout.write(`${JSON.stringify(summary)}\n${outPath}\n`);
 }
