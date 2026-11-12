@@ -25,7 +25,7 @@ cd "$(dirname "$0")/.."
 
 failures=0
 fail() { printf 'check-docs: FAIL: %s\n' "$*" >&2; failures=$((failures + 1)); }
-section_ok() { [ "$failures" = "$1" ] && printf 'check-docs: ok: %s\n' "$2"; }
+section_ok() { [ "$failures" = "$1" ] && printf 'check-docs: ok: %s\n' "$2" || true; }
 
 # Normative docs for claim checks; every tracked markdown file for links.
 if git rev-parse --show-toplevel >/dev/null 2>&1; then
@@ -206,7 +206,6 @@ links_before=$failures
 slugify() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | sed -e 's/[^a-z0-9 _-]//g' -e 's/ /-/g'; }
 while IFS= read -r md; do
   dir="$(dirname "$md")"
-  headers="$(grep -E '^#{1,6} ' "$md" | sed -E 's/^#{1,6} //' | sed -E 's/^\s+|\s+$//g')"
   while IFS= read -r link; do
     case "$link" in
       http*|mailto:*|'#'*) continue ;;
@@ -226,6 +225,7 @@ while IFS= read -r md; do
     fi
     [ -e "$target" ] || { fail "broken link in $md: $link"; continue; }
     if [ -n "$anchor" ]; then
+      headers="$(grep -E '^#{1,6} ' "$target" 2>/dev/null | sed -E 's/^#{1,6} //' | sed -E 's/^\s+|\s+$//g' || true)"
       found=0
       while IFS= read -r h; do
         if [ "$(slugify "$h")" = "$anchor" ]; then found=1; break; fi

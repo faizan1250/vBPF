@@ -851,5 +851,9 @@ state}` shape is parsed with `.omit({ origin: true })` since the agent
   frame 210 (prompt, script, live bar chart), the brightest sampled frame,
   resized with LANCZOS. No staged or synthetic pixels beyond the header
   text.
-- **Verified:** bash scripts/check-docs.sh green; prettier check clean on
-  edited/new markdown; social.png opens at exactly 1280x640.
+- **Verified (corrected Phase 5):** `bash scripts/check-docs.sh` claimed
+  green here but was RED on 7 cross-file anchors in docs/faq.md (the
+  checker validated anchors against the linking file, not the target);
+  fixed to extract headings from `$target` (with `2>/dev/null || true`
+  guard), now green; prettier check clean on edited/new markdown;
+  social.png opens at exactly 1280x640.

@@ -67,13 +67,13 @@ and the tool:
 
 ### How is it different?
 
-|                 | bpftrace / BCC           | [GPTtrace](https://github.com/eunomia-bpf/GPTtrace) | [MCPtrace](https://github.com/eunomia-bpf/MCPtrace) | vBPF                                                                  |
-| --------------- | ------------------------ | --------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------- |
-| Input           | Scripts or fixed tools   | Natural language (CLI)                              | Natural language via an AI assistant (MCP)          | Natural language, recipes, or your own script                         |
-| Probe discovery | You search `bpftrace -l` | Vector search over bpftrace tool examples           | Browse/search kernel probes plus example scripts    | Retrieval from the real probe catalog of your kernel                  |
-| Output          | Terminal text            | Terminal text plus an AI explanation                | Results polled through the assistant, no streaming  | Live charts and tables in the browser                                 |
-| Safety          | Your responsibility      | Retry on load errors; author-labelled experiment    | Gateway model; README states no script validation   | Validation layers, limits, and explicit confirmation before every run |
-| Confirmation    | You wrote it             | None documented (can save without running)          | Trusts the AI client                                | Required: you review the exact script before every run                |
+|                 | bpftrace / BCC           | [GPTtrace](https://github.com/eunomia-bpf/GPTtrace)                         | [MCPtrace](https://github.com/eunomia-bpf/MCPtrace) | vBPF                                                                  |
+| --------------- | ------------------------ | --------------------------------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------- |
+| Input           | Scripts or fixed tools   | Natural language (CLI)                                                      | Natural language via an AI assistant (MCP)          | Natural language, recipes, or your own script                         |
+| Probe discovery | You search `bpftrace -l` | Vector search over bpftrace tool examples                                   | Browse/search kernel probes plus example scripts    | Retrieval from the real probe catalog of your kernel                  |
+| Output          | Terminal text            | Terminal text plus an AI explanation                                        | Results polled through the assistant, no streaming  | Live charts and tables in the browser                                 |
+| Safety          | Your responsibility      | Retry on load errors; author-labelled experiment                            | Gateway model; README states no script validation   | Validation layers, limits, and explicit confirmation before every run |
+| Confirmation    | You wrote it             | No confirmation step documented (example saves file, exits without running) | Trusts the AI client                                | Required: you review the exact script before every run                |
 
 It is built **on top of** bpftrace; it does not replace it.
 
