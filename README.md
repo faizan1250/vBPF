@@ -300,6 +300,17 @@ Configuration is via environment variables (`.env` for local development). Never
 
 Duration and `BPFTRACE_*` values above are the caps enforced by the agent/API on every run; the `.env` entries document the current defaults. Tighter in-kernel aggregation lowers overhead; looser caps increase it.
 
+Measured 2026-11-12 (WSL2 kernel `6.6.87.2`, bpftrace `v0.20.2`, 10 s × 3 reps per cell; full table in [`docs/overhead.md`](docs/overhead.md)):
+
+| Recipe                      | Idle bpftrace CPU mean (min–max) | Loaded bpftrace CPU mean (min–max) |
+| --------------------------- | -------------------------------- | ---------------------------------- |
+| `syscall-counts-by-process` | 0.6% (0.0–9.0)                   | 1.5% (0.0–27.0)                    |
+| `cpu-by-process`            | 5.0% (0.0–60.0)                  | 0.8% (0.0–10.0)                    |
+| `slow-disk-io-by-process`   | 4.5% (0.0–49.0)                  | 5.0% (0.0–54.0)                    |
+| `tcp-connects`              | 1.9% (0.0–20.0)                  | 3.8% (0.0–52.0)                    |
+
+Run means include one-time BPF compile (8–60% first-second bursts); steady-state probe cost is ~0% in every cell, with 0 drops in all 24 runs. CI environments are untested (no overhead step there yet).
+
 ### Live LLM providers
 
 Set `LLM_MODE=live` and at least one provider key (local `.env` only, never CI). Presets: `groq`, `cerebras`, `openrouter`, `ollama`, `gemini`, `openai`, `anthropic`, plus `custom` via `LLM_CUSTOM_BASE_URL`. All presets speak an OpenAI-compatible `/chat/completions` API except `anthropic`, which uses the native Messages API (`POST /v1/messages` with `x-api-key` and `anthropic-version` headers); redirects are never followed.
@@ -514,7 +525,7 @@ More detail: [`docs/environment.md`](docs/environment.md).
 
 **Reporting a vulnerability:** please do not open a public issue. See [`SECURITY.md`](SECURITY.md).
 
-Details: [`docs/security.md`](docs/security.md) and the published [`docs/threat-model.md`](docs/threat-model.md). Overhead method and (pending) numbers: [`docs/overhead.md`](docs/overhead.md).
+Details: [`docs/security.md`](docs/security.md) and the published [`docs/threat-model.md`](docs/threat-model.md). Overhead method and measured numbers (4 recipes × idle/loaded, n=3): [`docs/overhead.md`](docs/overhead.md).
 
 ---
 

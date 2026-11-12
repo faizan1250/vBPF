@@ -1014,3 +1014,26 @@ recipe-check` green for all 30; full agent `produced-output.sh` run:
   clean on docs/threat-model.md, README.md, and SECURITY.md
   (docs/decisions.md carries pre-existing prettier drift outside this
   diff, verified against HEAD and left untouched).
+
+## I-24: overhead benchmarks refresh (2026-11-12)
+
+- **Scope (D-98).** Docs-only: refreshed docs/overhead.md per the issue
+  (4 recipes x idle/loaded, 3 x 10 s reps on WSL2
+  6.6.87.2-microsoft-standard, bpftrace v0.20.2, BTF present; headline
+  means with min-max plus a 24-row per-rep appendix; CI envs marked
+  untested), plus a 4-row summary table in the README config section
+  and a measured-numbers pointer in the privacy section. No
+  implementation, no version bump (target stays 0.3.x).
+- **Grounding (D-98).** Every number traces to the 24 runs: bpftrace
+  CPU tracked by resolved child PID (`pgrep -x`), because `pidstat -C`
+  omits zero-activity intervals on this sysstat build (verified: a
+  `-C` trial captured only 2-5 of ~30 samples and biased slow-disk to
+  20%). Headline means include the first-sample BPF compile burst
+  (8-60%), matching the 2026-11-09 method; steady-state means
+  (first sample excluded) are ~0% and stated separately. The 7.4M
+  idle-rep-1 count is a real background `journalctl` burst, kept in
+  the range with a median headline. New doc text uses only env names,
+  ports (127.0.0.1:18080 already allowlisted), and helper scripts
+  (`scripts/run-recipe.sh`) the docs-check gate already knows.
+- **Verified:** bash scripts/check-docs.sh green; prettier --check
+  clean on docs/overhead.md, README.md, and docs/decisions.md.
