@@ -261,7 +261,9 @@ export const ORACLE_WORKLOAD_SPECS: Record<OracleKind, OracleWorkloadSpec> = {
   },
   "tcp-loopback": {
     kind: "tcp-loopback",
-    description: "curl loop against a loopback HTTP server",
+    // Target is a harness-bound ephemeral loopback server exported via
+    // VBPF_PORT (see startOracleWorkload); never an external host.
+    description: "curl loop against a harness-bound loopback HTTP server",
     command:
       'for i in 1 2 3 4 5 6 7 8; do curl -s --max-time 2 "http://127.0.0.1:$VBPF_PORT/" >/dev/null 2>&1; sleep 1; done',
     needs: ["sh", "curl"],
@@ -269,8 +271,11 @@ export const ORACLE_WORKLOAD_SPECS: Record<OracleKind, OracleWorkloadSpec> = {
   "dns-lookup": {
     kind: "dns-lookup",
     description: "getaddrinfo of a sentinel .invalid name (python3 or getent)",
+    // NOTE: the python3 branch reads the sentinel via os.environ because
+    // the python program is single-quoted for sh and $VAR would never
+    // expand there; the getent fallback uses double quotes and expands.
     command:
-      'for i in 1 2 3 4 5; do if command -v python3 >/dev/null 2>&1; then python3 -c \'import socket\ntry:\n    socket.getaddrinfo("$VBPF_SENTINEL.invalid", 80)\nexcept OSError:\n    pass\' 2>/dev/null; else getent hosts "$VBPF_SENTINEL.invalid" >/dev/null 2>&1; fi; sleep 1; done',
+      'for i in 1 2 3 4 5; do if command -v python3 >/dev/null 2>&1; then python3 -c \'import os,socket\ntry:\n    socket.getaddrinfo(os.environ["VBPF_SENTINEL"] + ".invalid", 80)\nexcept OSError:\n    pass\' 2>/dev/null; else getent hosts "$VBPF_SENTINEL.invalid" >/dev/null 2>&1; fi; sleep 1; done',
     needs: ["sh"],
   },
   "file-open": {
@@ -346,6 +351,36 @@ export async function startOracleWorkload(
     VBPF_TMP: workdir,
     VBPF_PORT: process.env["VBPF_PORT"] ?? "",
   };
+  // tcp-loopback is self-contained: bind an ephemeral loopback HTTP server
+  // and export its port via VBPF_PORT so the curl workload has a
+  // controlled target. A pre-set VBPF_PORT is respected as an explicit
+  // override; a bind failure throws so the oracle reports error, never a
+  // silent uncontrolled pass.
+  let loopbackClose: (() => Promise<void>) | null = null;
+  if (spec.kind === "tcp-loopback" && (env["VBPF_PORT"] ?? "") === "") {
+    const { createServer } = await import("node:http");
+    const server = createServer((_req, res) => {
+      res.end("ok");
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => resolve());
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : null;
+    if (port === null || port === 0) {
+      server.close();
+      throw new Error(
+        "tcp-loopback oracle failed to bind a loopback HTTP server",
+      );
+    }
+    env["VBPF_PORT"] = String(port);
+    loopbackClose = async (): Promise<void> => {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    };
+  }
   let killChild: (() => void) | null = null;
   if (spawnFn !== undefined) {
     killChild = spawnFn(spec.command, env).kill;
@@ -369,6 +404,13 @@ export async function startOracleWorkload(
       killChild?.();
     } catch {
       // Best effort; temp files are uniquely named per run.
+    }
+    if (loopbackClose !== null) {
+      try {
+        await loopbackClose();
+      } catch {
+        // Best effort; ephemeral port is reclaimed on process exit.
+      }
     }
     try {
       const { rm } = await import("node:fs/promises");
@@ -490,7 +532,8 @@ export interface EvalRunnerOptions {
 // report, and refuses a second full live run per calendar day (D-31).
 export const LIVE_CALL_BUDGET = 400;
 export const MAX_ATTEMPTS = 3;
-export const CORE_SUBSET_SIZE = 30;
+// Core subset size is asserted by the dataset test (30 core prompts in
+// eval/prompts.yaml); no separate exported constant to keep in sync.
 // Single run unless --repeat is given; the canonical variance run is
 // --repeat 3 on the core subset (see eval/Makefile).
 export const DEFAULT_REPEAT = 1;
@@ -1126,7 +1169,9 @@ export function reportFileName(date: string, opts: EvalReportNameOpts): string {
   const { live, agent, coreOnly, repeat } = opts;
   const repeated = coreOnly && repeat > 1;
   if (!live) {
-    return repeated ? `${date}-v2-core-repeat${repeat}.md` : `${date}-v2.md`;
+    if (repeated) return `${date}-v2-core-repeat${repeat}.md`;
+    if (coreOnly) return `${date}-v2-core.md`;
+    return `${date}-v2.md`;
   }
   if (agent) {
     if (repeated) return `${date}-v2-core-repeat${repeat}-live-real.md`;
@@ -1159,8 +1204,19 @@ export function dailyBudgetPaths(reportsDir: string, date: string): string[] {
   return fullRunReportNames(date).map((name) => join(reportsDir, name));
 }
 
+// Legacy singular guard: delegates to reportFileName so the filename cannot
+// drift from what the CLI writes. Prefer dailyBudgetPaths (both live
+// full-run names) for the actual budget check.
 export function dailyBudgetPath(reportsDir: string, date: string): string {
-  return join(reportsDir, `${date}-v2-live-real.md`);
+  return join(
+    reportsDir,
+    reportFileName(date, {
+      live: true,
+      agent: true,
+      coreOnly: false,
+      repeat: 1,
+    }),
+  );
 }
 
 export function assertDailyBudget(

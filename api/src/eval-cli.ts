@@ -69,9 +69,9 @@ if (!opts.live) {
     closeDb(db);
     mkdirSync(reportsDir, { recursive: true });
     const first = rounds[0] ?? [];
-    const summary =
-      stats.round_summaries[stats.round_summaries.length - 1] ??
-      summarize(first);
+    // Headline matches the rendered first-round cases; the full variance
+    // across all rounds is in stats (rendered as ## Variance).
+    const summary = summarize(first);
     const outPath =
       opts.outPath ??
       join(
@@ -170,9 +170,9 @@ if (!opts.live) {
       repeat,
     );
     const first = rounds[0] ?? [];
-    const summary =
-      stats.round_summaries[stats.round_summaries.length - 1] ??
-      summarize(first);
+    // Headline matches the rendered first-round cases; the full variance
+    // across all rounds is in stats (rendered as ## Variance).
+    const summary = summarize(first);
     closeDb(db);
     mkdirSync(reportsDir, { recursive: true });
     const outPath = opts.outPath ?? join(reportsDir, name);
@@ -257,9 +257,9 @@ if (!opts.live) {
       repeat,
     );
     const first = rounds[0] ?? [];
-    const summary =
-      stats.round_summaries[stats.round_summaries.length - 1] ??
-      summarize(first);
+    // Headline matches the rendered first-round cases; the full variance
+    // across all rounds is in stats (rendered as ## Variance).
+    const summary = summarize(first);
     let modelLabel = chain.model;
     try {
       const rows = db
