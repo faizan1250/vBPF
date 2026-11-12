@@ -144,8 +144,22 @@ response body nor captured log output contains key material.
   `max`, `stats`, `hist`, `lhist`, `delete`, `clear`, `zero`, `str`,
   `strncmp`, `strlen`, `buf`, `ntop`, `kstack`, `ustack`, `ksym`, `usym`,
   `time`, `join`, `exit`, `cgroup_path`, `cgroupid`) is rejected as
-  `UNKNOWN_CALL` with the function name. The agent verdict is authoritative;
-  the TS validator mirrors it for instant UI feedback.
+  `UNKNOWN_CALL` with the function name.
+- **Agent verdict is authoritative; shared parity vectors pin it:** `POST
+/api/generate`, `POST /api/validate`, and `POST /api/runs` always rely on
+  the agent verdict — the API never vetoes or accepts a script on its own
+  (not even for `--unsafe` text, which the token-level validator judges
+  like any other content). The TS validator runs in `skip` catalog mode
+  for instant pre-generation feedback, `/api/explain` gating, and offline
+  use; in `runGenerate` its errors are advisory and an agent acceptance
+  overrides them with a recorded `validator discrepancy` warning. Every
+  rule is pinned by `packages/schemas/validator-vectors.json`: both suites
+  load the same file and assert identical `ok` verdicts and error codes
+  (message text may differ). `make parity` (CI `parity` job) fails when a
+  vector exists that only one side executes. The taxonomy
+  (`CATALOG_UNAVAILABLE`, `VALIDATION_FAILED`, `PROBE_NOT_FOUND`,
+  `LIMIT_EXCEEDED`, `BLOCKED_CALL`, `UNKNOWN_CALL`) is defined once as
+  `ValidatorErrorCodeSchema` in `@vbpf/schemas`.
 - **Strict wildcard grammar & probe-count cap:** at most one `*` is permitted and only as the last character of the final segment (`tracepoint:<subsys>:*`, `tracepoint:<subsys>:<prefix>*`, `kprobe:<prefix>*`, `kretprobe:<prefix>*` with at least 3 prefix characters for `kprobe`/`kretprobe`; wildcards are rejected on `uprobe`, `uretprobe`, `profile`, `interval`, `software`, `BEGIN`, `END`, as are `?`, `[`, `]`). `tracepoint` has no prefix-length floor because patterns are catalog-bounded (the subsystem must match a known entry and every expansion counts toward the cap), while `kprobe`/`kretprobe` match an unbounded kernel symbol namespace and need the floor. Total probe **occurrences** (counting duplicate blocks/targets and each wildcard's expanded catalog match count) are capped at `BPFTRACE_MAX_PROBES` (`50`), enforced in static validation, agent re-validation, dry-run compile, and runtime env.
 - **Fail-closed non-blocking catalog readiness:** the agent binds HTTP immediately without blocking startup and loads `bpftrace -l` asynchronously with exponential backoff (`1s`..`30s`). Readiness requires at least one non-empty refresh; failed/empty refreshes preserve the previous immutable snapshot atomically while recording `stale_since` and `last_error`. While unready, `/health` reports `200` with `ready: false` while `/v1/validate` and `/v1/runs` fail closed (`503 CATALOG_UNAVAILABLE` + `Retry-After`) for every script including `BEGIN {}`, and the API maps upstream `503`/`CATALOG_UNAVAILABLE` to `503 AGENT_NOT_READY` + `fix_hint` across `/api/validate`, `/api/runs`, and `/api/generate`.
 

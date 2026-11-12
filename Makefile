@@ -5,7 +5,7 @@
 
 SHELL := /bin/sh
 .SHELLFLAGS := -eu -c
-.PHONY: setup lint test agent-build api-dev web-dev eval test-integration recipes-check vuln secrets
+.PHONY: setup lint test agent-build api-dev web-dev eval test-integration recipes-check vuln secrets parity
 
 GO ?= go
 PNPM ?= pnpm
@@ -63,6 +63,13 @@ recipes-check:
 vuln:
 	@if [ -d agent ]; then cd agent && { command -v govulncheck >/dev/null || { echo "SKIP: govulncheck not installed (go install golang.org/x/vuln/cmd/govulncheck@v1.9.0)"; exit 0; }; govulncheck ./...; }; \
 		else echo "SKIP: no agent/ yet"; fi
+
+# Shared validator parity (I-04): the shape gate plus both vector suites.
+# Fails when a vector exists that only one side executes.
+parity:
+	node scripts/parity-vectors.mjs
+	@if [ -d agent ]; then cd agent && $(GO) test ./internal/server/ -run 'TestValidatorVectors' -count=1; else echo "SKIP: no agent/ yet"; fi
+	@if [ -d api ]; then $(PNPM) -C api exec vitest run src/validator-vectors.test.ts; else echo "SKIP: no api/ yet"; fi
 
 # Secret scan (R-22 keys hygiene). No root needed; skips when gitleaks is
 # not installed. CI runs gitleaks-action on every push/PR instead.

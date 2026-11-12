@@ -226,7 +226,6 @@ function suggestProbes(pr: string, known: Set<string>): string {
 const STATIC_VALIDATION_FAILED_PREFIXES = [
   "empty script",
   "script exceeds ",
-  "--unsafe is forbidden",
   "blocked ",
   "invalid probe ",
   "invalid uprobe ",
@@ -1004,7 +1003,10 @@ export function staticValidate(
       probe_count: 0,
     };
   }
-  if (script.includes("--unsafe")) errors.push("--unsafe is forbidden");
+  // The agent argv never carries --unsafe (fixed argv, no shell), so script
+  // text mentioning it is judged like any other content: inside strings or
+  // comments it is opaque to call detection, and stray text outside a probe
+  // fails header parsing on both sides (see the shared parity vectors).
   const { toks, cleaned, errs: lexErrs } = lexScript(script);
   errors.push(...lexErrs);
   const { calls, tooDeep } = collectCalls(toks);

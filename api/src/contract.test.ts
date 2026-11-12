@@ -372,15 +372,18 @@ describe("validate proxy", () => {
     });
   });
 
-  it("rejects --unsafe locally without contacting agent", async () => {
+  it("defers scripts to the agent verdict without local veto", async () => {
     const before = fake.validateHits();
     const res = await fetch(`${base}/api/validate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ script: "BEGIN { @x = count(); } --unsafe" }),
     });
-    expect(res.status).toBe(400);
-    expect(fake.validateHits()).toBe(before);
+    // The fake agent accepts this; a real agent rejects the trailing text.
+    // The point here is the API layer: no local veto, the agent was asked.
+    expect(fake.validateHits()).toBe(before + 1);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true });
   });
 });
 

@@ -78,6 +78,27 @@ jobs:
       - name: go test -race on minimum Go (agent, no root)
         run: cd agent && go test -race ./...
 
+  # Shared validator parity (I-04): shape gate plus the Go and TS vector
+  # suites. Fails when a vector exists that only one side executes.
+  parity:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: agent/go.mod
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: "9.x"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+      - name: Install JS deps (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+      - name: make parity (shared validator vectors, no root needed)
+        run: make parity
+
   # Dependency vulnerability scan (Go). Mock-only, no secrets.
   vuln:
     runs-on: ubuntu-24.04

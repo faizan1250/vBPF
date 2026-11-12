@@ -1,0 +1,741 @@
+[
+  {
+    "id": "begin-count",
+    "script": "BEGIN { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "end-empty",
+    "script": "END {}",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "begin-end-comma",
+    "script": "BEGIN, END { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "tracepoint-basic",
+    "script": "tracepoint:block:block_rq_issue { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    },
+    "known": ["tracepoint:block:block_rq_issue"]
+  },
+  {
+    "id": "kprobe-basic",
+    "script": "kprobe:vfs_read { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    },
+    "known": ["kprobe:vfs_read"]
+  },
+  {
+    "id": "kretprobe-basic",
+    "script": "kretprobe:tcp_v4_connect { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    },
+    "known": ["kretprobe:tcp_v4_connect"]
+  },
+  {
+    "id": "profile-no-catalog",
+    "script": "profile:hz:99 { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "interval-no-catalog",
+    "script": "interval:s:5 { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "software-no-catalog",
+    "script": "software:page-faults:100 { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "uprobe-alias-enforce",
+    "script": "uprobe:libc:malloc { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    },
+    "known": ["BEGIN"]
+  },
+  {
+    "id": "uprobe-canonical-enforce",
+    "script": "uprobe:/lib/x86_64-linux-gnu/libc.so.6:malloc { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    },
+    "known": ["BEGIN"]
+  },
+  {
+    "id": "uretprobe-alias-skip",
+    "script": "uretprobe:libc:getaddrinfo { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "wildcard-tracepoint-subsys",
+    "script": "tracepoint:block:* { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    },
+    "known": [
+      "tracepoint:block:block_rq_issue",
+      "tracepoint:block:block_rq_complete"
+    ]
+  },
+  {
+    "id": "wildcard-tracepoint-prefix",
+    "script": "tracepoint:syscalls:sys_enter_* { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    },
+    "known": [
+      "tracepoint:syscalls:sys_enter_openat",
+      "tracepoint:syscalls:sys_enter_open"
+    ]
+  },
+  {
+    "id": "wildcard-kprobe",
+    "script": "kprobe:vfs_* { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    },
+    "known": ["kprobe:vfs_read", "kprobe:vfs_write"]
+  },
+  {
+    "id": "wildcard-kretprobe",
+    "script": "kretprobe:tcp_* { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    },
+    "known": ["kretprobe:tcp_v4_connect"]
+  },
+  {
+    "id": "comma-multi-probe",
+    "script": "tracepoint:block:block_rq_issue, tracepoint:block:block_rq_complete { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    },
+    "known": [
+      "tracepoint:block:block_rq_issue",
+      "tracepoint:block:block_rq_complete"
+    ]
+  },
+  {
+    "id": "multiline-comma-header",
+    "script": "kprobe:vfs_read,\nkprobe:vfs_write { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    },
+    "known": ["kprobe:vfs_read", "kprobe:vfs_write"]
+  },
+  {
+    "id": "comment-hides-blocked-call",
+    "script": "/* system(\"id\"); */ BEGIN { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "line-comment-hides-blocked-call",
+    "script": "// system(\"id\")\nBEGIN { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "string-holds-unsafe-text",
+    "script": "BEGIN { printf(\"--unsafe\"); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "string-holds-blocked-names",
+    "script": "BEGIN { printf(\"system(signal(override(cat(\"); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "string-holds-comment-markers",
+    "script": "BEGIN { printf(\"/*\"); printf(\"*/\"); @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "nonascii-in-string-ok",
+    "script": "BEGIN { printf(\"héllo\"); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "nonascii-in-comment-ok",
+    "script": "// héllo wörld\nBEGIN { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "comment-between-call-and-paren",
+    "script": "BEGIN { printf/*x*/(\"hi\"); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "continuation-before-paren-ok",
+    "script": "BEGIN { printf\\\n(\"x\"); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "predicate-with-slashes",
+    "script": "tracepoint:block:block_rq_issue /@x > 0/ { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    },
+    "known": ["tracepoint:block:block_rq_issue"]
+  },
+  {
+    "id": "c-decl-struct-skipped",
+    "script": "struct Foo { int x; } BEGIN { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "keyword-if-not-call",
+    "script": "BEGIN { if (1) { @x = count(); } }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "allowlist-core-calls",
+    "script": "BEGIN { @a = count(); @b = sum(1); @c = avg(1); @d = min(1); @e = max(1); printf(\"x\"); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "exact-8kib-multibyte",
+    "script": "BEGIN {}\n// éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "hot-symbol-warning-still-ok",
+    "script": "uprobe:libc:malloc { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": true,
+      "error_codes": []
+    }
+  },
+  {
+    "id": "empty-script",
+    "script": "",
+    "catalog": "enforce",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    },
+    "known": ["BEGIN"]
+  },
+  {
+    "id": "oversize-ascii-8193",
+    "script": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "oversize-multibyte-under-char-limit",
+    "script": "BEGIN { @x = count(); }\n// éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "no-probes-found",
+    "script": "@x = count();",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "blocked-call-system",
+    "script": "BEGIN { system(\"id\"); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["BLOCKED_CALL"]
+    }
+  },
+  {
+    "id": "blocked-call-signal",
+    "script": "BEGIN { signal(9); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["BLOCKED_CALL"]
+    }
+  },
+  {
+    "id": "blocked-call-override",
+    "script": "BEGIN { override(0); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["BLOCKED_CALL"]
+    }
+  },
+  {
+    "id": "blocked-call-cat",
+    "script": "BEGIN { cat(\"/etc/passwd\"); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["BLOCKED_CALL"]
+    }
+  },
+  {
+    "id": "blocked-call-comment-split",
+    "script": "BEGIN { system/*x*/(\"id\"); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["BLOCKED_CALL"]
+    }
+  },
+  {
+    "id": "blocked-call-string-then-real",
+    "script": "BEGIN { printf(\"/*\"); cat(\"/etc/shadow\"); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["BLOCKED_CALL"]
+    }
+  },
+  {
+    "id": "unknown-call-exec",
+    "script": "BEGIN { exec(\"id\"); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["UNKNOWN_CALL"]
+    }
+  },
+  {
+    "id": "unknown-call-uppercase-system",
+    "script": "BEGIN { SYSTEM(\"id\"); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["UNKNOWN_CALL"]
+    }
+  },
+  {
+    "id": "unknown-call-malloc",
+    "script": "BEGIN { malloc(16); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["UNKNOWN_CALL"]
+    }
+  },
+  {
+    "id": "macro-definition-use-unknown",
+    "script": "macro m() { @x = count(); }\nBEGIN { m(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["UNKNOWN_CALL"]
+    }
+  },
+  {
+    "id": "preprocessor-include",
+    "script": "#include <stdio.h>\nBEGIN { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "preprocessor-pragma",
+    "script": "#pragma once\nBEGIN {}",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "preprocessor-trailing-define",
+    "script": "BEGIN {}\n#define HACK 1",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "unclosed-block-comment",
+    "script": "BEGIN { /*",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "unterminated-string",
+    "script": "BEGIN { printf(\"x); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "control-char-nul",
+    "script": "BEGIN {\u0000 @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "nonascii-fullwidth-call-parens",
+    "script": "BEGIN { system（\"id\"）; }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "nesting-too-deep",
+    "script": "BEGIN { @x = ((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((1)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "provider-usdt-rejected",
+    "script": "usdt:/lib/x86_64-linux-gnu/libc.so.6:probe { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "provider-fentry-rejected",
+    "script": "fentry:tcp_connect { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "probe-missing-target",
+    "script": "kprobe { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "begin-with-target-rejected",
+    "script": "BEGIN:foo { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "unknown-probe-enforce",
+    "script": "tracepoint:block:nope { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": false,
+      "error_codes": ["PROBE_NOT_FOUND"]
+    },
+    "known": ["tracepoint:block:block_rq_issue"]
+  },
+  {
+    "id": "wildcard-zero-match",
+    "script": "tracepoint:block:missing_* { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": false,
+      "error_codes": ["PROBE_NOT_FOUND"]
+    },
+    "known": ["tracepoint:block:block_rq_issue"]
+  },
+  {
+    "id": "wildcard-kprobe-too-short",
+    "script": "kprobe:ab* { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "wildcard-on-uprobe",
+    "script": "uprobe:libc:mal* { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "wildcard-on-profile",
+    "script": "profile:hz:* { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "wildcard-cap-exceeded",
+    "script": "tracepoint:sched:* { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": false,
+      "error_codes": ["LIMIT_EXCEEDED"]
+    },
+    "known": [
+      "tracepoint:sched:item0",
+      "tracepoint:sched:item1",
+      "tracepoint:sched:item2",
+      "tracepoint:sched:item3",
+      "tracepoint:sched:item4",
+      "tracepoint:sched:item5",
+      "tracepoint:sched:item6",
+      "tracepoint:sched:item7",
+      "tracepoint:sched:item8",
+      "tracepoint:sched:item9",
+      "tracepoint:sched:item10",
+      "tracepoint:sched:item11",
+      "tracepoint:sched:item12",
+      "tracepoint:sched:item13",
+      "tracepoint:sched:item14",
+      "tracepoint:sched:item15",
+      "tracepoint:sched:item16",
+      "tracepoint:sched:item17",
+      "tracepoint:sched:item18",
+      "tracepoint:sched:item19",
+      "tracepoint:sched:item20",
+      "tracepoint:sched:item21",
+      "tracepoint:sched:item22",
+      "tracepoint:sched:item23",
+      "tracepoint:sched:item24",
+      "tracepoint:sched:item25",
+      "tracepoint:sched:item26",
+      "tracepoint:sched:item27",
+      "tracepoint:sched:item28",
+      "tracepoint:sched:item29",
+      "tracepoint:sched:item30",
+      "tracepoint:sched:item31",
+      "tracepoint:sched:item32",
+      "tracepoint:sched:item33",
+      "tracepoint:sched:item34",
+      "tracepoint:sched:item35",
+      "tracepoint:sched:item36",
+      "tracepoint:sched:item37",
+      "tracepoint:sched:item38",
+      "tracepoint:sched:item39",
+      "tracepoint:sched:item40",
+      "tracepoint:sched:item41",
+      "tracepoint:sched:item42",
+      "tracepoint:sched:item43",
+      "tracepoint:sched:item44",
+      "tracepoint:sched:item45",
+      "tracepoint:sched:item46",
+      "tracepoint:sched:item47",
+      "tracepoint:sched:item48",
+      "tracepoint:sched:item49",
+      "tracepoint:sched:item50",
+      "tracepoint:sched:item51",
+      "tracepoint:sched:item52",
+      "tracepoint:sched:item53",
+      "tracepoint:sched:item54"
+    ]
+  },
+  {
+    "id": "probe-count-cap-literal",
+    "script": "BEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\nBEGIN { @x = count(); }\n",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["LIMIT_EXCEEDED"]
+    }
+  },
+  {
+    "id": "uprobe-non-libc-target",
+    "script": "uprobe:/bin/ls:main { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "uprobe-traversal-target",
+    "script": "uprobe:/lib/../usr/lib/libc.so.6:malloc { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "uprobe-bad-symbol-offset",
+    "script": "uprobe:libc:malloc+0x10 { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "uprobe-missing-symbol",
+    "script": "uprobe:libc { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "uprobe-bad-basename",
+    "script": "uprobe:/lib/libcrypt.so.1:crypt { @x = count(); }",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "trailing-text-after-block",
+    "script": "BEGIN { @x = count(); } --unsafe",
+    "catalog": "skip",
+    "expect": {
+      "ok": false,
+      "error_codes": ["VALIDATION_FAILED"]
+    }
+  },
+  {
+    "id": "empty-catalog-fail-closed",
+    "script": "BEGIN { @x = count(); }",
+    "catalog": "enforce",
+    "expect": {
+      "ok": false,
+      "error_codes": ["CATALOG_UNAVAILABLE"]
+    },
+    "known": []
+  }
+]
