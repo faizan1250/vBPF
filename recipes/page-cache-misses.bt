@@ -1,0 +1,10 @@
+tracepoint:filemap:mm_filemap_add_to_page_cache
+{
+  @misses[comm] = count();
+}
+
+END
+{
+  print(@misses);
+  clear(@misses);
+}

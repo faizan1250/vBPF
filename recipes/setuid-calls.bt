@@ -1,0 +1,17 @@
+tracepoint:syscalls:sys_enter_setuid
+{
+  @setuid[comm, args->uid] = count();
+}
+
+tracepoint:syscalls:sys_enter_setgid
+{
+  @setgid[comm, args->gid] = count();
+}
+
+END
+{
+  print(@setuid);
+  clear(@setuid);
+  print(@setgid);
+  clear(@setgid);
+}

@@ -1,0 +1,13 @@
+// vBPF recipe template. Scaffold with: scripts/new-recipe.sh <id>
+// Then replace the probe below with the tracepoints your recipe needs and
+// write the matching recipes/<id>.yaml (see docs/writing-recipes.md).
+//
+// Validator allowlist (anything else fails static validation): printf, print,
+// count, sum, avg, min, max, stats, hist, lhist, delete, clear, zero, str,
+// strncmp, strlen, buf, ntop, kstack, ustack, ksym, usym, time, join, exit,
+// cgroup_path, cgroupid. Forbidden: system, signal, override, cat,
+// preprocessor lines, and config blocks.
+tracepoint:sched:sched_process_exec
+{
+  printf("%s pid=%d file=%s\n", comm, pid, str(args->filename));
+}

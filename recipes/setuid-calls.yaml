@@ -1,0 +1,13 @@
+id: setuid-calls
+title: setuid/setgid calls
+description: Counts UID/GID change attempts by process and target id. Unexpected entries can indicate privilege-escalation activity.
+tags: [security, setuid, identity, audit]
+view: table
+duration_default: 10
+min_kernel: "5.8"
+requires:
+  [
+    "tracepoint:syscalls:sys_enter_setuid",
+    "tracepoint:syscalls:sys_enter_setgid",
+  ]
+params: []

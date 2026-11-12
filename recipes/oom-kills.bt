@@ -1,0 +1,4 @@
+tracepoint:oom:mark_victim
+{
+  printf("victim_pid=%d comm=%s total_vm_kb=%lu\n", args->pid, str(args->comm), args->total_vm * 4);
+}

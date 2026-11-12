@@ -1,0 +1,35 @@
+// sys_exit_read/write carry only the return value, so entry timestamps
+// are saved at enter keyed by thread id.
+tracepoint:syscalls:sys_enter_read
+{
+  @rstart[tid] = nsecs;
+}
+
+tracepoint:syscalls:sys_exit_read
+/@rstart[tid]/
+{
+  @read_us = hist((nsecs - @rstart[tid]) / 1000);
+  delete(@rstart[tid]);
+}
+
+tracepoint:syscalls:sys_enter_write
+{
+  @wstart[tid] = nsecs;
+}
+
+tracepoint:syscalls:sys_exit_write
+/@wstart[tid]/
+{
+  @write_us = hist((nsecs - @wstart[tid]) / 1000);
+  delete(@wstart[tid]);
+}
+
+END
+{
+  print(@read_us);
+  clear(@read_us);
+  print(@write_us);
+  clear(@write_us);
+  clear(@rstart);
+  clear(@wstart);
+}

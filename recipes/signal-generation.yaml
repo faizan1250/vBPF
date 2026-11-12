@@ -1,0 +1,9 @@
+id: signal-generation
+title: Signal generation
+description: Counts signals sent by process and signal number. Kill bursts stand out immediately.
+tags: [process, signal, audit]
+view: table
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:signal:signal_generate"]
+params: []

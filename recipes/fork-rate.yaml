@@ -1,0 +1,9 @@
+id: fork-rate
+title: Fork rate
+description: Per-second counts of process forks by parent process. Spikes reveal fork bombs or runaway supervisors.
+tags: [process, fork, rate, timeseries]
+view: timeseries
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:sched:sched_process_fork"]
+params: []

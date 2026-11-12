@@ -1,0 +1,2 @@
+{"type": "map", "data": {"@setuid": {"cron,0": 1, "python3,0": 190}}}
+{"type": "map", "data": {"@setgid": {"cron,0": 1}}}

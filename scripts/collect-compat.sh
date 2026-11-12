@@ -113,6 +113,8 @@ recipe_statuses=""
 for yaml in "$repo"/recipes/*.yaml; do
   [ -f "$yaml" ] || continue
   id="$(basename "$yaml" .yaml)"
+  # Template scaffolding, never a recipe (see recipes/_template.yaml).
+  case "$id" in _*) continue ;; esac
   case "$id" in
     '' | *[^a-z0-9-]* | -* | *-) die "invalid recipe id: $id" ;;
   esac

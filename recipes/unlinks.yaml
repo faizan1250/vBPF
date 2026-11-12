@@ -1,0 +1,9 @@
+id: unlinks
+title: File unlinks
+description: Streams file deletion attempts (unlinkat) with the calling process and path.
+tags: [security, filesystem, delete, audit]
+view: events
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:syscalls:sys_enter_unlinkat"]
+params: []

@@ -1,0 +1,4 @@
+tracepoint:syscalls:sys_enter_unlinkat
+{
+  printf("%s pid=%d path=%s\n", comm, pid, str(args->pathname));
+}

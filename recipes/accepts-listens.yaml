@@ -1,0 +1,13 @@
+id: accepts-listens
+title: Accept and listen calls
+description: Counts accepted inbound connections and listen backlog requests by process. Shows which services take traffic.
+tags: [network, tcp, server, audit]
+view: table
+duration_default: 10
+min_kernel: "5.8"
+requires:
+  [
+    "tracepoint:syscalls:sys_enter_accept4",
+    "tracepoint:syscalls:sys_enter_listen",
+  ]
+params: []

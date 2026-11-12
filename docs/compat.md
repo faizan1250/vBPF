@@ -15,22 +15,42 @@ environment, its row stays unverified.
 | `vm-kernel-5.15` | `n/a` | specific kernel 5.15 booted via virtme-ng (optional matrix job) | `n/a` | no | Not run |
 | `vm-kernel-6.1` | `n/a` | specific kernel 6.1 booted via virtme-ng (optional matrix job) | `n/a` | no | Not run |
 | `vm-kernel-6.6` | `n/a` | specific kernel 6.6 booted via virtme-ng (optional matrix job) | `n/a` | no | Not run |
-| `wsl2-ubuntu-24.04` | `6.6.87.2-microsoft-standard-WSL2` | Ubuntu 24.04.5 LTS (Noble) userspace on the Microsoft WSL2 kernel | `v0.20.2` | yes | Verified 2026-11-10 |
+| `wsl2-ubuntu-24.04` | `6.6.87.2-microsoft-standard-WSL2` | Ubuntu 24.04.5 LTS (Noble) userspace on the Microsoft WSL2 kernel | `bpftrace v0.20.2` | yes | Verified 2026-11-12 |
 
 ## Recipe availability
 
 | Recipe | `compose-quickstart` | `ubuntu-22.04` | `ubuntu-24.04` | `vm-kernel-5.10` | `vm-kernel-5.15` | `vm-kernel-6.1` | `vm-kernel-6.6` | `wsl2-ubuntu-24.04` |
 | ------ | --- | --- | --- | --- | --- | --- | --- | --- |
+| `accepts-listens` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `bind-calls` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `block-io-sizes` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
 | `block-latency-histogram` | available | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `connects-by-process` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
 | `cpu-by-process` | available | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
 | `dns-lookups` | available | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `dns-lookups-by-process` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `exec-snoop-args` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
 | `files-opened-by-process` | available | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `fork-rate` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `module-loads` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `mounts` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
 | `new-processes` | available | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `oom-kills` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `openat-errors` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `page-cache-misses` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
 | `page-faults-by-process` | available | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `ptrace-attach` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `runqueue-latency` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `setuid-calls` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `signal-generation` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
 | `slow-disk-io-by-process` | available | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
 | `syscall-counts-by-process` | available | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `syscall-errors` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `syscall-io-latency` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
 | `tcp-connects` | available | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
 | `tcp-retransmits` | available | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `tcp-state-changes` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
+| `unlinks` | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | not-checked | available |
 
 ## Per-environment detail
 
@@ -88,11 +108,13 @@ environment, its row stays unverified.
 
 ### `wsl2-ubuntu-24.04`
 
-- Status: Verified 2026-11-10
-- Recorded: 2026-11-10
+- Status: Verified 2026-11-12
+- Recorded: 2026-11-12
 - Tests passed: 
-  - make test-integration (-tags integration, root + bpftrace + BTF)
-  - produced-output.sh: 9/10 recipes produced events in the 5 s window
-- Tests failed: none
-- Notes: Recorded 2026-11-10 via wsl -u root (see docs/environment.md R-04/R-05/R-09). All 10 recipe probes list via bpftrace -l. slow-disk-io produced zero events in the 5 s window (no >=10 ms block IO then; a 10 s retest produced 1 map event), recorded as a measurement, not a failure. This is WSL2 userspace on the Microsoft kernel, not the stock Ubuntu 24.04 kernel.
+  - make recipes-check (validate-recipes.sh, 30 recipes)
+  - produced-output.sh: 28/30 recipes produced events in the 5 s window
+  - bpftrace -d dry-run clean for all 30 recipes
+- Tests failed: 
+  - make test-integration: TestLoadOrCreateToken_ChmodOrPermError fails as root (chmod succeeds for root; needs non-root)
+- Notes: Recorded 2026-11-12 via wsl -u root (see docs/environment.md R-04/R-05/R-09). I-19: all 30 recipes attach cleanly (bpftrace -d) and produced events through the agent except page-faults-by-process and slow-disk-io-by-process (zero events in the 5 s window, a measurement, not a failure; same as the 2026-11-10 record). openat-errors watches openat and openat2 (modern glibc opens via openat2). oom-kills verified with a 50M memcg mlockall hog. This is WSL2 userspace on the Microsoft kernel, not the stock Ubuntu 24.04 kernel.
 

@@ -1,0 +1,7 @@
+tracepoint:syscalls:sys_enter_mount
+{
+  printf("%s pid=%d src=%s target=%s fstype=%s\n", comm, pid,
+    args->dev_name == 0 ? "(null)" : str(args->dev_name),
+    str(args->dir_name),
+    args->type == 0 ? "(null)" : str(args->type));
+}

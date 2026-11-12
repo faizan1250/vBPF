@@ -1,0 +1,9 @@
+id: bind-calls
+title: Socket bind calls
+description: Streams socket bind attempts with the calling process, pid, and file descriptor.
+tags: [network, socket, bind, audit]
+view: events
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:syscalls:sys_enter_bind"]
+params: []

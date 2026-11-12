@@ -1,0 +1,11 @@
+tracepoint:raw_syscalls:sys_exit
+/args->ret < 0/
+{
+  @errors[comm, args->id] = count();
+}
+
+END
+{
+  print(@errors);
+  clear(@errors);
+}

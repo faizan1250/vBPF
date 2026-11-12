@@ -1,0 +1,9 @@
+id: syscall-errors
+title: Syscall errors by process
+description: Counts failed syscalls by process and syscall number. A new nonzero row after a deploy points at the regression.
+tags: [errors, syscall, process, audit]
+view: table
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:raw_syscalls:sys_exit"]
+params: []

@@ -17,6 +17,7 @@ import {
   migrate,
   openDb,
   persistRunSummary,
+  searchRecipes,
   sha256Hex,
   SCHEMA_VERSION,
 } from "./db.js";
@@ -316,6 +317,37 @@ describe("versioned migrations", () => {
       // Second migrate is a no-op.
       migrate(db);
       expect(db.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("rebuilds the recipe index with porter stemming when migrating to v5", () => {
+    const db = new Database(":memory:");
+    // Pre-v5 shape: unicode61 (unstemmed) FTS index with content.
+    db.exec(`
+      CREATE VIRTUAL TABLE recipes_index USING fts5(
+        id, title, description, tags, view
+      );
+    `);
+    db.prepare(
+      "INSERT INTO recipes_index (id, title, description, tags, view) VALUES (?, ?, ?, ?, ?)",
+    ).run(
+      "cpu-by-process",
+      "CPU by process",
+      "counts samples by process name",
+      "cpu process profile sampling",
+      "bar",
+    );
+    db.pragma("user_version = 4");
+    migrate(db);
+    try {
+      expect(db.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
+      // Rows survive the rebuild, and the plural now stems to the singular.
+      const ids = searchRecipes(db, "Which processes use CPU?", 3).map(
+        (r) => r.id,
+      );
+      expect(ids).toContain("cpu-by-process");
     } finally {
       closeDb(db);
     }

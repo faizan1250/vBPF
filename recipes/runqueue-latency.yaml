@@ -1,0 +1,9 @@
+id: runqueue-latency
+title: Run-queue latency
+description: Histogram of wakeup-to-scheduled latency in microseconds. A stretched tail means CPUs are saturated.
+tags: [cpu, scheduler, latency, histogram]
+view: histogram
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:sched:sched_wakeup", "tracepoint:sched:sched_switch"]
+params: []

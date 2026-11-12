@@ -380,7 +380,7 @@ Probe availability depends on your kernel. A recipe that needs a missing tracepo
 | `vm-kernel-5.15` | `n/a` | Not run |
 | `vm-kernel-6.1` | `n/a` | Not run |
 | `vm-kernel-6.6` | `n/a` | Not run |
-| `wsl2-ubuntu-24.04` | `6.6.87.2-microsoft-standard-WSL2` | Verified 2026-11-10 |
+| `wsl2-ubuntu-24.04` | `6.6.87.2-microsoft-standard-WSL2` | Verified 2026-11-12 |
 
 Per-recipe availability and full notes: [`docs/compat.md`](docs/compat.md).
 This table is generated from `compat/*.json` by `scripts/render-compat.mjs`; statuses stay honest — nothing is marked verified without a recorded run.
@@ -471,7 +471,7 @@ Common tasks (run inside Linux or WSL, from the repository root):
 
 CI ([`ci.yml`](.github/workflows/ci.yml)) runs the same checks mock-only on every push/PR to `main`: lint, unit tests, contract check, mocked Playwright e2e, mock eval, docs truthfulness (`bash scripts/check-docs.sh`), and image-build checks. No secrets, no root, no privileged runs. Real-probe tests live in [`integration-manual.yml`](.github/workflows/integration-manual.yml) (`workflow_dispatch` only).
 
-**Testing without root.** `scripts/fake-bpftrace.sh` replays recorded output from `fixtures/` (all 10 recipes have captured fixtures), so the parser, API, and UI can be developed and tested without a privileged environment.
+**Testing without root.** `scripts/fake-bpftrace.sh` replays recorded output from `fixtures/` (all 30 recipes have captured fixtures), so the parser, API, and UI can be developed and tested without a privileged environment.
 
 **Stack:** Go 1.26+, Node 22+, pnpm 9, Fastify, zod, SQLite, React, Vite, Tailwind, Monaco, Recharts, Playwright.
 

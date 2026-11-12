@@ -1,0 +1,5 @@
+{"type": "printf", "data": "victim_pid=3211415 comm=python3 total_vm_kb=881824\n"}
+{"type": "printf", "data": "victim_pid=3211416 comm=python3 total_vm_kb=881824\n"}
+{"type": "printf", "data": "victim_pid=3211417 comm=python3 total_vm_kb=881824\n"}
+{"type": "printf", "data": "victim_pid=3211418 comm=python3 total_vm_kb=881824\n"}
+{"type": "printf", "data": "victim_pid=3211419 comm=python3 total_vm_kb=881824\n"}

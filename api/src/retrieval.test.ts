@@ -146,4 +146,16 @@ describe("recipe retrieval", () => {
       expect(ids).toContain(id);
     });
   }
+
+  // I-19 Phase 5: the mock LLM echoes top-1, so direct-01 needs an exact
+  // top-1 pin, not just top-3. The porter-stemmed index keeps the plural
+  // "processes" (id/title of new-processes) from outranking cpu-by-process.
+  it("ranks cpu-by-process first for the CPU prompt", () => {
+    const ids = searchRecipes(
+      db,
+      "Which processes are using the most CPU?",
+      3,
+    ).map((r) => r.id);
+    expect(ids[0]).toBe("cpu-by-process");
+  });
 });

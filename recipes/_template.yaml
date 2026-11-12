@@ -1,0 +1,15 @@
+# vBPF recipe metadata template. Scaffold with: scripts/new-recipe.sh <id>
+# Field reference (validated by scripts/validate-recipes.sh):
+#   id: filename stem, lowercase letters/digits/hyphens.
+#   view: table, bar, histogram, timeseries, or events.
+#   requires: probe headers exactly as written in the .bt file; every entry
+#     must list via `bpftrace -l` on a supported kernel.
+id: my-recipe
+title: My recipe
+description: What question this probe answers, in one or two sentences.
+tags: [area, purpose]
+view: events
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:sched:sched_process_exec"]
+params: []

@@ -6,7 +6,7 @@ import type { Recipe, RunOrigin } from "@vbpf/schemas";
 
 import { buildFtsQuery, extractKeywords } from "./retrieval.js";
 
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 export function applyPragmas(db: Database.Database): void {
   db.pragma("journal_mode = WAL");
@@ -93,7 +93,7 @@ function createTables(db: Database.Database): void {
       origin TEXT NOT NULL DEFAULT 'edited'
     );
     CREATE VIRTUAL TABLE IF NOT EXISTS recipes_index USING fts5(
-      id, title, description, tags, view
+      id, title, description, tags, view, tokenize='porter'
     );
   `);
 }
@@ -182,6 +182,39 @@ function migrateTo4(db: Database.Database): void {
   `);
 }
 
+// v5: porter-stemmed recipe index (I-19 Phase 5). The 20-recipe growth
+// added an id/title holding the plural "processes" (new-processes), whose
+// document frequency of 1 out-stemmed every "cpu" hit and flipped the
+// direct-01 mock top-1 from cpu-by-process to new-processes. Porter folds
+// plurals on both the indexed and query sides, restoring the CPU top-1
+// while keeping every top-3 retrieval case green.
+function migrateTo5(db: Database.Database): void {
+  const rows = db
+    .prepare("SELECT id, title, description, tags, view FROM recipes_index")
+    .all() as Array<{
+    id: string;
+    title: string;
+    description: string;
+    tags: string;
+    view: string;
+  }>;
+  db.exec("DROP TABLE recipes_index");
+  db.exec(
+    `CREATE VIRTUAL TABLE recipes_index USING fts5(
+      id, title, description, tags, view, tokenize='porter'
+    )`,
+  );
+  const ins = db.prepare(
+    "INSERT INTO recipes_index (id, title, description, tags, view) VALUES (?, ?, ?, ?, ?)",
+  );
+  const tx = db.transaction((kept: typeof rows) => {
+    for (const r of kept) {
+      ins.run(r.id, r.title, r.description, r.tags, r.view);
+    }
+  });
+  tx(rows);
+}
+
 export function migrate(db: Database.Database): void {
   applyPragmas(db);
   const found = currentVersion(db);
@@ -191,7 +224,7 @@ export function migrate(db: Database.Database): void {
     );
   }
   createTables(db);
-  const steps = [migrateTo1, migrateTo2, migrateTo3, migrateTo4];
+  const steps = [migrateTo1, migrateTo2, migrateTo3, migrateTo4, migrateTo5];
   for (let i = found; i < steps.length; i++) {
     const run = steps[i]!;
     db.transaction(run)(db);

@@ -1,0 +1,4 @@
+tracepoint:syscalls:sys_enter_bind
+{
+  printf("%s pid=%d fd=%d\n", comm, pid, args->fd);
+}

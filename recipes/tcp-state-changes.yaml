@@ -1,0 +1,9 @@
+id: tcp-state-changes
+title: TCP state changes
+description: Counts TCP socket state transitions by new state number. TIME-WAIT or CLOSE-WAIT pileups indicate connection churn or leaks.
+tags: [network, tcp, connections, states]
+view: table
+duration_default: 10
+min_kernel: "5.8"
+requires: ["tracepoint:sock:inet_sock_set_state"]
+params: []

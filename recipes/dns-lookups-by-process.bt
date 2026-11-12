@@ -1,0 +1,10 @@
+uprobe:libc:getaddrinfo
+{
+  @lookups[comm] = count();
+}
+
+END
+{
+  print(@lookups);
+  clear(@lookups);
+}

@@ -1,0 +1,42 @@
+// sys_exit_openat(2) carry only the return value, so the path is saved
+// at enter keyed by thread id and printed when the open fails. Modern
+// glibc opens via openat2, so both variants are watched.
+tracepoint:syscalls:sys_enter_openat
+{
+  @has[tid] = 1;
+  @path[tid] = str(args->filename);
+}
+
+tracepoint:syscalls:sys_enter_openat2
+{
+  @has[tid] = 1;
+  @path[tid] = str(args->filename);
+}
+
+tracepoint:syscalls:sys_exit_openat
+/@has[tid]/
+{
+  // -13 EACCES, -2 ENOENT.
+  if (args->ret == -13 || args->ret == -2) {
+    printf("%s pid=%d ret=%d path=%s\n", comm, pid, args->ret, @path[tid]);
+  }
+  delete(@has[tid]);
+  delete(@path[tid]);
+}
+
+tracepoint:syscalls:sys_exit_openat2
+/@has[tid]/
+{
+  // -13 EACCES, -2 ENOENT.
+  if (args->ret == -13 || args->ret == -2) {
+    printf("%s pid=%d ret=%d path=%s\n", comm, pid, args->ret, @path[tid]);
+  }
+  delete(@has[tid]);
+  delete(@path[tid]);
+}
+
+END
+{
+  clear(@has);
+  clear(@path);
+}
