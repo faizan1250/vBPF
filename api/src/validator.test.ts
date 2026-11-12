@@ -10,7 +10,12 @@ import { indexRecipes, migrate, openDb } from "./db.js";
 import { runGenerate } from "./generate.js";
 import { LlmOutputSchema } from "./llm.js";
 import { loadRecipes } from "./recipes.js";
-import { MAX_PROBES, staticValidate } from "./validator.js";
+import {
+  MAX_PROBES,
+  levenshtein,
+  staticValidate,
+  suggestProbes,
+} from "./validator.js";
 
 const RECIPES_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -398,5 +403,47 @@ describe("runGenerate fail-fast on 503 CATALOG_UNAVAILABLE", () => {
       db.close();
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+describe("suggestProbes ranking (prefix, edit distance, allowlist)", () => {
+  it("ranks a 1-char typo by edit distance after prefix hits", () => {
+    const got = suggestProbes(
+      "kprobe:vfs_wirte",
+      new Set(["kprobe:vfs_read", "kprobe:vfs_readlink", "kprobe:vfs_write"]),
+    );
+    expect(got).toContain("kprobe:vfs_write");
+    expect(got.indexOf("kprobe:vfs_write")).toBeLessThan(
+      got.indexOf("kprobe:vfs_read"),
+    );
+  });
+
+  it("caps suggestions at 5", () => {
+    const known = new Set(
+      Array.from({ length: 20 }, (_, i) => `tracepoint:block:item${i}`),
+    );
+    const got = suggestProbes("tracepoint:block:zzz", known);
+    const names = got.slice(got.indexOf(":") + 2, got.indexOf("?")).split(", ");
+    expect(names).toHaveLength(5);
+  });
+
+  it("never suggests uprobes outside the allowlist", () => {
+    const known = new Set([
+      "uprobe:/tmp/evil.so:foo",
+      "uprobe:libc:getaddrinfo",
+      "tracepoint:block:block_rq_issue",
+    ]);
+    expect(suggestProbes("uprobe:/tmp/evil.so:bar", known)).not.toContain(
+      "/tmp/evil",
+    );
+    expect(suggestProbes("tracepoint:block:zzz", known)).not.toContain(
+      "uprobe:",
+    );
+  });
+
+  it("computes levenshtein distances", () => {
+    expect(levenshtein("", "")).toBe(0);
+    expect(levenshtein("abc", "abc")).toBe(0);
+    expect(levenshtein("abc", "abd")).toBe(1);
+    expect(levenshtein("kitten", "sitting")).toBe(3);
   });
 });

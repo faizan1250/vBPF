@@ -14,7 +14,10 @@ import { indexRecipes, migrate, openDb } from "./db.js";
 import {
   RefusalError,
   ValidationFailedError,
+  collectOfferedProbes,
   formatProbeArgs,
+  outOfListProbes,
+  probeAllowedLocally,
   runGenerate,
   selectTracepointProbes,
 } from "./generate.js";
@@ -1451,5 +1454,234 @@ describe("validator probe allowlist and header parser parity", () => {
         valid,
       ).toEqual([]);
     }
+  });
+});
+
+describe("I-11 local probe rejection and shaped feedback", () => {
+  it("rejects invented probes locally without spending a dry-run", async () => {
+    const db = makeDb();
+    const good = "tracepoint:syscalls:sys_enter_openat { @x = count(); }\n";
+    let validateCalls = 0;
+    let seenFeedback = "";
+    let calls = 0;
+    const stub = {
+      model: "mock",
+      generate: async (prompt: string) => {
+        calls += 1;
+        if (calls === 1) {
+          seenFeedback = "";
+          return LlmOutputSchema.parse({
+            script: "tracepoint:syscalls:bad-probe { @x = count(); }\n",
+            chart_type: "events",
+            explanation: "first attempt",
+            duration_s: 10,
+            refusal: null,
+          });
+        }
+        seenFeedback = prompt;
+        return LlmOutputSchema.parse({
+          script: good,
+          chart_type: "events",
+          explanation: "fixed",
+          duration_s: 10,
+          refusal: null,
+        });
+      },
+    };
+    const result = await runGenerate("who is opening files", {
+      deps: {
+        db,
+        recipesDir: RECIPES_DIR,
+        agentUrl: fake.url,
+        tokenFile,
+        llm: stub,
+        searchProbesFn: async () => ["tracepoint:syscalls:sys_enter_openat"],
+        validateAgentFn: async () => {
+          validateCalls += 1;
+          return {
+            ok: true,
+            errors: [],
+            probes: [],
+            warnings: [],
+            probe_count: 1,
+          };
+        },
+      },
+    });
+    expect(result.validation).toMatchObject({ status: "ok", attempts: 2 });
+    expect(validateCalls).toBe(1);
+    expect(seenFeedback).toContain("probe not found");
+    expect(seenFeedback).toContain("bad-probe");
+    expect(seenFeedback).toContain("==PROBES==");
+    db.close();
+  });
+
+  it("shapes noisy dry-run errors and nudges to the recipe on attempt 3", async () => {
+    const db = makeDb();
+    const prompts: string[] = [];
+    const stub = {
+      model: "mock",
+      generate: async (prompt: string) => {
+        prompts.push(prompt);
+        return LlmOutputSchema.parse({
+          script: "tracepoint:syscalls:sys_enter_openat { @x = count(); }\n",
+          chart_type: "events",
+          explanation: "always bad",
+          duration_s: 10,
+          refusal: null,
+        });
+      },
+    };
+    try {
+      await runGenerate("who is opening files", {
+        deps: {
+          db,
+          recipesDir: RECIPES_DIR,
+          agentUrl: fake.url,
+          tokenFile,
+          llm: stub,
+          searchProbesFn: async () => ["tracepoint:syscalls:sys_enter_openat"],
+          validateAgentFn: async () => ({
+            ok: false,
+            errors: [
+              "bpftrace v0.20.2\nstdin:1:9-14: ERROR: unknown tracepoint arg args->nope\nAttached 1 probe",
+              "stdin:2:1-3: ERROR: second problem",
+            ],
+            probes: [],
+            warnings: [],
+            probe_count: 0,
+          }),
+        },
+      });
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(ValidationFailedError);
+    }
+    expect(prompts).toHaveLength(3);
+    expect(prompts[1]).toContain("args->nope");
+    expect(prompts[1]).toContain("Hint:");
+    expect(prompts[1]).not.toContain("bpftrace v0.20.2");
+    expect(prompts[1]).not.toContain("second problem");
+    expect(prompts[2]).toContain("adapt recipe files-opened-by-process");
+    db.close();
+  });
+
+  it("allows catalog, exempt, recipe, and libc-uprobe probes only", () => {
+    const offered = collectOfferedProbes(
+      ["tracepoint:block:block_rq_issue"],
+      [
+        {
+          ...cpuRecipe(),
+          body: "tracepoint:sched:sched_process_exec { @x = count(); }\n",
+        },
+      ],
+    );
+    expect(offered.has("tracepoint:block:block_rq_issue")).toBe(true);
+    expect(offered.has("tracepoint:sched:sched_process_exec")).toBe(true);
+    for (const ok of [
+      "BEGIN",
+      "profile:hz:99",
+      "interval:s:1",
+      "software:page-faults",
+      "uprobe:libc:getaddrinfo",
+      "tracepoint:block:block_rq_issue",
+      "tracepoint:sched:sched_process_exec",
+    ]) {
+      expect(probeAllowedLocally(ok, offered), ok).toBe(true);
+    }
+    expect(
+      outOfListProbes(
+        ["tracepoint:oom:killer", "tracepoint:block:block_rq_issue"],
+        offered,
+      ),
+    ).toEqual(["tracepoint:oom:killer"]);
+    expect(probeAllowedLocally("uprobe:/tmp/evil.so:foo", offered)).toBe(false);
+    expect(probeAllowedLocally("tracepoint:net:foo", offered)).toBe(false);
+  });
+});
+
+describe("I-11 probe existence check before local rejection", () => {
+  it("lets a real-but-unlisted probe through to the dry-run", async () => {
+    const db = makeDb();
+    const script = "tracepoint:sched:sched_switch { @x = count(); }\n";
+    let validateCalls = 0;
+    const stub = {
+      model: "mock",
+      generate: async () =>
+        LlmOutputSchema.parse({
+          script,
+          chart_type: "bar",
+          explanation: "switches",
+          duration_s: 10,
+          refusal: null,
+        }),
+    };
+    const result = await runGenerate("context switches by task", {
+      deps: {
+        db,
+        recipesDir: RECIPES_DIR,
+        agentUrl: fake.url,
+        tokenFile,
+        llm: stub,
+        searchProbesFn: async () => ["profile:hz:99"],
+        probeArgsFn: async () =>
+          "tracepoint:sched:sched_switch\n  int field;\n",
+        validateAgentFn: async () => {
+          validateCalls += 1;
+          return {
+            ok: true,
+            errors: [],
+            probes: ["tracepoint:sched:sched_switch"],
+            warnings: [],
+            probe_count: 1,
+          };
+        },
+      },
+    });
+    expect(validateCalls).toBe(1);
+    expect(result.validation).toMatchObject({ status: "ok", attempts: 1 });
+    expect(result.script).toBe(script);
+    db.close();
+  });
+
+  it("fails open to the dry-run when the existence check errors", async () => {
+    const db = makeDb();
+    let validateCalls = 0;
+    const stub = {
+      model: "mock",
+      generate: async () =>
+        LlmOutputSchema.parse({
+          script: "tracepoint:sched:sched_switch { @x = count(); }\n",
+          chart_type: "bar",
+          explanation: "switches",
+          duration_s: 10,
+          refusal: null,
+        }),
+    };
+    await runGenerate("context switches by task", {
+      deps: {
+        db,
+        recipesDir: RECIPES_DIR,
+        agentUrl: fake.url,
+        tokenFile,
+        llm: stub,
+        searchProbesFn: async () => [],
+        probeArgsFn: async () => {
+          throw new Error("agent down");
+        },
+        validateAgentFn: async () => {
+          validateCalls += 1;
+          return {
+            ok: true,
+            errors: [],
+            probes: [],
+            warnings: [],
+            probe_count: 1,
+          };
+        },
+      },
+    });
+    expect(validateCalls).toBe(1);
+    db.close();
   });
 });

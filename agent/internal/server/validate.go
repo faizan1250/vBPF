@@ -941,6 +941,75 @@ func validateWildcardShape(pr, provider string) string {
 	return ""
 }
 
+// suggestionDistanceCap bounds the near-miss tier: short queries get a floor
+// so 1-2 char typos still match; longer queries scale with their length.
+// Mirrors suggestionDistanceCap in api/src/validator.ts.
+func suggestionDistanceCap(queryLen int) int {
+	if m := queryLen / 4; m > 4 {
+		return m
+	}
+	return 4
+}
+
+// levenshtein returns the rune-level edit distance between a and b. Probe
+// names are ASCII in practice but adversarial input may carry multibyte
+// lookalikes. Mirrors levenshtein in api/src/validator.ts.
+func levenshtein(a, b string) int {
+	ar := []rune(a)
+	br := []rune(b)
+	if len(ar) == 0 {
+		return len(br)
+	}
+	if len(br) == 0 {
+		return len(ar)
+	}
+	prev := make([]int, len(br)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ar); i++ {
+		curr := make([]int, len(br)+1)
+		curr[0] = i
+		for j := 1; j <= len(br); j++ {
+			cost := 0
+			if ar[i-1] != br[j-1] {
+				cost = 1
+			}
+			del := prev[j] + 1
+			ins := curr[j-1] + 1
+			sub := prev[j-1] + cost
+			curr[j] = del
+			if ins < curr[j] {
+				curr[j] = ins
+			}
+			if sub < curr[j] {
+				curr[j] = sub
+			}
+		}
+		prev = curr
+	}
+	return prev[len(br)]
+}
+
+// isSuggestible keeps suggestions inside the uprobe allowlist: only libc (or
+// a canonical libc path) may be proposed, whatever the query asked for.
+func isSuggestible(k string) bool {
+	colon := strings.IndexByte(k, ':')
+	if colon < 0 {
+		return true
+	}
+	provider := k[:colon]
+	if provider != "uprobe" && provider != "uretprobe" {
+		return true
+	}
+	rest := k[colon+1:]
+	second := strings.IndexByte(rest, ':')
+	if second < 0 {
+		return false
+	}
+	return isAllowedLibcTarget(rest[:second])
+}
+
 func suggestProbes(pr string, known map[string]bool) string {
 	if len(known) == 0 {
 		return ""
@@ -957,49 +1026,56 @@ func suggestProbes(pr string, known map[string]bool) string {
 			searchPrefix = cleanTarget[:colon+1+second+1]
 		}
 	}
+	inScope := func(k string) bool { return strings.HasPrefix(k, searchPrefix) }
 	// Prefer the full pre-* prefix so long names narrow to their own
-	// family before falling back to the short stem and provider scope.
-	var candidates []string
+	// family before near misses and the scope listing kick in.
+	var prefix []string
 	for k := range known {
-		if !strings.HasPrefix(k, searchPrefix) {
+		if isSuggestible(k) && inScope(k) && strings.HasPrefix(k, cleanTarget) {
+			prefix = append(prefix, k)
+		}
+	}
+	sort.Strings(prefix)
+	prefixSet := map[string]bool{}
+	for _, k := range prefix {
+		prefixSet[k] = true
+	}
+	cap := suggestionDistanceCap(len([]rune(cleanTarget)))
+	var near []string
+	for k := range known {
+		if !isSuggestible(k) || !inScope(k) || prefixSet[k] {
 			continue
 		}
-		if provider == "tracepoint" {
-			if strings.HasPrefix(k, cleanTarget) {
-				candidates = append(candidates, k)
-			}
-		} else if strings.HasPrefix(k, cleanTarget) {
-			candidates = append(candidates, k)
+		if levenshtein(cleanTarget, k) <= cap {
+			near = append(near, k)
 		}
 	}
-	if len(candidates) == 0 {
-		targetStem := cleanTarget
-		if len(targetStem) > len(provider)+4 {
-			targetStem = targetStem[:len(provider)+4]
+	sort.Slice(near, func(i, j int) bool {
+		di, dj := levenshtein(cleanTarget, near[i]), levenshtein(cleanTarget, near[j])
+		if di != dj {
+			return di < dj
 		}
-		for k := range known {
-			if provider == "tracepoint" {
-				if strings.HasPrefix(k, searchPrefix) {
-					candidates = append(candidates, k)
-				}
-			} else if strings.HasPrefix(k, provider+":") && strings.HasPrefix(k, targetStem) {
-				candidates = append(candidates, k)
-			}
-		}
+		return near[i] < near[j]
+	})
+	nearSet := map[string]bool{}
+	for _, k := range near {
+		nearSet[k] = true
 	}
-	if len(candidates) == 0 {
+	var rest []string
+	if len(prefix) == 0 {
 		for k := range known {
-			if strings.HasPrefix(k, provider+":") {
-				candidates = append(candidates, k)
+			if isSuggestible(k) && inScope(k) && !nearSet[k] {
+				rest = append(rest, k)
 			}
 		}
+		sort.Strings(rest)
+	}
+	candidates := append(append(append([]string{}, prefix...), near...), rest...)
+	if len(candidates) > 5 {
+		candidates = candidates[:5]
 	}
 	if len(candidates) == 0 {
 		return ""
-	}
-	sort.Strings(candidates)
-	if len(candidates) > 3 {
-		candidates = candidates[:3]
 	}
 	return fmt.Sprintf(" (did you mean: %s?)", strings.Join(candidates, ", "))
 }

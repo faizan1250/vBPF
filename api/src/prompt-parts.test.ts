@@ -92,10 +92,17 @@ describe("parts shape", () => {
     expect(parts.user).toContain("which processes use CPU?");
     expect(parts.user).toContain("</user_request>");
     expect(parts.system).not.toContain("which processes use CPU?");
+    // I-11: prompt constraints travel with the reference data.
+    expect(parts.context).toContain("Use only these probes");
+    expect(parts.context).toContain("Start from the first recipe");
+    expect(parts.context).toContain("### Reference data: patterns");
+    expect(parts.context).toContain("@start[args->dev");
+    expect(parts.context).toContain("clear(@x)");
     const order = [
       "==SYSTEM==",
       "==RECIPES==",
       "==PROBES==",
+      "==PATTERNS==",
       "==ARG_FORMATS==",
       "==USER==",
     ].map((m) => text.indexOf(m));

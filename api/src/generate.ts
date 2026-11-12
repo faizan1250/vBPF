@@ -28,7 +28,8 @@ import {
   type RecipeWithBody,
 } from "./prompts.js";
 import { extractKeywords } from "./retrieval.js";
-import { staticValidate, truncateErrors } from "./validator.js";
+import { staticValidate, suggestProbes, truncateErrors } from "./validator.js";
+import { shapeFeedbackErrors } from "./feedback.js";
 
 export interface GenerateDeps {
   db: Database.Database;
@@ -181,6 +182,91 @@ export function formatProbeArgs(
     .join("\n\n");
 }
 
+// I-11: the probes the prompt offered the model: catalog search hits plus
+// every probe appearing in the retrieved recipe bodies.
+export function collectOfferedProbes(
+  catalogProbes: string[],
+  recipes: RecipeWithBody[],
+): Set<string> {
+  const offered = new Set<string>(catalogProbes);
+  for (const r of recipes) {
+    for (const p of staticValidate(r.body, { catalog: { mode: "skip" } })
+      .probes) {
+      offered.add(p);
+    }
+  }
+  return offered;
+}
+
+// I-11: local membership check before spending a dry-run. Catalog-exempt
+// providers (BEGIN/END, profile, interval, software) always pass; uprobes
+// pass when they satisfy the validator's shape check (allowed target and
+// symbol) so the agent still does the host-existence check.
+export function probeAllowedLocally(pr: string, offered: Set<string>): boolean {
+  if (offered.has(pr)) return true;
+  const colon = pr.indexOf(":");
+  const provider = colon < 0 ? pr : pr.slice(0, colon);
+  if (provider === "BEGIN" || provider === "END") return true;
+  if (
+    provider === "profile" ||
+    provider === "interval" ||
+    provider === "software"
+  ) {
+    return true;
+  }
+  if (provider === "uprobe" || provider === "uretprobe") {
+    return (
+      staticValidate(`${pr} { @x = count(); }`, { catalog: { mode: "skip" } })
+        .errors.length === 0
+    );
+  }
+  return false;
+}
+
+export function outOfListProbes(
+  scriptProbes: string[],
+  offered: Set<string>,
+): string[] {
+  return scriptProbes.filter((p) => !probeAllowedLocally(p, offered));
+}
+
+// I-11: existence probe for out-of-list tracepoint/kprobe/kretprobe names.
+// /v1/probe-args 404s unless the probe exactly matches a catalog entry, so a
+// 200 means the model found a real probe the search ranking missed — let the
+// dry-run decide. A 404 (or any transport error) keeps the local rejection;
+// transport errors fail open here because the dry-run right below is
+// authoritative and surfaces agent outages itself.
+export async function filterUnknownProbes(
+  probeArgsFn: (url: string, token: string, probe: string) => Promise<string>,
+  agentUrl: string,
+  tokenFile: string,
+  probes: string[],
+): Promise<string[]> {
+  const unknown: string[] = [];
+  for (const p of probes) {
+    const colon = p.indexOf(":");
+    const provider = colon < 0 ? p : p.slice(0, colon);
+    if (
+      provider !== "tracepoint" &&
+      provider !== "kprobe" &&
+      provider !== "kretprobe"
+    ) {
+      unknown.push(p);
+      continue;
+    }
+    try {
+      await probeArgsFn(agentUrl, tokenFile, p);
+      // 200: the probe exists in the catalog; the dry-run decides.
+    } catch (err) {
+      if (err instanceof AgentProxyError && err.status === 404) {
+        unknown.push(p);
+      }
+      // Anything else (transport/server error): fail open to the dry-run.
+    }
+  }
+  return unknown;
+}
+
 function newGenerationId(): string {
   return `gen_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
 }
@@ -269,6 +355,12 @@ export async function runGenerate(
     },
   );
 
+  // I-11: probes the prompt offered; out-of-list scripts are rejected
+  // locally (no dry-run spent) with did-you-mean feedback. Validators stay
+  // strict: this only skips the round trip, never weakens a verdict.
+  const offered = collectOfferedProbes(probes, withBodies);
+  const adaptRecipeId = withBodies[0]?.id ?? null;
+
   let attempts = 0;
   let lastErrors: string[] = [];
   let previousScript = "";
@@ -277,14 +369,17 @@ export async function runGenerate(
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     attempts = attempt;
+    const feedbackErrors = shapeFeedbackErrors(lastErrors);
+    const adaptNudge =
+      attempt === 3 && adaptRecipeId !== null
+        ? `\nIf the errors persist, adapt recipe ${adaptRecipeId} directly: keep its probes, change only the aggregation or filter.`
+        : "";
     const generated = await generateWithAttribution(
       llm,
       attempt === 1
         ? assembled.text
-        : `${assembled.text}\n\n==FEEDBACK==\nPrevious script:\n${previousScript}\nErrors:\n${truncateErrors(lastErrors).join("\n")}\nFix the script and return full JSON again.`,
-      attempt === 1
-        ? undefined
-        : { previousScript, errors: truncateErrors(lastErrors) },
+        : `${assembled.text}\n\n==FEEDBACK==\nPrevious script:\n${previousScript}\nErrors:\n${feedbackErrors.join("\n")}${adaptNudge}\nFix the script and return full JSON again.`,
+      attempt === 1 ? undefined : { previousScript, errors: feedbackErrors },
       { signal: opts.signal, parts: assembled.parts },
     );
     const out = generated.out;
@@ -315,6 +410,29 @@ export async function runGenerate(
     // authoritative, so TS errors never reject on their own.
     const stat = staticValidate(out.script, { catalog: { mode: "skip" } });
     warnings = [...stat.warnings];
+    // I-11 local rejection: invented probes never reach the agent. Out-of-list
+    // names are first checked for real catalog existence (/v1/probe-args
+    // 404s on anything but an exact entry) so a good probe the search
+    // ranking missed still gets its dry-run. Shaped here (not via
+    // shapeFeedbackErrors) because the did-you-mean list is the feedback;
+    // truncation keeps one probe per line.
+    const invented = outOfListProbes(stat.probes, offered);
+    if (invented.length > 0) {
+      const unknown = await filterUnknownProbes(
+        probeArgsFn,
+        agentUrl,
+        tokenFile,
+        invented,
+      );
+      if (unknown.length > 0) {
+        lastErrors = unknown.map(
+          (p) =>
+            `probe not found: ${p} (not in offered list${suggestProbes(p, offered)}); use only the probes under ==PROBES==, the recipe probes, or allowed uprobe:libc:<symbol>`,
+        );
+        if (attempt === 3) break;
+        continue;
+      }
+    }
     let agentRes: ValidateResponse;
     try {
       agentRes = await validateFn(agentUrl, tokenFile, out.script);

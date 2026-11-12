@@ -190,7 +190,51 @@ function validateWildcardShape(pr: string, provider: string): string {
   return "";
 }
 
-function suggestProbes(pr: string, known: Set<string>): string {
+// Edit distance cap for the near-miss tier: short queries get a floor so
+// 1-2 char typos still match; longer queries scale with their length.
+function suggestionDistanceCap(queryLen: number): number {
+  return Math.max(4, Math.floor(queryLen / 4));
+}
+
+// Code-point Levenshtein distance; probe names are ASCII in practice but
+// adversarial input may carry multibyte lookalikes (see unicode-lookalike).
+export function levenshtein(a: string, b: string): number {
+  const as = Array.from(a);
+  const bs = Array.from(b);
+  if (as.length === 0) return bs.length;
+  if (bs.length === 0) return as.length;
+  let prev = Array.from({ length: bs.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= as.length; i += 1) {
+    const curr = [i];
+    for (let j = 1; j <= bs.length; j += 1) {
+      curr[j] = Math.min(
+        (curr[j - 1] ?? 0) + 1,
+        (prev[j] ?? 0) + 1,
+        (prev[j - 1] ?? 0) + (as[i - 1] === bs[j - 1] ? 0 : 1),
+      );
+    }
+    prev = curr;
+  }
+  return prev[bs.length] ?? 0;
+}
+
+// Suggestions must never point outside the uprobe allowlist: only libc (or a
+// canonical libc path) may be proposed, whatever the query asked for.
+function isSuggestible(k: string): boolean {
+  const colon = k.indexOf(":");
+  if (colon < 0) return true;
+  const provider = k.slice(0, colon);
+  if (provider !== "uprobe" && provider !== "uretprobe") return true;
+  const rest = k.slice(colon + 1);
+  const second = rest.indexOf(":");
+  if (second < 0) return false;
+  return isAllowedLibcTarget(rest.slice(0, second));
+}
+
+// Up to 5 nearest catalog names: full-prefix matches first, then same-scope
+// near misses by edit distance, then (only when no prefix matched) the scope
+// listing as a last resort. Mirrors suggestProbes in agent validate.go.
+export function suggestProbes(pr: string, known: Set<string>): string {
   if (known.size === 0) return "";
   const colon = pr.indexOf(":");
   const provider = colon < 0 ? pr : pr.slice(0, colon);
@@ -202,38 +246,37 @@ function suggestProbes(pr: string, known: Set<string>): string {
       searchPrefix = cleanTarget.slice(0, second + 1);
     }
   }
+  const inScope = (k: string): boolean => k.startsWith(searchPrefix);
   // Prefer the full pre-* prefix so long names narrow to their own
-  // family before falling back to the short stem and provider scope.
-  const candidates: string[] = [];
-  for (const k of known) {
-    if (!k.startsWith(searchPrefix)) continue;
-    if (provider === "tracepoint") {
-      if (k.startsWith(cleanTarget)) candidates.push(k);
-    } else if (k.startsWith(cleanTarget)) {
-      candidates.push(k);
-    }
-  }
-  if (candidates.length === 0) {
-    const targetStem =
-      cleanTarget.length > provider.length + 4
-        ? cleanTarget.slice(0, provider.length + 4)
-        : cleanTarget;
-    for (const k of known) {
-      if (provider === "tracepoint") {
-        if (k.startsWith(searchPrefix)) candidates.push(k);
-      } else if (k.startsWith(`${provider}:`) && k.startsWith(targetStem)) {
-        candidates.push(k);
-      }
-    }
-  }
-  if (candidates.length === 0) {
-    for (const k of known) {
-      if (k.startsWith(`${provider}:`)) candidates.push(k);
-    }
-  }
+  // family before near misses and the scope listing kick in.
+  const prefix = [...known]
+    .filter((k) => isSuggestible(k) && inScope(k) && k.startsWith(cleanTarget))
+    .sort();
+  const prefixSet = new Set(prefix);
+  const cap = suggestionDistanceCap(Array.from(cleanTarget).length);
+  const near = [...known]
+    .filter(
+      (k) =>
+        isSuggestible(k) &&
+        inScope(k) &&
+        !prefixSet.has(k) &&
+        levenshtein(cleanTarget, k) <= cap,
+    )
+    .sort(
+      (x, y) =>
+        levenshtein(cleanTarget, x) - levenshtein(cleanTarget, y) ||
+        (x < y ? -1 : x > y ? 1 : 0),
+    );
+  const nearSet = new Set(near);
+  const rest =
+    prefix.length === 0
+      ? [...known]
+          .filter((k) => isSuggestible(k) && inScope(k) && !nearSet.has(k))
+          .sort()
+      : [];
+  const candidates = [...prefix, ...near, ...rest].slice(0, 5);
   if (candidates.length === 0) return "";
-  candidates.sort();
-  return ` (did you mean: ${candidates.slice(0, 3).join(", ")}?)`;
+  return ` (did you mean: ${candidates.join(", ")}?)`;
 }
 
 const STATIC_VALIDATION_FAILED_PREFIXES = [

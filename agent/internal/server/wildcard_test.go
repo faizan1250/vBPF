@@ -184,3 +184,38 @@ func TestMaxProbesOccurrenceSumAndEndpointProbeCount(t *testing.T) {
 	require.Equal(t, 4, out.ProbeCount)
 	require.NotEmpty(t, out.Warnings)
 }
+
+func TestSuggestProbesEditDistanceAndCap(t *testing.T) {
+	known := map[string]bool{
+		"kprobe:vfs_read":     true,
+		"kprobe:vfs_readlink": true,
+		"kprobe:vfs_write":    true,
+	}
+	got := suggestProbes("kprobe:vfs_wirte", known)
+	require.Contains(t, got, "kprobe:vfs_write")
+	require.Less(t, strings.Index(got, "kprobe:vfs_write"), strings.Index(got, "kprobe:vfs_read"))
+
+	many := map[string]bool{}
+	for i := 0; i < 20; i++ {
+		many[fmt.Sprintf("tracepoint:block:item%02d", i)] = true
+	}
+	capped := suggestProbes("tracepoint:block:zzz", many)
+	require.Len(t, strings.Split(capped[strings.Index(capped, ":")+2:strings.Index(capped, "?")], ", "), 5)
+}
+
+func TestSuggestProbesNeverOutsideUprobeAllowlist(t *testing.T) {
+	known := map[string]bool{
+		"uprobe:/tmp/evil.so:foo":         true,
+		"uprobe:libc:getaddrinfo":         true,
+		"tracepoint:block:block_rq_issue": true,
+	}
+	require.NotContains(t, suggestProbes("uprobe:/tmp/evil.so:bar", known), "/tmp/evil")
+	require.NotContains(t, suggestProbes("tracepoint:block:zzz", known), "uprobe:")
+}
+
+func TestLevenshteinDistances(t *testing.T) {
+	require.Zero(t, levenshtein("", ""))
+	require.Zero(t, levenshtein("abc", "abc"))
+	require.Equal(t, 1, levenshtein("abc", "abd"))
+	require.Equal(t, 3, levenshtein("kitten", "sitting"))
+}
