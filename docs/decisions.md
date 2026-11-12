@@ -824,3 +824,36 @@ state}` shape is parsed with `.omit({ origin: true })` since the agent
   checkout only — fork/exec of the `.sh` fixture — and is untouched by
   this diff). Live dry run marked unverified: no tag pushed and no
   GHCR publish performed locally, per the no-push hard stop.
+
+## I-18: Positioning and discoverability (2026-11-12)
+
+- **Tagline leads with the differentiator (spec wording).** README top now
+  reads 'Ask in plain English, review the exact probe, run it behind a
+  safety gate, watch live charts.' New 'Why vBPF' subsection: safety
+  layers, human confirmation, live views, offline mode (recipe-only needs
+  no key; local models over loopback; probe output never leaves the
+  machine).
+- **Competitor claims verified from READMEs on 2026-11-12, links cited, no
+  disparagement.** GPTtrace (eunomia-bpf/GPTtrace): self-described
+  experiment 'not suitable for production use', CLI natural-language to
+  bpftrace/BCC with retry on load errors, points users to MCPtrace.
+  MCPtrace (eunomia-bpf/MCPtrace): MCP server giving AI assistants
+  bpftrace access; README states 'No script validation - trust the AI
+  client to generate safe scripts' (60 s max, 10k-line buffer, poll-based
+  results). Comparison table keeps bpftrace/BCC and adds both.
+- **New docs/faq.md** answers the five spec questions with pointers to the
+  README sections that stay canonical. New docs/maintainer-checklist.md
+  holds the exact repo-metadata gh commands plus the other one-time steps;
+  agents must not run them (only the tag placeholder differs from the
+  spec text, to avoid pinning a stale version in docs).
+- **Social preview docs/assets/social.png (1280x640)** composited from the
+  committed demo: header band with name plus short pitch, body is demo.gif
+  frame 210 (prompt, script, live bar chart), the brightest sampled frame,
+  resized with LANCZOS. No staged or synthetic pixels beyond the header
+  text.
+- **Verified (corrected Phase 5):** `bash scripts/check-docs.sh` claimed
+  green here but was RED on 7 cross-file anchors in docs/faq.md (the
+  checker validated anchors against the linking file, not the target);
+  fixed to extract headings from `$target` (with `2>/dev/null || true`
+  guard), now green; prettier check clean on edited/new markdown;
+  social.png opens at exactly 1280x640.
