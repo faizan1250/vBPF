@@ -52,6 +52,7 @@ RUN mkdir -p /data /run/vbpf && chown node:node /data /run/vbpf && chmod 0755 /a
 
 ENV HOST=0.0.0.0 \
   PORT=8080 \
+  NODE_ENV=production \
   AGENT_URL=http://agent:8787 \
   AGENT_TOKEN_FILE=/token/agent.token \
   DATABASE_PATH=/data/api.sqlite3 \

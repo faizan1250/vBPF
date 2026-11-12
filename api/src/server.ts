@@ -74,6 +74,10 @@ export interface AppOptions {
   llmEnv?: NodeJS.ProcessEnv;
   llmFetch?: typeof fetch;
   generateRateLimit?: { max: number; windowMs: number };
+  // Trust boundary for X-Forwarded-For (D-81). False by default: the rate
+  // limiter keys on the socket address. Set to the proxy peer IP/CIDR list
+  // (compose: the nginx service network) so req.ip is the real client IP.
+  trustProxy?: boolean | string | string[];
   // Server-owned run monitor deadline slack past duration_s. Override in
   // tests to keep the monitor-timeout case fast; production default 15 s.
   monitorGraceMs?: number;
@@ -146,6 +150,23 @@ function sendAgentNotReady(
 function agentWsUrl(agentUrl: string, path: string): string {
   const base = agentUrl.replace(/\/$/, "").replace(/^http/, "ws");
   return base + path;
+}
+
+// Parses TRUST_PROXY into a Fastify trustProxy value. "false"/empty/unset
+// trusts nothing (socket address is used); "true" trusts all (tests only,
+// never in front of untrusted clients); a bare hop count fails closed to
+// false because Fastify cannot validate the immediate peer from a count;
+// anything else passes through as the proxy peer IP/CIDR allowlist.
+export function parseTrustProxy(value: string | undefined): boolean | string {
+  const raw = (value ?? "").trim();
+  const lower = raw.toLowerCase();
+  if (raw === "" || lower === "false" || lower === "0" || lower === "no")
+    return false;
+  // A bare number is a hop count, which Fastify fails closed on (it cannot
+  // validate the immediate peer from a count), so treat it as untrusted.
+  if (/^\d+$/.test(raw)) return false;
+  if (lower === "true" || lower === "yes") return true;
+  return raw;
 }
 
 // Loopback-only Host gate (DNS-rebinding protection). The API binds
@@ -349,11 +370,13 @@ export async function buildApp(
   db?: Database.Database,
 ): Promise<FastifyInstance> {
   const app = Fastify({
-    // Single trusted proxy hop: in compose only the nginx front door reaches
-    // the API (only web publishes ports), so X-Forwarded-For carries the real
-    // client IP and per-IP rate limiting works. Direct dev access stays
-    // loopback-only via the Host gate below.
-    trustProxy: true,
+    // Explicit TRUST_PROXY only (D-81): default false ignores X-Forwarded-For
+    // from untrusted peers (socket address is keyed), so a client that
+    // reaches the API directly cannot spoof its IP. Compose sets it to the
+    // nginx service network, where the proxy hop carries the real client IP
+    // and per-IP rate limiting works. Direct dev access stays loopback-only
+    // via the Host gate below.
+    trustProxy: opts.trustProxy ?? parseTrustProxy(process.env["TRUST_PROXY"]),
     logger: {
       level: process.env["LOG_LEVEL"] ?? "info",
       redact: {

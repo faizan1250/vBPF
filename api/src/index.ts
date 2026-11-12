@@ -1,7 +1,7 @@
 import "dotenv/config";
 
 import { loadConfig } from "./config.js";
-import { buildApp } from "./server.js";
+import { buildApp, parseTrustProxy } from "./server.js";
 
 const config = loadConfig();
 
@@ -14,6 +14,7 @@ const app = await buildApp({
   llmModel: config.LLM_MODEL,
   llmMode: config.LLM_MODE,
   llmChain: config.LLM_PROVIDER_CHAIN,
+  trustProxy: parseTrustProxy(config.TRUST_PROXY),
 });
 
 app.listen({ host: config.HOST, port: config.PORT }).catch((err: unknown) => {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { loadConfig } from "./config.js";
+import { parseTrustProxy } from "./server.js";
 
 describe("loadConfig provider chain", () => {
   it("defaults to groq", () => {
@@ -36,5 +37,33 @@ describe("loadConfig provider chain", () => {
     expect(cfg.LLM_TOTAL_TIMEOUT_MS).toBe(2000);
     expect(cfg.LLM_MAX_WAITERS).toBe(2);
     expect(cfg.LLM_WAIT_TIMEOUT_MS).toBe(300);
+  });
+
+  it("defaults TRUST_PROXY to false", () => {
+    expect(loadConfig({}).TRUST_PROXY).toBe("false");
+  });
+
+  it("passes TRUST_PROXY through", () => {
+    expect(loadConfig({ TRUST_PROXY: "172.28.0.0/16" }).TRUST_PROXY).toBe(
+      "172.28.0.0/16",
+    );
+  });
+});
+
+describe("parseTrustProxy", () => {
+  it("trusts nothing by default", () => {
+    expect(parseTrustProxy(undefined)).toBe(false);
+    expect(parseTrustProxy("")).toBe(false);
+    expect(parseTrustProxy("false")).toBe(false);
+  });
+
+  it("fails a bare hop count closed", () => {
+    expect(parseTrustProxy("1")).toBe(false);
+    expect(parseTrustProxy("2")).toBe(false);
+  });
+
+  it("passes a proxy peer allowlist through", () => {
+    expect(parseTrustProxy("172.28.0.0/16")).toBe("172.28.0.0/16");
+    expect(parseTrustProxy("10.0.0.1, 10.0.0.2")).toBe("10.0.0.1, 10.0.0.2");
   });
 });

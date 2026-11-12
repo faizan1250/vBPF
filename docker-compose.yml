@@ -3,6 +3,7 @@
 # this network (no ports published) and still requires its bearer token on
 # every endpoint. The API binds 0.0.0.0 but keeps its Host/Origin gates, so
 # set WEB_ORIGIN to the exact browser-facing URL when WEB_PORT changes.
+# Hardening details live in docs/deployment.md.
 services:
   agent:
     build:
@@ -21,6 +22,8 @@ services:
       - agent-token:/token
       - /sys/kernel/debug:/sys/kernel/debug:rw
       - /sys/kernel/tracing:/sys/kernel/tracing:rw
+    networks:
+      - vbpf
     healthcheck:
       test:
         [
@@ -46,10 +49,29 @@ services:
       AGENT_TOKEN_FILE: /token/agent.token
       DATABASE_PATH: /data/api.sqlite3
       RECIPES_DIR: /app/recipes
+      # Trust X-Forwarded-For only from the nginx peer on this network;
+      # direct clients fall back to the socket address (see deployment.md).
+      TRUST_PROXY: "172.28.0.0/16"
       WEB_ORIGIN: ${WEB_ORIGIN:-http://localhost:${WEB_PORT:-5173}}
     volumes:
       - agent-token:/token:ro
       - api-data:/data
+    networks:
+      - vbpf
+    # Unprivileged at runtime: the entrypoint stages the token then re-execs
+    # node as uid 1000 (no root PID left). Read-only rootfs with tmpfs for
+    # temp and the staged token; /data stays a named volume owned by node.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run/vbpf
+    mem_limit: 512m
+    pids_limit: 100
+    restart: unless-stopped
     depends_on:
       agent:
         condition: service_healthy
@@ -71,7 +93,23 @@ services:
       context: .
       dockerfile: ./web/Dockerfile
     ports:
-      - "127.0.0.1:${WEB_PORT:-5173}:80"
+      - "127.0.0.1:${WEB_PORT:-5173}:8080"
+    networks:
+      - vbpf
+    # Unprivileged nginx image (uid 101, port 8080), read-only rootfs with
+    # tmpfs for cache, pid, and temp files.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    mem_limit: 128m
+    pids_limit: 50
+    restart: unless-stopped
     depends_on:
       api:
         condition: service_healthy
@@ -79,3 +117,10 @@ services:
 volumes:
   agent-token:
   api-data:
+
+# Fixed subnet so TRUST_PROXY can name the nginx service network explicitly.
+networks:
+  vbpf:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

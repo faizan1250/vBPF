@@ -24,7 +24,10 @@ executed without human confirmation.
 - `Host` must be loopback (`127.0.0.1`, `localhost`, `::1`, any port).
   Non-loopback Host values get `403 FORBIDDEN`. This is DNS-rebinding
   protection; the same hook covers WebSocket upgrades.
-- No `X-Forwarded-Host` / proxy headers are honored.
+- No `X-Forwarded-Host` is honored. `X-Forwarded-For` is honored only from
+  `TRUST_PROXY` peers (compose: the nginx service network; see
+  `docs/deployment.md`) and ignored otherwise, so a direct client cannot
+  spoof the IP the rate limiter keys on.
 
 ## Auth and tokens
 
@@ -36,9 +39,13 @@ executed without human confirmation.
 
 ## Rate limiting and size limits
 
-- `POST /api/generate` (the LLM-backed, most expensive route): **10
-  requests/minute per client IP**. Over budget returns `429 RATE_LIMITED`
-  with a `Retry-After` header. Other routes are cheap proxies and unbounded.
+- `POST /api/generate` and `POST /api/explain` (the LLM-backed, most
+  expensive routes) share one bucket: **10 requests/minute per client IP**.
+  Over budget returns `429 RATE_LIMITED` with a `Retry-After` header. nginx
+  applies a matching `limit_req` second layer on both endpoints. Other
+  routes are cheap proxies and unbounded. The client IP is the socket
+  address unless `TRUST_PROXY` names the proxy peer (see
+  `docs/deployment.md`).
 - Request bodies are capped at 64 KB; scripts at 8 KB; prompts at 2000 chars;
   search queries at 256 chars. Oversize input is rejected before any agent
   round-trip.
@@ -220,7 +227,8 @@ contact the maintainer directly. Aim: acknowledge within 3 business days.
 ## Compose quickstart network
 
 `docker-compose.yml` publishes only the web front door
-(`"${WEB_PORT:-5173}"` to container port 80). The API and agent are reachable
+(`"${WEB_PORT:-5173}"` to container port 8080, served by the unprivileged
+nginx image as non-root uid 101). The API and agent are reachable
 solely inside the compose network, and every agent endpoint still requires its
 bearer token, shared via the `agent-token` volume (file mode `0600`, mounted
 read-only into the API container).
