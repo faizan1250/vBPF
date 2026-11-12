@@ -5,7 +5,7 @@
 
 SHELL := /bin/sh
 .SHELLFLAGS := -eu -c
-.PHONY: setup lint test test-determinism agent-build api-dev web-dev eval test-integration recipes-check vuln secrets parity compat compat-check fuzz test-differential
+.PHONY: setup lint test test-determinism agent-build api-dev web-dev eval test-integration recipes-check vuln secrets parity compat compat-check docs-check fuzz test-differential
 
 GO ?= go
 PNPM ?= pnpm
@@ -86,6 +86,11 @@ compat:
 
 compat-check:
 	node scripts/render-compat.mjs --check
+
+# Docs truthfulness (I-09): documented agent flags, env vars, make targets,
+# ports, helper scripts, and relative links match the code. Static, no root.
+docs-check:
+	@bash scripts/check-docs.sh
 
 # Go native fuzzing (I-05): short pass per target for CI; longer manual runs
 # via `make fuzz FUZZ_TIME=5m`. Seed corpora live in
