@@ -25,12 +25,10 @@ on:
       - deploy/**
       - agent/Dockerfile
       - agent/cmd/agent/main.go
+  # Manual runs are always dry runs: build everything, publish nothing.
+  # Publishing happens only on a pushed v* tag (see the plan job and the
+  # tag guards on every publish step below).
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: Build everything without publishing
-        type: boolean
-        default: true
 
 permissions: {}
 
@@ -44,8 +42,9 @@ env:
 
 jobs:
   # Single place that decides dry-run vs publish and the version string.
-  # Tag pushes publish; dispatch honors its input (default dry run); PRs
-  # always dry-run.
+  # Tag pushes publish; dispatch and PRs always dry-run. Publish steps
+  # additionally guard on the tag ref directly (see below), so a
+  # dry_run=false output off a tag could never push or release.
   plan:
     runs-on: ubuntu-24.04
     permissions:
@@ -59,7 +58,6 @@ jobs:
           EVENT: ${{ github.event_name }}
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
-          INPUT_DRY_RUN: ${{ inputs.dry_run }}
           SHA: ${{ github.sha }}
         run: |
           set -eu
@@ -68,9 +66,6 @@ jobs:
             echo "version=$REF_NAME" >> "$GITHUB_OUTPUT"
           else
             echo "dry_run=true" >> "$GITHUB_OUTPUT"
-            if [ "$EVENT" = "workflow_dispatch" ] && [ "$INPUT_DRY_RUN" = "false" ]; then
-              echo "dry_run=false" >> "$GITHUB_OUTPUT"
-            fi
             echo "version=dryrun-$(printf '%s' "$SHA" | cut -c1-7)" >> "$GITHUB_OUTPUT"
           fi
 
@@ -190,13 +185,16 @@ jobs:
       web_digest: ${{ steps.push-web.outputs.digest }}
     env:
       VERSION: ${{ needs.plan.outputs.version }}
-      PUSH: ${{ needs.plan.outputs.dry_run != 'true' }}
+      # Belt and suspenders: publish flag AND a tag ref. A non-tag run
+      # (dispatch, PR) builds both architectures without pushing, so a
+      # dryrun-* version can never move the :latest tags.
+      PUSH: ${{ needs.plan.outputs.dry_run != 'true' && startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - name: Log in to GHCR (publish only)
-        if: needs.plan.outputs.dry_run != 'true'
+        if: needs.plan.outputs.dry_run != 'true' && startsWith(github.ref, 'refs/tags/v')
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ghcr.io
@@ -330,9 +328,10 @@ jobs:
 
   # Keyless signing (publish only): cosign signs the pushed image digests
   # and the checksums file, so one signature covers binaries and SBOMs.
+  # Tag guard mirrors the images job: dry_run alone never publishes.
   sign:
     needs: [plan, images, assemble]
-    if: needs.plan.outputs.dry_run != 'true'
+    if: needs.plan.outputs.dry_run != 'true' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -372,9 +371,10 @@ jobs:
 
   # SLSA build provenance for the binaries and the pushed images
   # (publish only; attestations need the registry digests).
+  # Tag guard mirrors the images job: dry_run alone never publishes.
   attest:
     needs: [plan, images, assemble]
-    if: needs.plan.outputs.dry_run != 'true'
+    if: needs.plan.outputs.dry_run != 'true' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -409,9 +409,10 @@ jobs:
 
   # GitHub release from the CHANGELOG.md section matching the tag
   # (v0.3.0 reads ## [0.3.0]); publish only, via preinstalled gh.
+  # Tag guard mirrors the images job: dry_run alone never releases.
   publish:
     needs: [plan, assemble, sign, attest]
-    if: needs.plan.outputs.dry_run != 'true'
+    if: needs.plan.outputs.dry_run != 'true' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
       contents: write

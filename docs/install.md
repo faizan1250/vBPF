@@ -35,13 +35,14 @@ sessions) persists in the compose `api-data` volume.
 ## 2. Agent binary plus systemd (single host, no containers)
 
 For hosts that already run bpftrace and want the agent natively while
-keeping the API/web in containers (or elsewhere). Download
+keeping the API/web on the same host (run from source, §3 — not the
+stock compose stack). Download
 `agent-linux-amd64` (or `agent-linux-arm64`) plus `sha256sums.txt`
 and its signature bundle from a `v*` tag's release assets, then verify
 (see the verification section) and check the version:
 
 ```sh
-bin/agent-linux-amd64 --version
+./agent-linux-amd64 --version
 ```
 
 Install following [vbpf-agent.service](../deploy/vbpf-agent.service)
@@ -58,9 +59,13 @@ sudo systemctl enable --now vbpf-agent
 
 The unit runs `agent serve --addr 127.0.0.1:8787 --token-file
 /run/vbpf/agent.token` as the `vbpf-agent` user with only the tracing
-capability retain set. Point the API at it with `AGENT_URL` and
+capability retain set. Point a same-host API at it with `AGENT_URL` and
 `AGENT_TOKEN_FILE` in `.env` (the compose API defaults already assume
-the container agent; override both when the agent runs on the host).
+the container agent). The stock compose file hard-codes
+`AGENT_URL=http://agent:8787` and the token mount, so overriding `.env`
+alone does not repoint a containerized API — that setup needs a compose
+override that points `AGENT_URL` at the host and bind-mounts the host
+token file in.
 Browser clients stay refused unless `AGENT_ALLOWED_ORIGINS` names the
 exact UI origin.
 
@@ -100,7 +105,9 @@ workflow. What each file proves is spelled out in
 
 ```sh
 sha256sum -c sha256sums.txt
-cosign verify-blob --bundle sha256sums.txt.bundle sha256sums.txt
+cosign verify-blob --bundle sha256sums.txt.bundle sha256sums.txt \
+  --certificate-identity-regexp 'https://github.com/faizan1250/vBPF' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
 cosign verify ghcr.io/faizan1250/vbpf-agent:v0.3.0 \
   --certificate-identity-regexp 'https://github.com/faizan1250/vBPF' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
