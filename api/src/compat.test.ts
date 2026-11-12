@@ -24,7 +24,7 @@ const reportFiles = () =>
 
 const recipeIds = () =>
   readdirSync(join(root, "recipes"))
-    .filter((f) => f.endsWith(".yaml"))
+    .filter((f) => f.endsWith(".yaml") && !f.startsWith("_"))
     .map((f) => f.slice(0, -".yaml".length))
     .sort();
 

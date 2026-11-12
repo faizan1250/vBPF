@@ -19,7 +19,9 @@ const YamlMetaSchema = z
 export function loadRecipes(dir: string): Recipe[] {
   let files: string[];
   try {
-    files = readdirSync(dir).filter((f) => f.endsWith(".yaml"));
+    files = readdirSync(dir).filter(
+      (f) => f.endsWith(".yaml") && !f.startsWith("_"),
+    );
   } catch {
     return [];
   }

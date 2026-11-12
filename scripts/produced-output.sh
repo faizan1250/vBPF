@@ -192,8 +192,12 @@ s.close()' >/dev/null 2>&1; done) &
       OOM_CG="/sys/fs/cgroup/vbpf-oom-probe"
       mkdir -p "$OOM_CG" 2>/dev/null || true
       echo +memory > /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
-      echo 50M > "$OOM_CG/memory.max" 2>/dev/null || true
-      (python3 -c 'import ctypes,os
+      OOM_OK=0
+      if echo 50M > "$OOM_CG/memory.max" 2>/dev/null && [ "$(cat "$OOM_CG/memory.max" 2>/dev/null)" = "52428800" ]; then
+        OOM_OK=1
+      fi
+      if [ "$OOM_OK" -eq 1 ]; then
+        (python3 -c 'import ctypes,os
 cg=open("/sys/fs/cgroup/vbpf-oom-probe/cgroup.procs","w")
 libc=ctypes.CDLL("libc.so.6",use_errno=True)
 while True:
@@ -207,7 +211,10 @@ while True:
    x[i]=1
   os._exit(0)
  os.waitpid(c,0)' >/dev/null 2>&1) &
-      WORKLOAD_PIDS="$WORKLOAD_PIDS $!"
+        WORKLOAD_PIDS="$WORKLOAD_PIDS $!"
+      else
+        printf 'produced-output: warning: oom-kills workload skipped (cgroup memory limit unavailable)\n' >&2
+      fi
       ;;
     signal-generation)
       # Sleeper ignores USR1 so every kill() generates a signal event without
