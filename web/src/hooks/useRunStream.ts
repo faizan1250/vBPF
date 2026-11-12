@@ -2,7 +2,10 @@ import { useEffect, useRef } from "react";
 
 import { fixtureMode, type EventEnvelope } from "../lib/api.js";
 import { stderrText, summaryFrom } from "../lib/events.js";
-import { fixtureEvents as replayEvents } from "../lib/fixtures.js";
+import {
+  fixtureEvents as replayEvents,
+  fixtureScenarioId,
+} from "../lib/fixtures.js";
 import { useAppStore } from "../store/useAppStore.js";
 
 const FLUSH_MS = 100; // render at 10 Hz
@@ -108,9 +111,10 @@ export function useRunStream(
       let tick = 0;
       const chart = (chartHint ?? "bar") as
         "bar" | "histogram" | "timeseries" | "events" | "table";
+      const scenario = fixtureScenarioId(runId);
       fixtureTimer = window.setInterval(() => {
         tick += 1;
-        bufferRef.current.push(...replayEvents(chart, runId, tick));
+        bufferRef.current.push(...replayEvents(chart, runId, tick, scenario));
         const s = useAppStore.getState();
         if (s.runPhase === "stopping" || s.events.length >= 60) {
           s.setRunPhase("done");

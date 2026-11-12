@@ -40,8 +40,20 @@ export function ConfirmModal() {
   const start = useMutation({
     mutationFn: () => {
       if (fixtureMode()) {
+        // The run id carries the fixture scenario so the replay stream can
+        // serve scenario-specific data without a backend. Unknown scenarios
+        // fall back to the default key set in fixtureScenarioId.
+        const scenario = (generation?.generation_id ?? "").startsWith(
+          "gen_fixture_",
+        )
+          ? (generation?.generation_id ?? "")
+              .slice("gen_fixture_".length)
+              .split("_")
+              .slice(0, -1)
+              .join("_")
+          : "custom";
         return Promise.resolve({
-          run_id: `run_fixture_${Date.now()}`,
+          run_id: `run_fixture_${scenario}_${Date.now()}`,
           state: "running",
           origin: localRunOrigin(request.script, generation),
         });
@@ -85,11 +97,20 @@ export function ConfirmModal() {
       wide
     >
       <div className="flex flex-col gap-3">
-        <p className="text-sm text-muted-foreground">
-          This attaches a real eBPF probe to your kernel for{" "}
-          <strong className="text-foreground">{request.durationS}s</strong>.
-          Review the exact script that will run:
-        </p>
+        {fixtureMode() ? (
+          <p className="text-sm text-muted-foreground">
+            Demo mode: recorded data, nothing is executed. Review the recorded
+            script for a{" "}
+            <strong className="text-foreground">{request.durationS}s</strong>{" "}
+            replay:
+          </p>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            This attaches a real eBPF probe to your kernel for{" "}
+            <strong className="text-foreground">{request.durationS}s</strong>.
+            Review the exact script that will run:
+          </p>
+        )}
         <pre className="max-h-64 overflow-auto rounded-md border border-border bg-background p-3 font-mono text-xs">
           {request.script}
         </pre>

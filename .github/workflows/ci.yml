@@ -285,6 +285,14 @@ jobs:
           else
             echo "SKIP: no web/ yet (chromium e2e deferred to mock fixtures)"
           fi
+      - name: Offline fixture-demo E2E against dist (network blocked)
+        run: |
+          if [ -d web ]; then
+            VITE_FIXTURE_MODE=1 VITE_BASE_PATH=/vBPF/ pnpm -C web run build
+            VITE_BASE_PATH=/vBPF/ pnpm -C web run test:e2e:offline
+          else
+            echo "SKIP: no web/ yet (offline fixture demo deferred)"
+          fi
 
   # Eval harness in mock mode. No secrets are set or read here by design.
   eval-mock:
