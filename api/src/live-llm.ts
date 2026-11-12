@@ -112,6 +112,8 @@ export class LlmRequestError extends Error {}
 interface ProviderPreset {
   baseUrl: string;
   needsKey: boolean;
+  /** Wire protocol: OpenAI-compatible chat vs native Anthropic Messages. */
+  kind: "openai" | "anthropic";
 }
 
 export type BaseUrlValidation =
@@ -211,7 +213,7 @@ export interface LlmCallLog {
 }
 
 function outcomeForStatus(status: number): LlmCallOutcome {
-  if (status === 429) return "rate_limited";
+  if (status === 429 || status === 529) return "rate_limited";
   if (status === 401 || status === 403) return "auth";
   if (status === 0 || (status >= 300 && status < 400)) return "redirect";
   if (status === 400 || status === 404 || status === 422) return "bad_request";
@@ -239,38 +241,105 @@ export function parseUsage(envelope: unknown): LlmUsage | undefined {
   const raw = (envelope as { usage?: unknown }).usage;
   if (typeof raw !== "object" || raw === null) return undefined;
   const record = raw as Record<string, unknown>;
+  const num = (value: unknown): number | undefined =>
+    typeof value === "number" && Number.isFinite(value) && value >= 0
+      ? Math.floor(value)
+      : undefined;
+  // Anthropic Messages reports input_tokens/output_tokens.
+  const promptTokens =
+    num(record["prompt_tokens"]) ?? num(record["input_tokens"]);
+  const completionTokens =
+    num(record["completion_tokens"]) ?? num(record["output_tokens"]);
   const out: LlmUsage = {};
-  const promptTokens = record["prompt_tokens"];
-  const completionTokens = record["completion_tokens"];
-  if (
-    typeof promptTokens === "number" &&
-    Number.isFinite(promptTokens) &&
-    promptTokens >= 0
-  ) {
-    out.prompt_tokens = Math.floor(promptTokens);
-  }
-  if (
-    typeof completionTokens === "number" &&
-    Number.isFinite(completionTokens) &&
-    completionTokens >= 0
-  ) {
-    out.completion_tokens = Math.floor(completionTokens);
-  }
+  if (promptTokens !== undefined) out.prompt_tokens = promptTokens;
+  if (completionTokens !== undefined) out.completion_tokens = completionTokens;
   return out.prompt_tokens !== undefined || out.completion_tokens !== undefined
     ? out
     : undefined;
 }
 
+/** Concatenated `text` blocks of a native Anthropic Messages envelope. */
+function anthropicText(envelope: unknown): string | undefined {
+  if (typeof envelope !== "object" || envelope === null) return undefined;
+  const content = (envelope as { content?: unknown }).content;
+  if (!Array.isArray(content)) return undefined;
+  const texts: string[] = [];
+  for (const block of content) {
+    if (
+      typeof block === "object" &&
+      block !== null &&
+      (block as { type?: unknown }).type === "text"
+    ) {
+      const text = (block as { text?: unknown }).text;
+      if (typeof text === "string") texts.push(text);
+    }
+  }
+  const joined = texts.join("");
+  return joined === "" ? undefined : joined;
+}
+
+/** `tool_use` input for a named tool in a native Anthropic Messages envelope. */
+function anthropicToolInput(envelope: unknown, name: string): unknown {
+  if (typeof envelope !== "object" || envelope === null) return undefined;
+  const content = (envelope as { content?: unknown }).content;
+  if (!Array.isArray(content)) return undefined;
+  for (const block of content) {
+    if (
+      typeof block === "object" &&
+      block !== null &&
+      (block as { type?: unknown }).type === "tool_use" &&
+      (block as { name?: unknown }).name === name
+    ) {
+      return (block as { input?: unknown }).input;
+    }
+  }
+  return undefined;
+}
+
 const PRESETS: Record<string, ProviderPreset> = {
-  groq: { baseUrl: "https://api.groq.com/openai/v1", needsKey: true },
-  cerebras: { baseUrl: "https://api.cerebras.ai/v1", needsKey: true },
-  openrouter: { baseUrl: "https://openrouter.ai/api/v1", needsKey: true },
-  ollama: { baseUrl: "http://127.0.0.1:11434/v1", needsKey: false },
+  groq: {
+    baseUrl: "https://api.groq.com/openai/v1",
+    needsKey: true,
+    kind: "openai",
+  },
+  cerebras: {
+    baseUrl: "https://api.cerebras.ai/v1",
+    needsKey: true,
+    kind: "openai",
+  },
+  openrouter: {
+    baseUrl: "https://openrouter.ai/api/v1",
+    needsKey: true,
+    kind: "openai",
+  },
+  ollama: {
+    baseUrl: "http://127.0.0.1:11434/v1",
+    needsKey: false,
+    kind: "openai",
+  },
+  // Base URL from OpenAI's official OpenAPI spec
+  // (servers: https://api.openai.com/v1); `response_format: json_object`
+  // JSON mode per the official Chat Completions reference.
+  openai: {
+    baseUrl: "https://api.openai.com/v1",
+    needsKey: true,
+    kind: "openai",
+  },
+  // Base URL from Anthropic's official Messages docs
+  // (POST https://api.anthropic.com/v1/messages). Native adapter, not the
+  // OpenAI-compat layer: Anthropic documents the compat layer as
+  // test-only (not production-ready) and it 400s on `json_object`.
+  anthropic: {
+    baseUrl: "https://api.anthropic.com/v1",
+    needsKey: true,
+    kind: "anthropic",
+  },
   // Base URL from Google's official OpenAI-compatibility docs
   // (https://ai.google.dev/gemini-api/docs/openai).
   gemini: {
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     needsKey: true,
+    kind: "openai",
   },
 };
 
@@ -385,6 +454,7 @@ interface ProviderRuntime {
   name: string;
   baseUrl: string;
   needsKey: boolean;
+  kind: "openai" | "anthropic";
   keys: string[];
   disabled: boolean[];
   active: number;
@@ -451,6 +521,23 @@ interface ChatCompletionPayload {
   tool_choice?: { type: string; function: { name: string } };
 }
 
+// Native Anthropic Messages payload. `system` is top-level (not a message);
+// `json_object` has no wire equivalent here, so text modes send no shaping
+// fields and rely on the JSON-only system instruction instead.
+interface AnthropicPayload {
+  model: string;
+  max_tokens: number;
+  system?: string;
+  messages: ChatMessage[];
+  temperature?: number;
+  tools?: Array<{ name: string; description?: string; input_schema: unknown }>;
+  tool_choice?: { type: string; name?: string };
+}
+
+// Long-stable API version: newer versions drop temperature/top_p/top_k,
+// which generation payloads still send.
+const ANTHROPIC_VERSION = "2023-06-01";
+
 /** Single status classifier shared by generation and explain. */
 function classifyResponse(
   providerName: string,
@@ -472,11 +559,12 @@ function classifyResponse(
       message: `${providerName}: key rejected (${res.status})`,
     };
   }
-  if (res.status === 429) {
+  // 529 is Anthropic's overloaded signal; treat like a rate limit.
+  if (res.status === 429 || res.status === 529) {
     return {
       ok: false,
       kind: "rate",
-      message: `${providerName}/${model}: rate limited (429)`,
+      message: `${providerName}/${model}: rate limited (${res.status})`,
       cooldownMs: parseRetryAfterMs(res.headers.get("retry-after"), now),
     };
   }
@@ -537,9 +625,10 @@ async function requestChat(
   fetchFn: typeof fetch,
   providerName: string,
   baseUrl: string,
+  kind: "openai" | "anthropic",
   key: string | undefined,
   model: string,
-  payload: ChatCompletionPayload,
+  payload: ChatCompletionPayload | AnthropicPayload,
   opts: { timeoutMs: number; maxBodyBytes: number; signal?: AbortSignal },
 ): Promise<
   | { ok: true; text: string; status: number }
@@ -567,8 +656,14 @@ async function requestChat(
       const headers: Record<string, string> = {
         "content-type": "application/json",
       };
-      if (key !== undefined) headers["authorization"] = `Bearer ${key}`;
-      res = await fetchFn(`${baseUrl}/chat/completions`, {
+      const path = kind === "anthropic" ? "/messages" : "/chat/completions";
+      if (kind === "anthropic") {
+        if (key !== undefined) headers["x-api-key"] = key;
+        headers["anthropic-version"] = ANTHROPIC_VERSION;
+      } else if (key !== undefined) {
+        headers["authorization"] = `Bearer ${key}`;
+      }
+      res = await fetchFn(`${baseUrl}${path}`, {
         method: "POST",
         redirect: "manual",
         signal: ctrl.signal,
@@ -881,6 +976,7 @@ export class LiveLlmChain implements LlmClient {
       return {
         name,
         baseUrl: resolved.baseUrl,
+        kind: PRESETS[name]?.kind ?? "openai",
         needsKey: presetNeedsKey(name, env),
         keys: discoverKeys(name, env),
         disabled: [],
@@ -1312,17 +1408,26 @@ export class LiveLlmChain implements LlmClient {
       this.fetchFn,
       p.name,
       p.baseUrl,
+      p.kind,
       key,
       model,
-      {
-        model,
-        messages: [
-          { role: "system", content: EXPLAIN_SYSTEM },
-          { role: "user", content: sent },
-        ],
-        temperature: 0.2,
-        max_tokens: 600,
-      },
+      p.kind === "anthropic"
+        ? {
+            model,
+            max_tokens: 600,
+            system: EXPLAIN_SYSTEM,
+            messages: [{ role: "user", content: sent }],
+            temperature: 0.2,
+          }
+        : {
+            model,
+            messages: [
+              { role: "system", content: EXPLAIN_SYSTEM },
+              { role: "user", content: sent },
+            ],
+            temperature: 0.2,
+            max_tokens: 600,
+          },
       { timeoutMs, maxBodyBytes: this.maxBodyBytes, signal },
     );
     const latency_ms = Date.now() - started;
@@ -1349,7 +1454,10 @@ export class LiveLlmChain implements LlmClient {
         usage?: unknown;
       };
       const usage = parseUsage(envelope);
-      const content = envelope.choices?.[0]?.message?.content;
+      const content =
+        p.kind === "anthropic"
+          ? anthropicText(envelope)
+          : envelope.choices?.[0]?.message?.content;
       if (typeof content !== "string" || content.trim() === "") {
         this.logCall({
           provider: p.name,
@@ -1445,6 +1553,163 @@ export class LiveLlmChain implements LlmClient {
     return { model, messages, temperature: 0.2, max_tokens: 2000 };
   }
 
+  private buildAnthropicPayload(
+    model: string,
+    system: string,
+    user: string,
+    mode: JsonMode,
+    maxTokens: number,
+  ): AnthropicPayload {
+    const base: AnthropicPayload = {
+      model,
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: "user", content: user }],
+      temperature: 0.2,
+    };
+    if (mode !== "tool") return base;
+    return {
+      ...base,
+      tools: [
+        {
+          name: SUBMIT_PROBE_TOOL_NAME,
+          description: "Submit the generated bpftrace probe.",
+          input_schema: SUBMIT_PROBE_PARAMETERS,
+        },
+      ],
+      tool_choice: { type: "tool", name: SUBMIT_PROBE_TOOL_NAME },
+    };
+  }
+
+  private parseAnthropicChat(
+    p: ProviderRuntime,
+    keyIndex: number,
+    model: string,
+    envelope: unknown,
+    status: number,
+    mode: JsonMode,
+    promptChars: number,
+    latency_ms: number,
+  ): { outcome: ProviderOutcome; status: number } {
+    const usage = parseUsage(envelope);
+    try {
+      if (mode === "tool") {
+        const input = anthropicToolInput(envelope, SUBMIT_PROBE_TOOL_NAME);
+        if (input === undefined || input === null || input === "") {
+          this.logCall({
+            provider: p.name,
+            model,
+            key_index: keyIndex,
+            status,
+            outcome: "output_invalid",
+            latency_ms,
+            prompt_chars: promptChars,
+            ...(usage !== undefined ? { usage } : {}),
+            error: sanitizeErrorMessage(
+              `${p.name}/${model}: missing content tool_use ${SUBMIT_PROBE_TOOL_NAME}`,
+            ),
+          });
+          return {
+            outcome: {
+              ok: false,
+              kind: "model",
+              message: `${p.name}/${model}: missing content tool_use ${SUBMIT_PROBE_TOOL_NAME}`,
+            },
+            status,
+          };
+        }
+        const parsed =
+          typeof input === "string"
+            ? LlmOutputSchema.parse(JSON.parse(input) as unknown)
+            : LlmOutputSchema.parse(input);
+        this.logCall({
+          provider: p.name,
+          model,
+          key_index: keyIndex,
+          status,
+          outcome: "ok",
+          latency_ms,
+          prompt_chars: promptChars,
+          ...(usage !== undefined ? { usage } : {}),
+        });
+        return {
+          outcome: {
+            ok: true,
+            output: parsed,
+            model,
+            ...(usage !== undefined ? { usage } : {}),
+          },
+          status,
+        };
+      }
+      const content = anthropicText(envelope);
+      if (content === undefined) {
+        this.logCall({
+          provider: p.name,
+          model,
+          key_index: keyIndex,
+          status,
+          outcome: "output_invalid",
+          latency_ms,
+          prompt_chars: promptChars,
+          ...(usage !== undefined ? { usage } : {}),
+          error: sanitizeErrorMessage(
+            `${p.name}/${model}: missing content text`,
+          ),
+        });
+        return {
+          outcome: {
+            ok: false,
+            kind: "provider",
+            message: `${p.name}/${model}: missing content text`,
+          },
+          status,
+        };
+      }
+      const parsed = LlmOutputSchema.parse(extractJsonPayload(content));
+      this.logCall({
+        provider: p.name,
+        model,
+        key_index: keyIndex,
+        status,
+        outcome: "ok",
+        latency_ms,
+        prompt_chars: promptChars,
+        ...(usage !== undefined ? { usage } : {}),
+      });
+      return {
+        outcome: {
+          ok: true,
+          output: parsed,
+          model,
+          ...(usage !== undefined ? { usage } : {}),
+        },
+        status,
+      };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "invalid payload";
+      this.logCall({
+        provider: p.name,
+        model,
+        key_index: keyIndex,
+        status,
+        outcome: "output_invalid",
+        latency_ms,
+        prompt_chars: promptChars,
+        ...(err instanceof Error ? { error_name: err.name } : {}),
+        error: sanitizeErrorMessage(`${p.name}/${model}: ${reason}`),
+      });
+      return {
+        outcome: {
+          ok: false,
+          kind: "model",
+          message: `${p.name}/${model}: ${reason}`,
+        },
+        status,
+      };
+    }
+  }
+
   private async postChat(
     p: ProviderRuntime,
     key: string | undefined,
@@ -1523,16 +1788,19 @@ export class LiveLlmChain implements LlmClient {
       this.fetchFn,
       p.name,
       p.baseUrl,
+      p.kind,
       key,
       model,
-      this.buildChatPayload(
-        model,
-        [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        mode,
-      ),
+      p.kind === "anthropic"
+        ? this.buildAnthropicPayload(model, system, user, mode, 2000)
+        : this.buildChatPayload(
+            model,
+            [
+              { role: "system", content: system },
+              { role: "user", content: user },
+            ],
+            mode,
+          ),
       { timeoutMs, maxBodyBytes: this.maxBodyBytes, signal },
     );
     const latency_ms = Date.now() - started;
@@ -1571,6 +1839,18 @@ export class LiveLlmChain implements LlmClient {
         }>;
         usage?: unknown;
       };
+      if (p.kind === "anthropic") {
+        return this.parseAnthropicChat(
+          p,
+          keyIndex,
+          model,
+          envelope,
+          result.status,
+          mode,
+          promptChars,
+          latency_ms,
+        );
+      }
       const usage = parseUsage(envelope);
       const message = envelope.choices?.[0]?.message;
       if (mode === "tool") {
