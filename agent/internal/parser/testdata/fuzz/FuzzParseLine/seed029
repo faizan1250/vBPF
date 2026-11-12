@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"type\": \"printf\", \"data\": \"head pid=39454 file=/usr/lib/locale/C.utf8/LC_PAPER\\n\"}")

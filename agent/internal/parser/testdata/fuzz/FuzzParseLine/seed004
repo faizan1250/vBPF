@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("{\"type\": \"printf\", \"data\": \"python3 pid=30981 node=example.com service=80\\n\"}")

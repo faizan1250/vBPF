@@ -99,6 +99,18 @@ jobs:
       - name: make parity (shared validator vectors, no root needed)
         run: make parity
 
+  # Go native fuzzing (I-05): short pass per target with committed seeds.
+  # No root, no bpftrace needed. Longer soaks are manual via FUZZ_TIME.
+  fuzz-short:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: agent/go.mod
+      - name: make fuzz (short pass, no root needed)
+        run: make fuzz
+
   # Dependency vulnerability scan (Go). Mock-only, no secrets.
   vuln:
     runs-on: ubuntu-24.04

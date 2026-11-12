@@ -1,6 +1,19 @@
 export const MAX_SCRIPT_BYTES = 8 * 1024;
 export const MAX_PROBES = 50;
 
+// Bounds every static-validation error/warning so fuzz-generated (or
+// adversarial) probe names cannot echo unbounded raw input back to callers.
+// Truncation keeps the message prefix, which is what the taxonomy classifier
+// matches on. Mirrors maxValidatorErrorLen in agent/internal/server/validate.go.
+export const MAX_VALIDATOR_ERROR_LEN = 500;
+
+function truncateValidatorMessage(s: string): string {
+  const chars = Array.from(s);
+  return chars.length <= MAX_VALIDATOR_ERROR_LEN
+    ? s
+    : chars.slice(0, MAX_VALIDATOR_ERROR_LEN).join("");
+}
+
 const C_DECL_RE = /^(struct|enum|union)(\s+[A-Za-z_][A-Za-z0-9_]*)?$/;
 const PATH_BEARING_PROVIDERS = [
   "uprobe:",
@@ -1125,8 +1138,8 @@ export function staticValidate(
   return {
     ...(errors.length > 0 ? { code: classifyStaticErrors(errors) } : {}),
     probes,
-    errors,
-    warnings,
+    errors: errors.map(truncateValidatorMessage),
+    warnings: warnings.map(truncateValidatorMessage),
     probe_count: probeCount,
   };
 }

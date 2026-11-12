@@ -1,0 +1,2 @@
+go test fuzz v1
+string("uprobe:/lib//libc.so.6:m")

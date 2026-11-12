@@ -1,0 +1,2 @@
+go test fuzz v1
+string("uprobe:/lib/libcrypt.so.1:crypt { @x = count(); }")

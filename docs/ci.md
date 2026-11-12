@@ -13,6 +13,7 @@ no service code: every `make` target prints SKIP when its dir is absent.
 | contract      | API contract vs fake agent fixture                                                               |
 | e2e-mocked    | Playwright, chromium only, mock fixtures                                                         |
 | eval-mock     | `make eval` with `LLM_MODE=mock`, no secrets                                                     |
+| fuzz-short    | `make fuzz` (FUZZ_TIME=30s per target), seed corpora committed                                   |
 | docker-build  | Image build only — no push, no privileged run                                                    |
 
 Go floor: `agent/go.mod` (`go 1.26.11`, resolved from the file by

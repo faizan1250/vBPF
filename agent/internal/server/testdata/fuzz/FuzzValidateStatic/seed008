@@ -1,0 +1,2 @@
+go test fuzz v1
+string("// TCP_ESTABLISHED == 1, AF_INET == 2.\ntracepoint:sock:inet_sock_set_state\n{\n  if (args->newstate == 1 && args->family == 2) {\n    printf(\"%s %s:%d -> %s:%d\\n\", comm,\n      ntop(args->saddr), args->sport, ntop(args->daddr), args->dport);\n  }\n}\n")

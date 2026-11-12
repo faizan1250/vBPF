@@ -1,0 +1,2 @@
+go test fuzz v1
+string("tracepoint:sock:inet_sock_set_state\n{\n  if (args->newstate == 1 && args->family == 2) {\n    @conn[comm, ntop(args->daddr), args->dport] = count();\n  }\n}\ninterval:s:1\n{\n  print(@conn);\n  clear(@conn);\n}\n")

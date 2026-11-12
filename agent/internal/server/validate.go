@@ -18,6 +18,30 @@ import (
 // MaxScriptBytes caps validated scripts at 8 KB.
 const MaxScriptBytes = 8 * 1024
 
+// maxValidatorErrorLen caps every static-validation error and warning so a
+// fuzz-generated (or adversarial) probe name cannot echo unbounded raw input
+// back to callers. Truncation keeps the message prefix, which is what the
+// taxonomy classifier matches on. Mirrors MAX_VALIDATOR_ERROR_LEN in
+// api/src/validator.ts and truncateErrors there.
+const maxValidatorErrorLen = 500
+
+// truncateValidatorError bounds one message to maxValidatorErrorLen runes.
+func truncateValidatorError(s string) string {
+	r := []rune(s)
+	if len(r) <= maxValidatorErrorLen {
+		return s
+	}
+	return string(r[:maxValidatorErrorLen])
+}
+
+// truncateValidatorErrors bounds every message in place.
+func truncateValidatorErrors(msgs []string) []string {
+	for i := range msgs {
+		msgs[i] = truncateValidatorError(msgs[i])
+	}
+	return msgs
+}
+
 var (
 	cDeclRe = regexp.MustCompile(`^(struct|enum|union)(\s+[A-Za-z_][A-Za-z0-9_]*)?$`)
 )
@@ -876,7 +900,9 @@ func StaticValidate(script string, catalog *Catalog) ValidateResult {
 	code := ""
 	if len(errors) > 0 {
 		code = classifyValidationError(errors)
+		errors = truncateValidatorErrors(errors)
 	}
+	warnings = truncateValidatorErrors(warnings)
 	return ValidateResult{
 		Code:       code,
 		Probes:     probesOrEmpty(probes),
@@ -993,7 +1019,11 @@ func errorsOrEmpty(e []string) []string {
 }
 
 func expandCount(pattern string, known map[string]bool) int {
-	prefix := pattern[:strings.IndexByte(pattern, '*')]
+	star := strings.IndexByte(pattern, '*')
+	if star < 0 {
+		return 0
+	}
+	prefix := pattern[:star]
 	n := 0
 	for k := range known {
 		if strings.HasPrefix(k, prefix) {

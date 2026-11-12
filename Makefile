@@ -5,10 +5,12 @@
 
 SHELL := /bin/sh
 .SHELLFLAGS := -eu -c
-.PHONY: setup lint test agent-build api-dev web-dev eval test-integration recipes-check vuln secrets parity
+.PHONY: setup lint test agent-build api-dev web-dev eval test-integration recipes-check vuln secrets parity fuzz test-differential
 
 GO ?= go
 PNPM ?= pnpm
+# Short per-target fuzz pass for CI (override for longer manual runs).
+FUZZ_TIME ?= 30s
 
 setup:
 	@$(GO) version
@@ -70,6 +72,28 @@ parity:
 	node scripts/parity-vectors.mjs
 	@if [ -d agent ]; then cd agent && $(GO) test ./internal/server/ -run 'TestValidatorVectors' -count=1; else echo "SKIP: no agent/ yet"; fi
 	@if [ -d api ]; then $(PNPM) -C api exec vitest run src/validator-vectors.test.ts; else echo "SKIP: no api/ yet"; fi
+
+# Go native fuzzing (I-05): short pass per target for CI; longer manual runs
+# via `make fuzz FUZZ_TIME=5m`. Seed corpora live in
+# agent/internal/*/testdata/fuzz (regenerate with
+# `cd agent && go run ../scripts/gen-fuzz-corpus.go`). Failing inputs are
+# written to testdata/fuzz/<Target>/ and must be kept or fixed, never
+# deleted silently.
+fuzz:
+	@if [ -d agent ]; then cd agent && $(GO) test ./internal/server/ -fuzz=FuzzValidateStatic -fuzztime=$(FUZZ_TIME) .; else echo "SKIP: no agent/ yet"; fi
+	@if [ -d agent ]; then cd agent && $(GO) test ./internal/server/ -fuzz=FuzzLexer -fuzztime=$(FUZZ_TIME) .; else echo "SKIP: no agent/ yet"; fi
+	@if [ -d agent ]; then cd agent && $(GO) test ./internal/server/ -fuzz=FuzzUprobeTarget -fuzztime=$(FUZZ_TIME) .; else echo "SKIP: no agent/ yet"; fi
+	@if [ -d agent ]; then cd agent && $(GO) test ./internal/server/ -fuzz=FuzzWildcard -fuzztime=$(FUZZ_TIME) .; else echo "SKIP: no agent/ yet"; fi
+	@if [ -d agent ]; then cd agent && $(GO) test ./internal/parser/ -fuzz=FuzzParseLine -fuzztime=$(FUZZ_TIME) .; else echo "SKIP: no agent/ yet"; fi
+	@if [ -d agent ]; then cd agent && $(GO) test ./internal/parser/ -fuzz=FuzzStream -fuzztime=$(FUZZ_TIME) .; else echo "SKIP: no agent/ yet"; fi
+
+# Differential oracle (I-05, integration-only, needs Linux + bpftrace):
+# fails only when bpftrace flags a script unsafe that the validator accepts.
+# Validator-stricter disagreements are logged, not failures. Skips (exit 0)
+# without bpftrace or a readable catalog, so it is safe anywhere.
+test-differential:
+	@if [ -d agent ]; then cd agent && $(GO) test -tags integration ./internal/server/ -run 'TestDifferentialOracle' -count=1 -v; \
+		else echo "SKIP: no agent/ yet"; fi
 
 # Secret scan (R-22 keys hygiene). No root needed; skips when gitleaks is
 # not installed. CI runs gitleaks-action on every push/PR instead.
