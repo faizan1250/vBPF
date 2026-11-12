@@ -79,3 +79,51 @@ func TestParseStatusCaps(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "CapEff"))
 }
+
+func TestParseStatusCapsMissingKey(t *testing.T) {
+	cases := map[string]string{
+		"CapEff": "Name:\tagent\nCapPrm:\t0000000000000000\nCapInh:\t0000000000000000\n",
+		"CapPrm": "Name:\tagent\nCapEff:\t0000000000000000\nCapInh:\t0000000000000000\n",
+		"CapInh": "Name:\tagent\nCapEff:\t0000000000000000\nCapPrm:\t0000000000000000\n",
+	}
+	for missing, status := range cases {
+		_, _, _, err := ParseStatusCaps(status)
+		require.Error(t, err, "missing %s must error", missing)
+		require.Contains(t, err.Error(), "missing")
+		require.Contains(t, err.Error(), missing)
+	}
+}
+
+func TestHardenStatusCrossCheckMismatch(t *testing.T) {
+	ops := Ops{
+		SetNoNewPrivs: func() error { return nil },
+		GetCaps:       func() (uint64, uint64, uint64, error) { return ^uint64(0), ^uint64(0), 0, nil },
+		SetCaps:       func(_, _, _ uint64) error { return nil },
+		ReadStatusCaps: func() (uint64, uint64, uint64, error) {
+			return 0, 0, 0, nil
+		},
+	}
+	var buf bytes.Buffer
+	final := Harden(ops, testLogger(&buf))
+	require.Equal(t, FormatCaps(RetainMask, RetainMask, 0), final)
+	out := buf.String()
+	require.Contains(t, out, "mismatch")
+	require.Contains(t, out, "continuing")
+}
+
+func TestHardenStatusCrossCheckUnreadable(t *testing.T) {
+	ops := Ops{
+		SetNoNewPrivs: func() error { return nil },
+		GetCaps:       func() (uint64, uint64, uint64, error) { return ^uint64(0), ^uint64(0), 0, nil },
+		SetCaps:       func(_, _, _ uint64) error { return nil },
+		ReadStatusCaps: func() (uint64, uint64, uint64, error) {
+			return 0, 0, 0, errors.New("denied")
+		},
+	}
+	var buf bytes.Buffer
+	final := Harden(ops, testLogger(&buf))
+	require.Equal(t, FormatCaps(RetainMask, RetainMask, 0), final)
+	out := buf.String()
+	require.Contains(t, out, "unreadable")
+	require.Contains(t, out, "continuing")
+}

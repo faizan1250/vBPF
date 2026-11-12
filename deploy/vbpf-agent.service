@@ -54,7 +54,7 @@ ReadWritePaths=/run/vbpf
 
 # Loopback serve only: stdout/stderr pipes to bpftrace plus TCP to 127.0.0.1.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-SystemCallFilter=@system-service @bpf
+SystemCallFilter=@system-service bpf perf_event_open
 SystemCallArchitectures=native
 
 # MemoryDenyWriteExecute is deliberately absent: bpftrace JIT-compiles BPF
