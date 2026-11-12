@@ -9,6 +9,12 @@ const EnvSchema = z
     WEB_ORIGIN: z.string().min(1).default("http://localhost:5173"),
     DATABASE_PATH: z.string().min(1).default("./run/api.sqlite3"),
     RECIPES_DIR: z.string().min(1).default("./recipes"),
+    // Trust boundary for X-Forwarded-For (D-81): "false" (default) trusts no
+    // proxy and keys rate limits on the socket address; otherwise a
+    // comma-separated IP/CIDR allowlist of proxy peers (compose: the nginx
+    // service network). "true" trusts all (tests only). Bare hop counts are
+    // rejected by Fastify (fail-closed), so they map to "false".
+    TRUST_PROXY: z.string().min(1).default("false"),
     // Deprecated: mock-mode label only, ignored by the live chain.
     LLM_MODEL: z.string().min(1).default("mock"),
     LLM_MODE: z.enum(["mock", "live"]).default("mock"),
@@ -31,6 +37,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     WEB_ORIGIN: env["WEB_ORIGIN"],
     DATABASE_PATH: env["DATABASE_PATH"],
     RECIPES_DIR: env["RECIPES_DIR"],
+    TRUST_PROXY: env["TRUST_PROXY"],
     LLM_MODEL: env["LLM_MODEL"],
     LLM_MODE: env["LLM_MODE"],
     LLM_PROVIDER_CHAIN: env["LLM_PROVIDER_CHAIN"],

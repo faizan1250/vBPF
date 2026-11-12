@@ -856,6 +856,7 @@ describe("generate rate limit", () => {
       llmModel: "mock",
       llmMode: "mock",
       generateRateLimit: { max: 1, windowMs: 60_000 },
+      trustProxy: "172.18.0.2/32",
     });
     try {
       // Same socket IP (the nginx hop) for every caller; only X-Forwarded-For
@@ -875,6 +876,39 @@ describe("generate rate limit", () => {
       expect((await post("10.0.0.1")).statusCode).toBe(200);
       expect((await post("10.0.0.1")).statusCode).toBe(429);
       expect((await post("10.0.0.2")).statusCode).toBe(200);
+    } finally {
+      await limited.close();
+    }
+  });
+
+  it("ignores a spoofed header from an untrusted peer", async () => {
+    const limited = await buildApp({
+      agentUrl: fake.url,
+      tokenFile,
+      dbPath: ":memory:",
+      recipesDir: RECIPES_DIR,
+      webOrigin: "http://localhost:5173",
+      llmModel: "mock",
+      llmMode: "mock",
+      generateRateLimit: { max: 1, windowMs: 60_000 },
+    });
+    try {
+      // Default trustProxy is false: X-Forwarded-For is ignored, so distinct
+      // spoofed values share the socket-address budget.
+      const post = (forwardedFor: string) =>
+        limited.inject({
+          method: "POST",
+          url: "/api/generate",
+          payload: { prompt: "cpu?" },
+          remoteAddress: "10.9.9.9",
+          headers: {
+            host: "localhost",
+            "content-type": "application/json",
+            "x-forwarded-for": forwardedFor,
+          },
+        });
+      expect((await post("10.0.0.1")).statusCode).toBe(200);
+      expect((await post("10.0.0.2")).statusCode).toBe(429);
     } finally {
       await limited.close();
     }
