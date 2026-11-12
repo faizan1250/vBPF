@@ -2,7 +2,7 @@
 # stage installs production dependencies only and runs the server as the
 # non-root node user: the entrypoint stages the root-owned 0600 agent token
 # where node can read it, then re-execs the server as uid 1000 via setpriv.
-FROM node:22-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS builder
+FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS builder
 
 RUN npm install -g pnpm@9 \
   && for i in 1 2 3 4 5; do \
@@ -31,7 +31,7 @@ RUN pnpm --filter @vbpf/schemas run build \
   && node --input-type=module -e "import{readFileSync,writeFileSync}from'node:fs';const p='packages/schemas/package.json';const j=JSON.parse(readFileSync(p));j.main='./dist/index.js';j.types='./dist/index.d.ts';writeFileSync(p,JSON.stringify(j,null,2)+'\n')" \
   && pnpm --filter @vbpf/api run build
 
-FROM node:22-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS runtime
+FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS runtime
 
 RUN npm install -g pnpm@9
 
