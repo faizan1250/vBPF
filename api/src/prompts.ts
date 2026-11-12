@@ -32,6 +32,26 @@ export const GOTCHAS = [
 // Per-section cap for `bpftrace -vl` output inside reference data.
 export const ARG_SECTION_CAP = 2000;
 
+// I-11: the model only sees catalog-verified probe names; this rule binds
+// that list to the generation task. Baked into every probe block. The last
+// sentence keeps vague/novel asks generating (closest listed probe plus a
+// stated assumption) instead of refusing for lack of an exact probe.
+export const PROBE_USE_RULE =
+  "Use only these probes (plus BEGIN/END, profile:, interval:, software:, and allowed uprobe:libc:<symbol>). Do not invent probe names. " +
+  "If the request is vague or no listed probe fits exactly, pick the closest listed probe and state the assumption in explanation; benign observability requests must still produce a script.";
+
+// I-11: retrieved recipes are the preferred starting point, not decoration.
+export const RECIPE_PREFERENCE =
+  "Start from the first recipe whose probes fit the request; adapt its probes and argument formats.";
+
+// I-11 few-shot skeletons for the common patterns (recipe bodies in the
+// prompt cover the per-family examples). Static and tiny: never shrunk.
+export const PATTERNS = [
+  "Latency histogram: tracepoint:block:block_rq_issue { @start[args->dev,args->sector] = nsecs; } tracepoint:block:block_rq_complete /@start[args->dev,args->sector]/ { @lat = hist((nsecs - @start[args->dev,args->sector]) / 1000); delete(@start[args->dev,args->sector]); }",
+  "Count by comm: profile:hz:99 { @cpu[comm] = count(); }",
+  "Interval snapshot-and-clear: interval:s:1 { print(@x); clear(@x); }",
+].join("\n");
+
 // Fallback when agent probe-args is unreachable; runGenerate replaces this
 // with real `bpftrace -vl` output for the top tracepoints when available.
 export const ARG_FORMATS_FALLBACK = [
@@ -164,9 +184,26 @@ function renderContext(
     "### Reference data: probes",
     probeBlock,
     "",
+    "### Reference data: patterns",
+    PATTERNS,
+    "",
     "### Reference data: argument formats",
     argBlock,
   ].join("\n");
+}
+
+function buildRecipeBlock(recipes: RecipeWithBody[]): string {
+  if (recipes.length === 0) {
+    return "Recipes: none matched; write minimal bpftrace from probes only.";
+  }
+  return `${RECIPE_PREFERENCE}\n${recipes.map(formatRecipeFewShot).join("\n\n")}`;
+}
+
+function buildProbeBlock(probes: string[]): string {
+  if (probes.length === 0) {
+    return `${PROBE_USE_RULE}\nProbes: catalog unavailable; use BEGIN/END or well-known tracepoints only.`;
+  }
+  return `${PROBE_USE_RULE}\nProbes:\n${probes.slice(0, 40).join("\n")}`;
 }
 
 /**
@@ -187,14 +224,8 @@ function shrinkToBudget(
   const sections = [...argSections];
   const recipeList = [...recipes];
   const fits = (): boolean => {
-    const recipeBlock =
-      recipeList.length === 0
-        ? "Recipes: none matched; write minimal bpftrace from probes only."
-        : recipeList.map(formatRecipeFewShot).join("\n\n");
-    const probeBlock =
-      probeList.length === 0
-        ? "Probes: catalog unavailable; use BEGIN/END or well-known tracepoints only."
-        : `Probes:\n${probeList.join("\n")}`;
+    const recipeBlock = buildRecipeBlock(recipeList);
+    const probeBlock = buildProbeBlock(probeList);
     const argBlock =
       sections.length === 0
         ? "Argument formats: omitted to fit the prompt budget."
@@ -218,14 +249,8 @@ function shrinkToBudget(
         "system, user request, and feedback are never truncated",
     );
   }
-  const recipeBlock =
-    recipeList.length === 0
-      ? "Recipes: none matched; write minimal bpftrace from probes only."
-      : recipeList.map(formatRecipeFewShot).join("\n\n");
-  const probeBlock =
-    probeList.length === 0
-      ? "Probes: catalog unavailable; use BEGIN/END or well-known tracepoints only."
-      : `Probes:\n${probeList.join("\n")}`;
+  const recipeBlock = buildRecipeBlock(recipeList);
+  const probeBlock = buildProbeBlock(probeList);
   const argBlock =
     sections.length === 0
       ? "Argument formats: omitted to fit the prompt budget."
@@ -243,14 +268,8 @@ export function buildGeneratePrompt(
   opts?: BuildPromptOptions,
 ): AssembledPrompt {
   const staticPrefix = `${SYSTEM_PROMPT}\n\n${GOTCHAS}`;
-  const recipeBlock =
-    recipes.length === 0
-      ? "Recipes: none matched; write minimal bpftrace from probes only."
-      : recipes.map(formatRecipeFewShot).join("\n\n");
-  const probeBlock =
-    probes.length === 0
-      ? "Probes: catalog unavailable; use BEGIN/END or well-known tracepoints only."
-      : `Probes:\n${probes.slice(0, 40).join("\n")}`;
+  const recipeBlock = buildRecipeBlock(recipes);
+  const probeBlock = buildProbeBlock(probes);
   const argBlock =
     argFormats !== undefined && argFormats.trim() !== ""
       ? argFormats.trim()
@@ -262,13 +281,15 @@ export function buildGeneratePrompt(
     recipeBlock,
     "==PROBES==",
     probeBlock,
+    "==PATTERNS==",
+    PATTERNS,
     "==ARG_FORMATS==",
     argBlock,
     "==USER==",
     prompt.trim(),
   ].join("\n\n");
-  // Isolated parts for the live chain. `text` stays byte-identical to the
-  // legacy marker format so the mock path and existing tests keep working.
+  // Isolated parts for the live chain. `text` keeps the legacy marker
+  // format (plus ==PATTERNS==) so the mock path and existing tests work.
   const system = buildSystemMessage(staticPrefix);
   const user = `<user_request>\n${escapeUntrusted(prompt.trim())}\n</user_request>`;
   const budget = opts?.budgetChars ?? PROMPT_BUDGET_CHARS;
