@@ -15,7 +15,7 @@ no service code: every `make` target prints SKIP when its dir is absent.
 | eval-mock     | `make eval` with `LLM_MODE=mock`, no secrets                                                     |
 | fuzz-short    | `make fuzz` (FUZZ_TIME=30s per target), seed corpora committed                                   |
 | compat-check  | `render-compat.mjs --check` (generated matrix docs fresh, no root)                               |
-| docs-check    | `bash scripts/check-docs.sh` (documented flags/env/targets/ports/scripts/links match code)      |
+| docs-check    | `bash scripts/check-docs.sh` (documented flags/env/targets/ports/scripts/links match code)       |
 | docker-build  | Image build only — no push, no privileged run                                                    |
 
 Go floor: `agent/go.mod` (`go 1.26.11`, resolved from the file by
