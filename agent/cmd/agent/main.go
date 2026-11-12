@@ -34,7 +34,7 @@ func main() {
 
 func realMain(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 1 && args[0] == "--version" {
-		fmt.Fprintln(stdout, "agent", version)
+		efprintf(stdout, "agent", version)
 		return 0
 	}
 	if len(args) == 0 {
