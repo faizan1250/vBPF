@@ -189,12 +189,15 @@ const DATA_EVENT_KINDS = new Set(["printf", "map", "hist", "lhist"]);
 // events streamed over the run websocket. Resolves on the summary envelope
 // or rejects on timeout/transport failure. Sequential use only (concurrency
 // 1); the eval paces cases with --delay-ms between LLM calls, not here.
+// Eval v2 (I-10) also captures data-event text (capped) for oracle checks.
+export const RUN_OUTPUT_MAX_BYTES = 64 * 1024;
+
 export async function runScriptAndCountEvents(
   base: string,
   tokenFile: string,
   script: string,
   durationS = 5,
-): Promise<{ events: number }> {
+): Promise<{ events: number; output: string }> {
   const token = readAgentToken(tokenFile);
   const ctrl = new AbortController();
   const createTimer = setTimeout(() => ctrl.abort(), AGENT_TIMEOUT_MS);
@@ -232,9 +235,11 @@ export async function runScriptAndCountEvents(
   const wsUrl =
     base.replace(/\/$/, "").replace(/^http/, "ws") +
     `/v1/runs/${encodeURIComponent(runId)}/stream`;
-  return new Promise<{ events: number }>((resolve, reject) => {
+  return new Promise<{ events: number; output: string }>((resolve, reject) => {
     let events = 0;
     let done = false;
+    const chunks: string[] = [];
+    let bytes = 0;
     const finish = (fn: () => void): void => {
       if (done) return;
       done = true;
@@ -266,8 +271,16 @@ export async function runScriptAndCountEvents(
       try {
         const envelope = EventEnvelopeSchema.parse(JSON.parse(data.toString()));
         if (DATA_EVENT_KINDS.has(envelope.kind)) events += 1;
+        if (
+          DATA_EVENT_KINDS.has(envelope.kind) &&
+          bytes < RUN_OUTPUT_MAX_BYTES
+        ) {
+          const text = data.toString();
+          chunks.push(text);
+          bytes += text.length;
+        }
         if (envelope.kind === "summary") {
-          finish(() => resolve({ events }));
+          finish(() => resolve({ events, output: chunks.join("\n") }));
         }
       } catch {
         return;
@@ -283,7 +296,7 @@ export async function runScriptAndCountEvents(
       );
     });
     ws.on("close", () => {
-      finish(() => resolve({ events }));
+      finish(() => resolve({ events, output: chunks.join("\n") }));
     });
   });
 }
