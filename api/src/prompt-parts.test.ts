@@ -414,13 +414,24 @@ describe("runGenerate plumbing", () => {
         tokenFile: "test-token",
         llm: stub,
         searchProbesFn: async () => ["tracepoint:syscalls:sys_enter_openat"],
-        validateAgentFn: async () => ({
-          ok: true,
-          errors: [],
-          probes: [],
-          warnings: [],
-          probe_count: 0,
-        }),
+        // Agent authority: the retry is driven by the agent verdict, so the
+        // first script must be agent-rejected (the static pre-check is advisory).
+        validateAgentFn: async (_u, _t, script) =>
+          script.includes("bogus")
+            ? {
+                ok: false,
+                errors: ["agent rejects bogus script"],
+                probes: [],
+                warnings: [],
+                probe_count: 0,
+              }
+            : {
+                ok: true,
+                errors: [],
+                probes: [],
+                warnings: [],
+                probe_count: 0,
+              },
         probeArgsFn: async () => "line1\nline2\n",
       },
     })

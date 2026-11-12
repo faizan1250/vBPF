@@ -324,6 +324,24 @@ describe("eval token usage", () => {
       recipesDir: RECIPES_DIR,
       model: "stub",
       llmFactory: () => stub,
+      // Agent authority: the retry is driven by the agent verdict, so the
+      // first script must be agent-rejected (the static pre-check is advisory).
+      validateAgentFn: async (_url, _token, script) =>
+        script.includes("not valid bpf")
+          ? {
+              ok: false,
+              errors: ["agent rejects first script"],
+              probes: [],
+              warnings: [],
+              probe_count: 0,
+            }
+          : {
+              ok: true,
+              errors: [],
+              probes: [],
+              warnings: [],
+              probe_count: 0,
+            },
     });
     try {
       expect(cases[0]?.ok).toBe(true);

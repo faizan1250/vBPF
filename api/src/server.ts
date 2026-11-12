@@ -893,15 +893,9 @@ export async function buildApp(
           .code(400)
           .send({ error: "invalid request", code: "VALIDATION_FAILED" });
       }
-      if (parsed.data.script.includes("--unsafe")) {
-        return reply.code(400).send({
-          ok: false,
-          errors: ["--unsafe is forbidden"],
-          probes: [],
-          warnings: [],
-          probe_count: 0,
-        });
-      }
+      // No local veto: the agent verdict is authoritative, so every script
+      // goes to the agent (a substring pre-check here would disagree with
+      // the token-level validator on strings/comments; see parity vectors).
       return proxyVerbatim(reply, () =>
         agentPost(opts.agentUrl, opts.tokenFile, "/v1/validate", parsed.data),
       );
@@ -916,11 +910,8 @@ export async function buildApp(
         .send({ error: "invalid request", code: "VALIDATION_FAILED" });
     }
     const { script, duration_s: durationS } = parsed.data;
-    if (script.includes("--unsafe")) {
-      return reply
-        .code(400)
-        .send({ error: "--unsafe is forbidden", code: "VALIDATION_FAILED" });
-    }
+    // No local veto here either: the agent re-validates every script on run
+    // creation and its verdict is authoritative.
     // Generation binding resolves before the agent call: an unknown id must
     // not occupy the agent's single-run slot. The agent still re-validates
     // the script itself on run creation.

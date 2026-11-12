@@ -311,13 +311,10 @@ export async function runGenerate(
       throw new RefusalError(generationId, out.refusal);
     }
     previousScript = out.script;
+    // Advisory only (instant-feedback shape): the agent verdict below is
+    // authoritative, so TS errors never reject on their own.
     const stat = staticValidate(out.script, { catalog: { mode: "skip" } });
     warnings = [...stat.warnings];
-    if (stat.errors.length > 0) {
-      lastErrors = truncateErrors(stat.errors);
-      if (attempt === 3) break;
-      continue;
-    }
     let agentRes: ValidateResponse;
     try {
       agentRes = await validateFn(agentUrl, tokenFile, out.script);
@@ -336,6 +333,11 @@ export async function runGenerate(
     }
     for (const w of agentRes.warnings) {
       if (!warnings.includes(w)) warnings.push(w);
+    }
+    if (stat.errors.length > 0) {
+      warnings.push(
+        "validator discrepancy: static pre-check flagged this script but the agent accepted it; agent verdict used",
+      );
     }
     const latencyMs = Date.now() - started;
     insertGeneration(db, {

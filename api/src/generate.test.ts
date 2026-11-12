@@ -541,6 +541,90 @@ describe("retry loop", () => {
   });
 });
 
+describe("agent authority over the static pre-check", () => {
+  it("agent acceptance overrides static rejection and logs a discrepancy", async () => {
+    const db = makeDb();
+    const stub = {
+      model: "mock",
+      generate: async () =>
+        LlmOutputSchema.parse({
+          script: 'BEGIN { system("x"); }\n',
+          chart_type: "events",
+          explanation: "ok",
+          duration_s: 10,
+          refusal: null,
+        }),
+    };
+    const result = await runGenerate("agent wins", {
+      deps: {
+        db,
+        recipesDir: RECIPES_DIR,
+        agentUrl: fake.url,
+        tokenFile,
+        llm: stub,
+        searchProbesFn: async () => [],
+        validateAgentFn: async () => ({
+          ok: true,
+          errors: [],
+          probes: [],
+          warnings: [],
+          probe_count: 1,
+        }),
+      },
+    });
+    expect(result.validation.status).toBe("ok");
+    expect(result.warnings.join(" ")).toContain("validator discrepancy");
+    db.close();
+  });
+
+  it("agent rejection drives the retry even when the static check passes", async () => {
+    const db = makeDb();
+    let calls = 0;
+    const stub = {
+      model: "mock",
+      generate: async () =>
+        LlmOutputSchema.parse({
+          script: "BEGIN { @x = count(); }\n",
+          chart_type: "events",
+          explanation: "ok",
+          duration_s: 10,
+          refusal: null,
+        }),
+    };
+    try {
+      await runGenerate("agent rejects", {
+        deps: {
+          db,
+          recipesDir: RECIPES_DIR,
+          agentUrl: fake.url,
+          tokenFile,
+          llm: stub,
+          searchProbesFn: async () => [],
+          validateAgentFn: async () => {
+            calls += 1;
+            return {
+              ok: false,
+              errors: ["probe not found: agent-only miss"],
+              probes: [],
+              warnings: [],
+              probe_count: 0,
+            };
+          },
+        },
+      });
+      expect.unreachable();
+    } catch (err) {
+      expect(err).toBeInstanceOf(ValidationFailedError);
+      expect((err as ValidationFailedError).attempts).toBe(3);
+      expect((err as ValidationFailedError).errors.join(" ")).toContain(
+        "agent-only miss",
+      );
+    }
+    expect(calls).toBe(3);
+    db.close();
+  });
+});
+
 describe("static validator rejects 25 bad scripts", () => {
   const known = ["BEGIN", "tracepoint:block:block_rq_issue"];
   const bad: Array<[string, string[] | undefined]> = [

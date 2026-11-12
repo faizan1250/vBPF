@@ -202,6 +202,43 @@ export const AgentErrorCodeSchema = z.enum([
   "PROBE_ARGS_FAILED",
 ]);
 
+// Shared validator taxonomy: both implementations (agent Go, API TS) return
+// the same code for every vector in validator-vectors.json. Severity order
+// for multi-error scripts: BLOCKED_CALL > UNKNOWN_CALL > PROBE_NOT_FOUND >
+// LIMIT_EXCEEDED > VALIDATION_FAILED; CATALOG_UNAVAILABLE is fail-closed.
+export const VALIDATOR_ERROR_CODES = [
+  "CATALOG_UNAVAILABLE",
+  "VALIDATION_FAILED",
+  "PROBE_NOT_FOUND",
+  "LIMIT_EXCEEDED",
+  "BLOCKED_CALL",
+  "UNKNOWN_CALL",
+] as const;
+
+export const ValidatorErrorCodeSchema = z.enum(VALIDATOR_ERROR_CODES);
+
+export type ValidatorErrorCode = z.infer<typeof ValidatorErrorCodeSchema>;
+
+// One parity vector: both suites load validator-vectors.json and assert the
+// same ok verdict and error code. Message text may differ between Go and TS.
+export const ValidatorVectorSchema = z
+  .object({
+    id: z.string().min(1).max(128),
+    script: z.string().max(32 * 1024),
+    catalog: z.enum(["enforce", "skip"]),
+    known: z.array(z.string().max(256)).max(512).optional(),
+    expect: z
+      .object({
+        ok: z.boolean(),
+        error_codes: z.array(ValidatorErrorCodeSchema).max(8),
+      })
+      .strict(),
+  })
+  .strict();
+
+export const ValidatorVectorsSchema = z.array(ValidatorVectorSchema).min(1);
+
+export type ValidatorVector = z.infer<typeof ValidatorVectorSchema>;
 export const ApiErrorCodeSchema = z.enum([
   "AGENT_OFFLINE",
   "AGENT_NOT_READY",
