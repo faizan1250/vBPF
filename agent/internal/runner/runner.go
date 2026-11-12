@@ -59,6 +59,7 @@ type Options struct {
 	Script         string
 	Duration       time.Duration
 	RunID          string
+	TempDir        string        // default os.TempDir(); tests pass t.TempDir()
 	GracePeriod    time.Duration // default limits.KillGrace
 	StderrMaxBytes int           // default limits.StderrMaxBytes
 	MaxBytesPerRun int64         // default limits.MaxBytesPerRun
@@ -67,6 +68,9 @@ type Options struct {
 func (o *Options) withDefaults() {
 	if o.BPFtracePath == "" {
 		o.BPFtracePath = "bpftrace"
+	}
+	if o.TempDir == "" {
+		o.TempDir = os.TempDir()
 	}
 	if o.GracePeriod <= 0 {
 		o.GracePeriod = limits.KillGrace
@@ -109,7 +113,7 @@ func Run(ctx context.Context, opts Options, emit func(parser.Event) error) error
 		return fmt.Errorf("runner: %w", err)
 	}
 
-	tmp, err := os.CreateTemp("", "vbpf-*.bt")
+	tmp, err := os.CreateTemp(opts.TempDir, "vbpf-*.bt")
 	if err != nil {
 		return fmt.Errorf("runner: temp file: %w", err)
 	}

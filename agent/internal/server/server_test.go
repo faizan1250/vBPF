@@ -242,6 +242,23 @@ func createRun(t *testing.T, s *Server, script string, dur int) string {
 	return out["run_id"]
 }
 
+func TestServerPassesTempDirToRunner(t *testing.T) {
+	dir := t.TempDir()
+	got := make(chan string, 1)
+	s := testServer(t, Config{
+		TempDir: dir,
+		RunFn: func(ctx context.Context, opts runner.Options, emit func(parser.Event) error) error {
+			got <- opts.TempDir
+			return fakeRunner(0, 0)(ctx, opts, emit)
+		},
+	})
+	id := createRun(t, s, "BEGIN { @x = count(); }", 10)
+	run, ok := s.runs.Get(id)
+	require.True(t, ok)
+	<-run.done
+	require.Equal(t, dir, <-got)
+}
+
 func TestRunsConcurrency409(t *testing.T) {
 	block := make(chan struct{})
 	s := testServer(t, Config{RunFn: func(ctx context.Context, opts runner.Options, emit func(parser.Event) error) error {

@@ -1035,11 +1035,20 @@ func expandCount(pattern string, known map[string]bool) int {
 
 // DefaultDryRun compiles via a temp file without attaching probes.
 func DefaultDryRun(bpftracePath string) DryRunFunc {
+	return DefaultDryRunInDir(bpftracePath, "")
+}
+
+// DefaultDryRunInDir is DefaultDryRun with an injectable temp directory
+// (default os.TempDir()); tests pass a t.TempDir().
+func DefaultDryRunInDir(bpftracePath, tempDir string) DryRunFunc {
 	if bpftracePath == "" {
 		bpftracePath = "bpftrace"
 	}
+	if tempDir == "" {
+		tempDir = os.TempDir()
+	}
 	return func(ctx context.Context, script string) []string {
-		tmp, err := os.CreateTemp("", "vbpf-validate-*.bt")
+		tmp, err := os.CreateTemp(tempDir, "vbpf-validate-*.bt")
 		if err != nil {
 			return []string{"dry-run temp file: " + err.Error()}
 		}
