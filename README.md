@@ -2,7 +2,7 @@
 
 # vBPF
 
-**Describe what you want to observe in plain English. Get a safe, reviewable eBPF probe and a live visualization.**
+**Ask in plain English, review the exact probe, run it behind a safety gate, watch live charts.**
 
 [![CI](https://github.com/faizan1250/vBPF/actions/workflows/ci.yml/badge.svg)](https://github.com/faizan1250/vBPF/actions/workflows/ci.yml)
 [![Demo](https://github.com/faizan1250/vBPF/actions/workflows/pages.yml/badge.svg)](https://faizan1250.github.io/vBPF/)
@@ -40,6 +40,7 @@ Try the hosted demo (recorded data, nothing is executed): https://faizan1250.git
 - [Troubleshooting](#troubleshooting)
 - [Privacy and security](#privacy-and-security)
 - [Limitations](#limitations)
+- [FAQ](docs/faq.md)
 - [Roadmap](#roadmap)
 - [Contributing](#contributing)
 - [Acknowledgements](#acknowledgements)
@@ -66,15 +67,38 @@ and the tool:
 
 ### How is it different?
 
-|                 | bpftrace / BCC           | vBPF                                                                  |
-| --------------- | ------------------------ | --------------------------------------------------------------------- |
-| Input           | Scripts or fixed tools   | Natural language, recipes, or your own script                         |
-| Probe discovery | You search `bpftrace -l` | Retrieval from the real probe catalog of your kernel                  |
-| Output          | Terminal text            | Live charts and tables in the browser                                 |
-| Safety          | Your responsibility      | Validation layers, limits, and explicit confirmation before every run |
-| Learning curve  | Steep                    | Read the generated script and the plain-English explanation           |
+|                 | bpftrace / BCC           | [GPTtrace](https://github.com/eunomia-bpf/GPTtrace) | [MCPtrace](https://github.com/eunomia-bpf/MCPtrace) | vBPF                                                                  |
+| --------------- | ------------------------ | --------------------------------------------------- | --------------------------------------------------- | --------------------------------------------------------------------- |
+| Input           | Scripts or fixed tools   | Natural language (CLI)                              | Natural language via an AI assistant (MCP)          | Natural language, recipes, or your own script                         |
+| Probe discovery | You search `bpftrace -l` | Vector search over bpftrace tool examples           | Browse/search kernel probes plus example scripts    | Retrieval from the real probe catalog of your kernel                  |
+| Output          | Terminal text            | Terminal text plus an AI explanation                | Results polled through the assistant, no streaming  | Live charts and tables in the browser                                 |
+| Safety          | Your responsibility      | Retry on load errors; author-labelled experiment    | Gateway model; README states no script validation   | Validation layers, limits, and explicit confirmation before every run |
+| Confirmation    | You wrote it             | None documented (can save without running)          | Trusts the AI client                                | Required: you review the exact script before every run                |
 
 It is built **on top of** bpftrace; it does not replace it.
+
+Competitor descriptions verified against each project's README on 2026-11-12.
+GPTtrace calls itself "[a]n experiment ... not suitable for production use" and
+points users to MCPtrace; MCPtrace's README states "No script validation -
+trust the AI client to generate safe scripts" (60 s max execution, 10k-line
+buffer, results polled via `get_result`). No disparagement intended: both are
+useful references, and vBPF's differentiator is the confirm-before-run safety
+gate plus live views, not generation quality.
+
+### Why vBPF
+
+- **Safety layers, not hopes.** Every script passes static validation, a
+  dry-run compile, and the kernel verifier, then is independently re-validated
+  by the privileged agent. See [Safety model](#safety-model).
+- **Human confirmation.** You see the exact probe and its explanation, can
+  edit it, and nothing runs until you confirm. The API records the script's
+  SHA-256 and whether it differs from the generated version.
+- **Live views.** Output becomes tables, bar charts, histograms, or time
+  series automatically, with a dropped-event badge when rate caps trip.
+- **Offline-capable.** Recipe-only mode needs no API key at all; live
+  generation also works against local models over loopback, and probe output
+  never leaves your machine. See [Privacy and security](#privacy-and-security)
+  and the [FAQ](docs/faq.md).
 
 ---
 
@@ -514,6 +538,14 @@ Being explicit about what the project does not (yet) do:
   the container's libc, not the host's. Trace host user-space natively,
   or bind-mount host library dirs read-only into the agent container.
 - **Short history.** SQLite storage with capped event retention per run; not a metrics system. Probe history itself lives in browser localStorage; server-side sessions are deferred to v0.3.
+
+---
+
+## FAQ
+
+Short answers live in [`docs/faq.md`](docs/faq.md): is it safe to run, what
+leaves your machine, whether an API key is required, which kernels work, and
+why pasting chatbot output into a root shell is not the same thing.
 
 ---
 
