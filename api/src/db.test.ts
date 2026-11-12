@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   closeDb,
+  deriveRunOrigin,
   failRunWithReason,
   generationExists,
   getGeneration,
@@ -16,11 +17,12 @@ import {
   migrate,
   openDb,
   persistRunSummary,
+  sha256Hex,
   SCHEMA_VERSION,
 } from "./db.js";
 
 describe("runs migration", () => {
-  it("adds edited to a pre-r18 runs table", () => {
+  it("adds edited and origin to a pre-r18 runs table", () => {
     const db = new Database(":memory:");
     db.exec(
       "CREATE TABLE runs (id TEXT PRIMARY KEY, generation_id TEXT, script_sha256 TEXT NOT NULL DEFAULT '', script_text TEXT NOT NULL DEFAULT '', duration_s INTEGER NOT NULL DEFAULT 10, state TEXT NOT NULL DEFAULT 'running', started_at INTEGER NOT NULL, ended_at INTEGER, events_count INTEGER NOT NULL DEFAULT 0, bytes INTEGER NOT NULL DEFAULT 0, dropped INTEGER NOT NULL DEFAULT 0, exit_reason TEXT)",
@@ -30,6 +32,7 @@ describe("runs migration", () => {
       db.prepare("PRAGMA table_info(runs)").all() as Array<{ name: string }>
     ).map((c) => c.name);
     expect(cols).toContain("edited");
+    expect(cols).toContain("origin");
     expect(cols).toContain("generation_id");
     expect(cols).toContain("script_sha256");
     db.prepare(
@@ -42,11 +45,165 @@ describe("runs migration", () => {
       "INSERT INTO runs (id, generation_id, script_text, edited, started_at) VALUES (?, ?, ?, ?, ?)",
     ).run("r1", "gen_x", "BEGIN {}", 1, 1);
     const row = db
-      .prepare("SELECT generation_id, edited FROM runs WHERE id = ?")
-      .get("r1") as { generation_id: string; edited: number };
-    expect(row).toEqual({ generation_id: "gen_x", edited: 1 });
+      .prepare("SELECT generation_id, edited, origin FROM runs WHERE id = ?")
+      .get("r1") as { generation_id: string; edited: number; origin: string };
+    // Generation row has no script (NULL): no pristine match, keeps default.
+    expect(row).toEqual({
+      generation_id: "gen_x",
+      edited: 1,
+      origin: "edited",
+    });
     // Idempotent: second migrate is a no-op.
     migrate(db);
+    closeDb(db);
+  });
+});
+
+describe("run origin derivation (I-14)", () => {
+  const hashes = new Set([sha256Hex("BEGIN { @x = count(); }")]);
+
+  it("derives generated for a pristine generation with no recipe", () => {
+    expect(
+      deriveRunOrigin({
+        generation: { script: "BEGIN {}", based_on_recipe: null },
+        script: "BEGIN {}",
+        recipeHashes: hashes,
+      }),
+    ).toBe("generated");
+  });
+
+  it("derives recipe for a pristine generation based on a recipe", () => {
+    expect(
+      deriveRunOrigin({
+        generation: { script: "BEGIN {}", based_on_recipe: "cpu-by-process" },
+        script: "BEGIN {}",
+        recipeHashes: hashes,
+      }),
+    ).toBe("recipe");
+  });
+
+  it("derives edited when the script differs from the generation", () => {
+    expect(
+      deriveRunOrigin({
+        generation: { script: "BEGIN {}", based_on_recipe: null },
+        script: "BEGIN { @y = 1; }",
+        recipeHashes: hashes,
+      }),
+    ).toBe("edited");
+  });
+
+  it("prefers the generation binding over a recipe hash match", () => {
+    // User replaced the generated script with a stock recipe body: it is
+    // still an edit of the generation, not a recipe run.
+    expect(
+      deriveRunOrigin({
+        generation: { script: "BEGIN {}", based_on_recipe: null },
+        script: "BEGIN { @x = count(); }",
+        recipeHashes: hashes,
+      }),
+    ).toBe("edited");
+  });
+
+  it("matches generation-less stock scripts by hash, newline-robust", () => {
+    expect(
+      deriveRunOrigin({
+        generation: undefined,
+        script: "BEGIN { @x = count(); }",
+        recipeHashes: hashes,
+      }),
+    ).toBe("recipe");
+    expect(
+      deriveRunOrigin({
+        generation: undefined,
+        script: "BEGIN { @x = count(); }\n",
+        recipeHashes: hashes,
+      }),
+    ).toBe("recipe");
+  });
+
+  it("derives edited for a generation-less custom script", () => {
+    expect(
+      deriveRunOrigin({
+        generation: undefined,
+        script: "BEGIN { @custom = 1; }",
+        recipeHashes: hashes,
+      }),
+    ).toBe("edited");
+  });
+
+  it("backfills pristine generation-bound rows when migrating to v4", () => {
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE generations (
+        id TEXT PRIMARY KEY,
+        session_id TEXT,
+        prompt TEXT NOT NULL DEFAULT '',
+        script TEXT NOT NULL DEFAULT '',
+        chart_type TEXT,
+        explanation TEXT,
+        duration_s INTEGER,
+        validation_status TEXT,
+        attempts INTEGER NOT NULL DEFAULT 1,
+        model TEXT,
+        based_on_recipe TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE runs (
+        id TEXT PRIMARY KEY,
+        generation_id TEXT,
+        script_sha256 TEXT NOT NULL DEFAULT '',
+        script_text TEXT NOT NULL DEFAULT '',
+        duration_s INTEGER NOT NULL DEFAULT 10,
+        state TEXT NOT NULL DEFAULT 'running',
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        events_count INTEGER NOT NULL DEFAULT 0,
+        bytes INTEGER NOT NULL DEFAULT 0,
+        dropped INTEGER NOT NULL DEFAULT 0,
+        exit_reason TEXT,
+        edited INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    db.prepare(
+      "INSERT INTO sessions (id, title, created_at) VALUES (?, '', ?)",
+    ).run("s1", 1);
+    db.prepare(
+      "INSERT INTO generations (id, session_id, script, based_on_recipe, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("gen_plain", "s1", "BEGIN {}", null, 1);
+    db.prepare(
+      "INSERT INTO generations (id, session_id, script, based_on_recipe, created_at) VALUES (?, ?, ?, ?, ?)",
+    ).run("gen_recipe", "s1", "BEGIN {}", "cpu-by-process", 1);
+    for (const [id, gen, script] of [
+      ["r_generated", "gen_plain", "BEGIN {}"],
+      ["r_recipe", "gen_recipe", "BEGIN {}"],
+      ["r_edited", "gen_plain", "BEGIN { @y = 1; }"],
+      ["r_nogen", null, "BEGIN {}"],
+    ] as Array<[string, string | null, string]>) {
+      db.prepare(
+        "INSERT INTO runs (id, generation_id, script_text, edited, started_at) VALUES (?, ?, ?, ?, ?)",
+      ).run(id, gen, script, 0, 1);
+    }
+    db.pragma("user_version = 3");
+    migrate(db);
+    const origins = Object.fromEntries(
+      (
+        db.prepare("SELECT id, origin FROM runs").all() as Array<{
+          id: string;
+          origin: string;
+        }>
+      ).map((r) => [r.id, r.origin]),
+    );
+    expect(origins).toEqual({
+      r_generated: "generated",
+      r_recipe: "recipe",
+      r_edited: "edited",
+      r_nogen: "edited",
+    });
     closeDb(db);
   });
 });
@@ -149,9 +306,13 @@ describe("versioned migrations", () => {
         .get("g1") as { prompt: string; warnings: string; latency_ms: number };
       expect(gen).toEqual({ prompt: "p", warnings: "[]", latency_ms: 0 });
       const run = db
-        .prepare("SELECT script_text, edited FROM runs WHERE id = ?")
-        .get("r1") as { script_text: string; edited: number };
-      expect(run).toEqual({ script_text: "BEGIN {}", edited: 0 });
+        .prepare("SELECT script_text, edited, origin FROM runs WHERE id = ?")
+        .get("r1") as { script_text: string; edited: number; origin: string };
+      expect(run).toEqual({
+        script_text: "BEGIN {}",
+        edited: 0,
+        origin: "edited",
+      });
       // Second migrate is a no-op.
       migrate(db);
       expect(db.pragma("user_version", { simple: true })).toBe(SCHEMA_VERSION);
@@ -225,6 +386,7 @@ describe("run and generation helpers", () => {
       expect(getGeneration(db, "gen_1")).toEqual({
         id: "gen_1",
         script: "BEGIN { @x = count(); }",
+        based_on_recipe: null,
       });
     } finally {
       closeDb(db);
@@ -241,6 +403,7 @@ describe("run and generation helpers", () => {
         script_sha256: "hash123",
         script_text: "BEGIN {}",
         edited: false,
+        origin: "edited",
         duration_s: 15,
         state: "running",
         started_at: 1000,
@@ -255,6 +418,7 @@ describe("run and generation helpers", () => {
         duration_s: number;
         state: string;
         edited: number;
+        origin: string;
       };
       expect(row).toMatchObject({
         id: "run_abc",
@@ -263,6 +427,7 @@ describe("run and generation helpers", () => {
         duration_s: 15,
         state: "running",
         edited: 0,
+        origin: "edited",
       });
     } finally {
       closeDb(db);
@@ -279,6 +444,7 @@ describe("run and generation helpers", () => {
         script_sha256: "h",
         script_text: "BEGIN {}",
         edited: false,
+        origin: "edited",
         duration_s: 10,
         state: "running",
         started_at: 100,
@@ -324,6 +490,7 @@ describe("run and generation helpers", () => {
         script_sha256: "h",
         script_text: "BEGIN {}",
         edited: false,
+        origin: "edited",
         duration_s: 10,
         state: "running",
         started_at: 100,
@@ -346,6 +513,7 @@ describe("run and generation helpers", () => {
         script_sha256: "h",
         script_text: "BEGIN {}",
         edited: false,
+        origin: "edited",
         duration_s: 10,
         state: "completed",
         started_at: 100,
@@ -386,6 +554,7 @@ describe("terminal run finalization (I-02)", () => {
       script_sha256: "h",
       script_text: "BEGIN {}",
       edited: false,
+      origin: "edited",
       duration_s: 10,
       state,
       started_at: startedAt,

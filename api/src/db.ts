@@ -1,10 +1,12 @@
+import { createHash } from "node:crypto";
+
 import Database from "better-sqlite3";
 
-import type { Recipe } from "@vbpf/schemas";
+import type { Recipe, RunOrigin } from "@vbpf/schemas";
 
 import { buildFtsQuery, extractKeywords } from "./retrieval.js";
 
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 export function applyPragmas(db: Database.Database): void {
   db.pragma("journal_mode = WAL");
@@ -87,7 +89,8 @@ function createTables(db: Database.Database): void {
       events_count INTEGER NOT NULL DEFAULT 0,
       bytes INTEGER NOT NULL DEFAULT 0,
       dropped INTEGER NOT NULL DEFAULT 0,
-      exit_reason TEXT
+      exit_reason TEXT,
+      origin TEXT NOT NULL DEFAULT 'edited'
     );
     CREATE VIRTUAL TABLE IF NOT EXISTS recipes_index USING fts5(
       id, title, description, tags, view
@@ -151,6 +154,34 @@ function migrateTo3(db: Database.Database): void {
   );
 }
 
+// v4: explicit run provenance (I-14). Backfills generation-bound pristine
+// rows from the generation (recipe when the generation names one, generated
+// otherwise); every other legacy row keeps the 'edited' default.
+function migrateTo4(db: Database.Database): void {
+  addColumnIfMissing(
+    db,
+    "runs",
+    "origin",
+    "ALTER TABLE runs ADD COLUMN origin TEXT NOT NULL DEFAULT 'edited'",
+  );
+  db.exec(`
+    UPDATE runs SET origin = 'generated'
+    WHERE generation_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM generations g
+      WHERE g.id = runs.generation_id
+        AND g.script = runs.script_text
+        AND g.based_on_recipe IS NULL
+    );
+    UPDATE runs SET origin = 'recipe'
+    WHERE generation_id IS NOT NULL AND EXISTS (
+      SELECT 1 FROM generations g
+      WHERE g.id = runs.generation_id
+        AND g.script = runs.script_text
+        AND g.based_on_recipe IS NOT NULL
+    );
+  `);
+}
+
 export function migrate(db: Database.Database): void {
   applyPragmas(db);
   const found = currentVersion(db);
@@ -160,7 +191,7 @@ export function migrate(db: Database.Database): void {
     );
   }
   createTables(db);
-  const steps = [migrateTo1, migrateTo2, migrateTo3];
+  const steps = [migrateTo1, migrateTo2, migrateTo3, migrateTo4];
   for (let i = found; i < steps.length; i++) {
     const run = steps[i]!;
     db.transaction(run)(db);
@@ -323,10 +354,37 @@ export function generationExists(db: Database.Database, id: string): boolean {
 export function getGeneration(
   db: Database.Database,
   id: string,
-): { id: string; script: string } | undefined {
+): { id: string; script: string; based_on_recipe: string | null } | undefined {
   return db
-    .prepare("SELECT id, script FROM generations WHERE id = ?")
-    .get(id) as { id: string; script: string } | undefined;
+    .prepare("SELECT id, script, based_on_recipe FROM generations WHERE id = ?")
+    .get(id) as
+    { id: string; script: string; based_on_recipe: string | null } | undefined;
+}
+
+// Run provenance (I-14), derived server-side. A generation binding decides
+// first: the run is generated when the script is byte-identical to the
+// generation (a stock echo counts as recipe when the generation names one),
+// edited when the user changed it. Without a generation, a script whose
+// hash matches the recipe library is a stock recipe run; anything else is a
+// hand-supplied script and reads as edited. recipeHashes holds sha256 of
+// trimmed recipe bodies (trailing-newline robust, mirroring the explain
+// mock); the caller builds it once from the recipe library.
+export function deriveRunOrigin(args: {
+  generation: { script: string; based_on_recipe: string | null } | undefined;
+  script: string;
+  recipeHashes: Set<string>;
+}): RunOrigin {
+  if (args.generation !== undefined) {
+    if (args.script !== args.generation.script) return "edited";
+    return args.generation.based_on_recipe !== null ? "recipe" : "generated";
+  }
+  return args.recipeHashes.has(sha256Hex(args.script.trim()))
+    ? "recipe"
+    : "edited";
+}
+
+export function sha256Hex(value: string): string {
+  return createHash("sha256").update(value).digest("hex");
 }
 
 export interface RunInsertRow {
@@ -335,6 +393,7 @@ export interface RunInsertRow {
   script_sha256: string;
   script_text: string;
   edited: boolean | number;
+  origin: RunOrigin;
   duration_s: number;
   state: string;
   started_at: number;
@@ -342,13 +401,14 @@ export interface RunInsertRow {
 
 export function insertRun(db: Database.Database, run: RunInsertRow): void {
   db.prepare(
-    "INSERT INTO runs (id, generation_id, script_sha256, script_text, edited, duration_s, state, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO runs (id, generation_id, script_sha256, script_text, edited, origin, duration_s, state, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
   ).run(
     run.id,
     run.generation_id,
     run.script_sha256,
     run.script_text,
     run.edited ? 1 : 0,
+    run.origin,
     run.duration_s,
     run.state,
     run.started_at,

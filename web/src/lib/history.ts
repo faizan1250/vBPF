@@ -1,4 +1,4 @@
-import type { EventEnvelope, GenerateResponse } from "./api.js";
+import type { EventEnvelope, GenerateResponse, RunOrigin } from "./api.js";
 
 export interface HistoryEntry {
   id: string;
@@ -11,6 +11,7 @@ export interface HistoryEntry {
   durationS: number;
   warnings: string[];
   runId: string | null;
+  origin: RunOrigin;
   exitReason: string | null;
   eventsSample: EventEnvelope[];
 }
@@ -78,6 +79,7 @@ export function exportEntry(entry: HistoryEntry): string {
       duration_s: entry.durationS,
       warnings: entry.warnings,
       run_id: entry.runId,
+      origin: entry.origin,
       exit_reason: entry.exitReason,
       events_sample: entry.eventsSample,
     },

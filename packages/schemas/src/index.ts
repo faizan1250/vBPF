@@ -49,8 +49,16 @@ export const CreateRunRequestSchema = z
   })
   .strict();
 
+// Run provenance (I-14): where the run's script came from. Derived
+// server-side, never accepted from the client.
+export const RunOriginSchema = z.enum(["generated", "edited", "recipe"]);
+
 export const CreateRunResponseSchema = z
-  .object({ run_id: z.string().min(1), state: z.string().min(1) })
+  .object({
+    run_id: z.string().min(1),
+    state: z.string().min(1),
+    origin: RunOriginSchema,
+  })
   .strict();
 
 export const StopRunResponseSchema = z
@@ -78,8 +86,8 @@ export const RunSummarySchema = z
   .strict();
 
 // GET /api/runs/:id: metadata plus the persisted summary. script_text and
-// script_sha256 are deliberately excluded; generation_id/edited expose the
-// R-18 generation binding without leaking script bytes.
+// script_sha256 are deliberately excluded; generation_id/edited/origin expose
+// the R-18 generation binding and the I-14 provenance without leaking bytes.
 export const GetRunResponseSchema = z
   .object({
     run_id: z.string().min(1),
@@ -89,6 +97,7 @@ export const GetRunResponseSchema = z
     ended_at: z.number().int().nonnegative().nullable(),
     generation_id: z.string().min(1).max(128).nullable(),
     edited: z.boolean(),
+    origin: RunOriginSchema,
     summary: RunSummarySchema.nullable(),
   })
   .strict();
@@ -304,6 +313,7 @@ export type ExplainRequest = z.infer<typeof ExplainRequestSchema>;
 export type ExplainResponse = z.infer<typeof ExplainResponseSchema>;
 export type CreateRunRequest = z.infer<typeof CreateRunRequestSchema>;
 export type CreateRunResponse = z.infer<typeof CreateRunResponseSchema>;
+export type RunOrigin = z.infer<typeof RunOriginSchema>;
 export type StopRunResponse = z.infer<typeof StopRunResponseSchema>;
 export type AgentRunSummary = z.infer<typeof AgentRunSummarySchema>;
 export type RunSummary = z.infer<typeof RunSummarySchema>;

@@ -35,13 +35,14 @@ describe("history", () => {
       durationS: 10,
       warnings: [],
       runId: "r",
+      origin: "generated",
       exitReason: "completed",
       eventsSample: [envelope(0)],
     });
     expect(listHistory()).toHaveLength(1);
   });
 
-  it("exports prompt, script and samples", () => {
+  it("exports prompt, script, origin and samples", () => {
     const text = exportEntry({
       id: "1",
       title: "t",
@@ -53,6 +54,7 @@ describe("history", () => {
       durationS: 10,
       warnings: ["w"],
       runId: "r",
+      origin: "recipe",
       exitReason: "completed",
       eventsSample: [],
     });
@@ -60,5 +62,7 @@ describe("history", () => {
     expect(parsed["prompt"]).toBe("p");
     expect(parsed["script"]).toBe("s");
     expect(parsed["warnings"]).toEqual(["w"]);
+    expect(parsed["origin"]).toBe("recipe");
+    expect(parsed["run_id"]).toBe("r");
   });
 });

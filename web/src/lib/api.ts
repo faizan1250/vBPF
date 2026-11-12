@@ -4,6 +4,7 @@ import type {
   GenerateResponse,
   HealthResponse,
   Recipe,
+  RunOrigin,
   ValidateResponse,
 } from "@vbpf/schemas";
 
@@ -20,6 +21,7 @@ export type ValidateResult = ValidateResponse;
 export interface CreateRunResult {
   run_id: string;
   state: string;
+  origin: RunOrigin;
 }
 
 export interface StopRunResult {
@@ -159,6 +161,18 @@ export function fetchHealth(): Promise<HealthResponse> {
   return getJson<HealthResponse>("/api/health");
 }
 
+// Fixture-mode provenance (no backend): mirrors the server's generation
+// branch of deriveRunOrigin. Fixture scripts are synthetic, so a run without
+// a generation reads as edited.
+export function localRunOrigin(
+  script: string,
+  generation: Pick<GenerateResponse, "script" | "based_on_recipe"> | null,
+): RunOrigin {
+  if (generation === null) return "edited";
+  if (script !== generation.script) return "edited";
+  return generation.based_on_recipe !== null ? "recipe" : "generated";
+}
+
 export function fetchRecipes(query = ""): Promise<{ recipes: Recipe[] }> {
   const q = query.trim().slice(0, 256);
   return getJson<{ recipes: Recipe[] }>(
@@ -186,5 +200,6 @@ export type {
   GenerateResponse,
   HealthResponse,
   Recipe,
+  RunOrigin,
   ValidateResponse,
 };

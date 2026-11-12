@@ -41,6 +41,8 @@ describe("ConfirmModal", () => {
       script: "BEGIN { }",
       durationS: 10,
       generation: null,
+      runId: null,
+      runOrigin: null,
       validationOk: false,
       validationErrors: ["probe not found: tracepoint:foo:bar"],
       validationWarnings: [],
@@ -94,7 +96,11 @@ describe("ConfirmModal", () => {
   });
 
   it("forwards generation_id when starting a run", async () => {
-    createRunMock.mockResolvedValue({ run_id: "run_1", state: "running" });
+    createRunMock.mockResolvedValue({
+      run_id: "run_1",
+      state: "running",
+      origin: "generated",
+    });
     useAppStore.setState({
       script: "BEGIN { }",
       durationS: 10,
@@ -121,7 +127,11 @@ describe("ConfirmModal", () => {
   });
 
   it("forwards generation_id when the script was edited", async () => {
-    createRunMock.mockResolvedValue({ run_id: "run_1", state: "running" });
+    createRunMock.mockResolvedValue({
+      run_id: "run_1",
+      state: "running",
+      origin: "edited",
+    });
     useAppStore.setState({
       script: "BEGIN { @b = 2; }",
       durationS: 10,
@@ -152,7 +162,11 @@ describe("ConfirmModal", () => {
   });
 
   it("omits generation_id when there is no generation", async () => {
-    createRunMock.mockResolvedValue({ run_id: "run_1", state: "running" });
+    createRunMock.mockResolvedValue({
+      run_id: "run_1",
+      state: "running",
+      origin: "recipe",
+    });
     useAppStore.setState({
       script: "BEGIN { }",
       durationS: 10,
@@ -167,5 +181,28 @@ describe("ConfirmModal", () => {
     await waitFor(() =>
       expect(createRunMock).toHaveBeenCalledWith("BEGIN { }", 10, undefined),
     );
+  });
+
+  it("stores the server-derived origin on success", async () => {
+    createRunMock.mockResolvedValue({
+      run_id: "run_1",
+      state: "running",
+      origin: "recipe",
+    });
+    useAppStore.setState({
+      script: "BEGIN { }",
+      durationS: 10,
+      generation: null,
+      validationOk: true,
+      validationProbes: ["BEGIN"],
+      validationWarnings: [],
+      agentReady: null,
+    });
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: /run this probe/i }));
+    await waitFor(() =>
+      expect(createRunMock).toHaveBeenCalledWith("BEGIN { }", 10, undefined),
+    );
+    expect(useAppStore.getState().runOrigin).toBe("recipe");
   });
 });
