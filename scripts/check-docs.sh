@@ -25,7 +25,7 @@ cd "$(dirname "$0")/.."
 
 failures=0
 fail() { printf 'check-docs: FAIL: %s\n' "$*" >&2; failures=$((failures + 1)); }
-section_ok() { [ "$failures" = "$1" ] && printf 'check-docs: ok: %s\n' "$2" || true; }
+section_ok() { if [ "$failures" = "$1" ]; then printf 'check-docs: ok: %s\n' "$2"; fi; }
 
 # Normative docs for claim checks; every tracked markdown file for links.
 if git rev-parse --show-toplevel >/dev/null 2>&1; then
