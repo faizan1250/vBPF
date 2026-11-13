@@ -3,7 +3,7 @@
 # the unprivileged nginx variant (master and workers run as non-root uid
 # 101, no root PID), so it listens on 8080 and the compose port mapping and
 # healthcheck target that port.
-FROM node:22-slim@sha256:5ec23b7c622b00547753bc6ffd78085dd868a68aeb41c8e0a1418f033e13d96d AS builder
+FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS builder
 
 RUN npm install -g pnpm@9
 
