@@ -3,7 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 
 import type Database from "better-sqlite3";
-import yaml from "js-yaml";
+import * as yaml from "js-yaml";
 import { z } from "zod";
 
 import {
