@@ -5,7 +5,15 @@
 # healthcheck target that port.
 FROM node:25-slim@sha256:81db02c4b671288a03915da9534dbd54f96d0e7c24d80ccc54f5b36b2e684370 AS builder
 
-RUN npm install -g pnpm@9
+RUN npm install -g pnpm@9 \
+  && for i in 1 2 3 4 5; do \
+    if apt-get update; then break; fi; \
+    if [ "$i" -eq 5 ]; then exit 1; fi; \
+    echo "apt-get update failed (attempt $i/5), retrying in 10s..."; \
+    sleep 10; \
+  done \
+  && apt-get install -y --no-install-recommends python3 make g++ \
+  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY pnpm-workspace.yaml pnpm-lock.yaml package.json ./
