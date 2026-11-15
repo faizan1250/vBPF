@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { GenerateResponseSchema, type GenerateResponse } from "@vbpf/schemas";
 
 import { buildApp } from "./server.js";
+import { installTestApiAuth } from "./test-auth.js";
 import { indexRecipes, migrate, openDb } from "./db.js";
 import {
   RefusalError,
@@ -38,7 +39,7 @@ const RECIPES_DIR = join(
   "..",
   "recipes",
 );
-const TOKEN = "test-token-generate";
+const TOKEN = "c3".repeat(32);
 
 function makeDb(): Database.Database {
   const db = openDb(":memory:");
@@ -171,6 +172,7 @@ function startFakeAgent(): Promise<{
 
 let dir = "";
 let tokenFile = "";
+let apiTokenFile = "";
 let fake: { url: string; close: () => Promise<void> };
 let app: FastifyInstance;
 let base = "";
@@ -179,10 +181,14 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "vbpf-generate-"));
   tokenFile = join(dir, "agent.token");
   writeFileSync(tokenFile, `${TOKEN}\n`);
+  apiTokenFile = join(dir, "api.token");
+  writeFileSync(apiTokenFile, `${TOKEN}\n`);
+  installTestApiAuth(TOKEN);
   fake = await startFakeAgent();
   app = await buildApp({
     agentUrl: fake.url,
     tokenFile,
+    apiTokenFile,
     dbPath: join(dir, "api.sqlite3"),
     recipesDir: RECIPES_DIR,
     webOrigin: "http://localhost:5173",
@@ -762,6 +768,7 @@ describe("POST /api/generate", () => {
     const live = await buildApp({
       agentUrl: fake.url,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir: RECIPES_DIR,
       webOrigin: "http://localhost:5173",
@@ -791,6 +798,7 @@ describe("generate rate limit", () => {
     const limited = await buildApp({
       agentUrl: fake.url,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir: RECIPES_DIR,
       webOrigin: "http://localhost:5173",
@@ -822,6 +830,7 @@ describe("generate rate limit", () => {
     const limited = await buildApp({
       agentUrl: fake.url,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir: RECIPES_DIR,
       webOrigin: "http://localhost:5173",
@@ -836,7 +845,11 @@ describe("generate rate limit", () => {
           url: "/api/generate",
           payload: { prompt: "cpu?" },
           remoteAddress: ip,
-          headers: { host: "localhost", "content-type": "application/json" },
+          headers: {
+            host: "localhost",
+            "content-type": "application/json",
+            authorization: `Bearer ${TOKEN}`,
+          },
         });
       expect((await post("10.0.0.1")).statusCode).toBe(200);
       expect((await post("10.0.0.1")).statusCode).toBe(429);
@@ -850,6 +863,7 @@ describe("generate rate limit", () => {
     const limited = await buildApp({
       agentUrl: fake.url,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir: RECIPES_DIR,
       webOrigin: "http://localhost:5173",
@@ -870,6 +884,7 @@ describe("generate rate limit", () => {
           headers: {
             host: "localhost",
             "content-type": "application/json",
+            authorization: `Bearer ${TOKEN}`,
             "x-forwarded-for": forwardedFor,
           },
         });
@@ -885,6 +900,7 @@ describe("generate rate limit", () => {
     const limited = await buildApp({
       agentUrl: fake.url,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir: RECIPES_DIR,
       webOrigin: "http://localhost:5173",
@@ -904,6 +920,7 @@ describe("generate rate limit", () => {
           headers: {
             host: "localhost",
             "content-type": "application/json",
+            authorization: `Bearer ${TOKEN}`,
             "x-forwarded-for": forwardedFor,
           },
         });

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-import { fixtureMode, type EventEnvelope } from "../lib/api.js";
+import { fixtureMode, wsTokenQuery, type EventEnvelope } from "../lib/api.js";
 import { stderrText, summaryFrom } from "../lib/events.js";
 import {
   fixtureEvents as replayEvents,
@@ -14,7 +14,7 @@ const MAX_ATTEMPTS = 8;
 
 function wsUrl(runId: string): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}/ws/runs/${encodeURIComponent(runId)}`;
+  return `${protocol}//${window.location.host}/ws/runs/${encodeURIComponent(runId)}${wsTokenQuery()}`;
 }
 
 function parseEnvelope(raw: string, runId: string): EventEnvelope | null {

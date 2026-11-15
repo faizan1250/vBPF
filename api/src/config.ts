@@ -6,6 +6,10 @@ const EnvSchema = z
     HOST: z.string().min(1).default("127.0.0.1"),
     AGENT_URL: z.string().url().default("http://127.0.0.1:8787"),
     AGENT_TOKEN_FILE: z.string().min(1).default("./run/agent.token"),
+    // Bearer-token gate for the API itself (api/src/api-auth.ts): required on
+    // every /api/* and /ws/* route, health included. Generated (0600) on first
+    // start when missing; never committed (run/ is gitignored).
+    API_TOKEN_FILE: z.string().min(1).default("./run/api.token"),
     WEB_ORIGIN: z.string().min(1).default("http://localhost:5173"),
     DATABASE_PATH: z.string().min(1).default("./run/api.sqlite3"),
     RECIPES_DIR: z.string().min(1).default("./recipes"),
@@ -34,6 +38,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ApiConfig {
     HOST: env["HOST"],
     AGENT_URL: env["AGENT_URL"],
     AGENT_TOKEN_FILE: env["AGENT_TOKEN_FILE"],
+    API_TOKEN_FILE: env["API_TOKEN_FILE"],
     WEB_ORIGIN: env["WEB_ORIGIN"],
     DATABASE_PATH: env["DATABASE_PATH"],
     RECIPES_DIR: env["RECIPES_DIR"],

@@ -9,6 +9,7 @@ import { ExplainResponseSchema } from "@vbpf/schemas";
 
 import { EXPLAIN_RESULTS_GENERIC } from "./explain.js";
 import { buildApp } from "./server.js";
+import { installTestApiAuth } from "./test-auth.js";
 
 const RECIPES_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -61,6 +62,7 @@ function stubFetch(
 
 let dir = "";
 let tokenFile = "";
+let apiTokenFile = "";
 let mockApp: FastifyInstance;
 let mockBase = "";
 
@@ -68,9 +70,13 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "vbpf-explain-results-"));
   tokenFile = join(dir, "agent.token");
   writeFileSync(tokenFile, "test-token-explain-results\n");
+  apiTokenFile = join(dir, "api.token");
+  writeFileSync(apiTokenFile, `${"c5".repeat(32)}\n`);
+  installTestApiAuth("c5".repeat(32));
   mockApp = await buildApp({
     agentUrl: "http://127.0.0.1:1",
     tokenFile,
+    apiTokenFile,
     dbPath: join(dir, "api.sqlite3"),
     recipesDir: RECIPES_DIR,
     webOrigin: "http://localhost:5173",
@@ -143,6 +149,7 @@ describe("POST /api/explain-results validation", () => {
     const live = await buildApp({
       agentUrl: "http://127.0.0.1:1",
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir: RECIPES_DIR,
       webOrigin: "http://localhost:5173",
@@ -201,6 +208,7 @@ describe("POST /api/explain-results live mode", () => {
     const live = await buildApp({
       agentUrl: "http://127.0.0.1:1",
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir: RECIPES_DIR,
       webOrigin: "http://localhost:5173",
@@ -246,6 +254,7 @@ describe("POST /api/explain-results live mode", () => {
     const live = await buildApp({
       agentUrl: "http://127.0.0.1:1",
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir: RECIPES_DIR,
       webOrigin: "http://localhost:5173",
@@ -281,6 +290,7 @@ describe("POST /api/explain-results live mode", () => {
     const live = await buildApp({
       agentUrl: "http://127.0.0.1:1",
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir: RECIPES_DIR,
       webOrigin: "http://localhost:5173",
@@ -314,6 +324,7 @@ describe("explain-results rate limit", () => {
     const limited = await buildApp({
       agentUrl: "http://127.0.0.1:1",
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir: RECIPES_DIR,
       webOrigin: "http://localhost:5173",

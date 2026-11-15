@@ -1,8 +1,10 @@
 # Security
 
-Threat model: vBPF is a **local loopback service**. Natively the API and
-agent bind `127.0.0.1` only; there is no multi-user auth on the API
-itself — any local process can call it. (In the compose quickstart the
+Threat model: vBPF is a **local single-user service**. Natively the API and
+agent bind `127.0.0.1` only; every API route requires a bearer token
+(`API_TOKEN_FILE`, see below), and every agent route requires the agent
+token — there is still no multi-user auth, so any process running as your
+UID can read either token file. (In the compose quickstart the
 agent binds the container wildcard `0.0.0.0` under the explicit
 `AGENT_ALLOW_WILDCARD_BIND=1` opt-in because each container has its own
 loopback; no agent or API port is published to the host — see
@@ -34,8 +36,27 @@ executed without human confirmation.
 - Every agent endpoint requires `Authorization: Bearer <token>`, compared in
   constant time. The token lives in `AGENT_TOKEN_FILE` with mode `0600`
   (created by the agent on first start) and is never logged.
-- The API reads the same file to call the agent; if it is unreadable the API
-  reports `AGENT_OFFLINE` instead of leaking the cause.
+- Every API endpoint under `/api/*` and `/ws/*` — health included — requires
+  `Authorization: Bearer <token>` from `API_TOKEN_FILE` (default
+  `./run/api.token`, `0600`, created by the API on first start; compose uses
+  `/data/api.token` on the node-owned volume). Missing or wrong tokens get
+  `401 UNAUTHORIZED` with no detail; an unreadable token file fails the
+  request closed (`500`, generic). Comparison hashes both sides first, then
+  constant-time compares, so lengths never leak.
+- Browsers cannot set headers on WebSocket upgrades, so `/ws/*` also accepts
+  `?token=` (the web UI appends it from the stored token). The API's request
+  logger redacts that value (`?token=[REDACTED]`) on every line, and the 401
+  handler never logs the presented credential.
+- The loopback `Host` gate, the exact `Origin` check, and the `Sec-Fetch-Site`
+  check run before the token check, in that order. CORS preflight (`OPTIONS`)
+  is exempt from the token (preflights carry no credentials by design); the
+  actual request behind it is gated.
+- The browser cannot read the token file, so the operator pastes
+  `run/api.token` into the UI once (kept in `localStorage`) or bakes
+  `VITE_API_TOKEN` into a single-user build. `GET /api/health` exposes only
+  counts and warnings, never the token.
+- The API reads the agent token file to call the agent; if it is unreadable
+  the API reports `AGENT_OFFLINE` instead of leaking the cause.
 
 ## Rate limiting and size limits
 
@@ -191,6 +212,7 @@ leaves the machine.
 | `UNKNOWN_CALL`       | Call outside the function allowlist (`400`)                      | `POST /v1/runs` (`400` `code`); `/v1/validate` reports `errors` (`200`, no `code`)                   |
 | `LIMIT_EXCEEDED`     | Concurrent run (`409`) or total probes > 50 (`400`)              | `POST /v1/runs` (`409` / `400` `code`); `/v1/validate` reports `> 50` in `errors` (`200`, no `code`) |
 | `RATE_LIMITED`       | Generate budget spent                                            | `POST /api/generate` (`429` + `Retry-After`)                                                         |
+| `UNAUTHORIZED`       | Missing or wrong API bearer token                                | Every `/api/*` and `/ws/*` route (`401`, no detail)                                                  |
 | `REFUSAL`            | Unsafe prompt refused by the LLM gate                            | `POST /api/generate` (`422`)                                                                         |
 | `LLM_UNAVAILABLE`    | Live mode without a provider key                                 | `POST /api/generate` (`503`)                                                                         |
 | `FORBIDDEN`          | Foreign `Origin` / non-loopback `Host`                           | Any API route (`403`)                                                                                |

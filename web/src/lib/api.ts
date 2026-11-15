@@ -50,6 +50,47 @@ export function fixtureMode(): boolean {
   return import.meta.env["VITE_FIXTURE_MODE"] === "1";
 }
 
+// API bearer token (docs/security.md "Auth and tokens"). The browser cannot
+// read run/api.token, so the token lives in localStorage after the operator
+// pastes it once (Jupyter-style), or is baked in as VITE_API_TOKEN for a
+// single-user build. Sent on every /api call and as ?token= on the run
+// WebSocket (browsers cannot set WS headers).
+function apiToken(): string {
+  try {
+    const stored = localStorage.getItem("vbpf_api_token");
+    if (stored !== null && stored.trim() !== "") return stored.trim();
+  } catch {
+    // No DOM (tests, SSR): fall through to the build-time value.
+  }
+  const baked = import.meta.env["VITE_API_TOKEN"];
+  return typeof baked === "string" ? baked.trim() : "";
+}
+
+export function setApiToken(token: string): void {
+  try {
+    if (token.trim() === "") localStorage.removeItem("vbpf_api_token");
+    else localStorage.setItem("vbpf_api_token", token.trim());
+  } catch {
+    // Storage unavailable: the caller still gets no header, same as before.
+  }
+}
+
+// Query-string form for the run WebSocket: browsers cannot set headers on
+// upgrades, so the API also accepts ?token= on /ws/* (redacted from logs).
+export function wsTokenQuery(): string {
+  const token = apiToken();
+  return token === "" ? "" : `?token=${encodeURIComponent(token)}`;
+}
+
+function authHeaders(extra?: HeadersInit): Headers {
+  const headers = new Headers(extra);
+  const token = apiToken();
+  if (token !== "" && !headers.has("authorization")) {
+    headers.set("authorization", `Bearer ${token}`);
+  }
+  return headers;
+}
+
 async function parseError(res: Response): Promise<never> {
   let code = "INTERNAL";
   let message = `request failed (${res.status})`;
@@ -79,7 +120,7 @@ async function parseError(res: Response): Promise<never> {
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(path, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: authHeaders({ "content-type": "application/json" }),
     body: JSON.stringify(body),
   });
   if (!res.ok) await parseError(res);
@@ -87,7 +128,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await fetch(path, { headers: authHeaders() });
   if (!res.ok) await parseError(res);
   return (await res.json()) as T;
 }

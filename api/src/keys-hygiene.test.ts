@@ -8,11 +8,15 @@ import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { buildApp } from "./server.js";
+import { installTestApiAuth } from "./test-auth.js";
 
 // Realistic-looking fake secrets. Live only in memory; never committed.
 const FAKE_GROQ_KEY = `gsk_${"a".repeat(48)}`;
 const FAKE_AGENT_TOKEN = `agent-token-${"b".repeat(32)}`;
-const SECRETS = [FAKE_GROQ_KEY, FAKE_AGENT_TOKEN];
+// Fixed 64-char hex bearer token (see api-auth.ts tokensEqual): the API gate
+// rejects anything else, so the api.token/installTestApiAuth pair uses this.
+const FAKE_API_TOKEN = "d4".repeat(32);
+const SECRETS = [FAKE_GROQ_KEY, FAKE_AGENT_TOKEN, FAKE_API_TOKEN];
 
 const HEALTH = {
   kernel: "6.8-test",
@@ -31,6 +35,7 @@ const HEALTH = {
 
 let dir = "";
 let tokenFile = "";
+let apiTokenFile = "";
 let fake: Server | null = null;
 let fakeUrl = "";
 let app: FastifyInstance | null = null;
@@ -50,6 +55,9 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "vbpf-keys-"));
   tokenFile = join(dir, "agent.token");
   writeFileSync(tokenFile, `${FAKE_AGENT_TOKEN}\n`);
+  apiTokenFile = join(dir, "api.token");
+  writeFileSync(apiTokenFile, `${FAKE_API_TOKEN}\n`);
+  installTestApiAuth(FAKE_API_TOKEN);
 
   fake = createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
@@ -72,6 +80,7 @@ beforeAll(async () => {
   app = await buildApp({
     agentUrl: fakeUrl,
     tokenFile,
+    apiTokenFile,
     dbPath: join(dir, "api.sqlite3"),
     recipesDir,
     webOrigin: "http://localhost:5173",
@@ -127,6 +136,7 @@ describe("keys hygiene", () => {
     const bad = await buildApp({
       agentUrl: fakeUrl,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir,
       webOrigin: "http://localhost:5173",
@@ -179,6 +189,7 @@ describe("live-llm log hygiene", () => {
     const stubbed = await buildApp({
       agentUrl: fakeUrl,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir,
       webOrigin: "http://localhost:5173",

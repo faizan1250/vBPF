@@ -37,6 +37,14 @@ import {
   type AgentHealth,
 } from "./agent-client.js";
 import {
+  bearerToken,
+  loadOrCreateApiToken,
+  readApiToken,
+  redactTokenUrl,
+  tokensEqual,
+  wsQueryToken,
+} from "./api-auth.js";
+import {
   closeDb,
   deriveRunOrigin,
   ensureSession,
@@ -84,6 +92,11 @@ import { loadRecipes } from "./recipes.js";
 export interface AppOptions {
   agentUrl: string;
   tokenFile: string;
+  // Bearer-token gate for the API itself (D-106): required on every /api/*
+  // and /ws/* route, health included. The file is generated (0600) on first
+  // start when missing; per-request reads go through an mtime cache so
+  // rotation is picked up without a restart.
+  apiTokenFile: string;
   dbPath: string;
   recipesDir: string;
   webOrigin: string;
@@ -393,6 +406,7 @@ export async function buildApp(
   // <root>/run/agent.token. Absolute overrides pass through untouched.
   const root = apiRepoRoot();
   const tokenFile = resolveRepoPath(opts.tokenFile, root);
+  const apiTokenFile = resolveRepoPath(opts.apiTokenFile, root);
   const dbPath = resolveRepoPath(opts.dbPath, root);
   const recipesDir = resolveRepoPath(opts.recipesDir, root);
   const app = Fastify({
@@ -411,8 +425,23 @@ export async function buildApp(
           "req.headers.Authorization",
           "*.token",
           "*.agentToken",
+          "*.apiToken",
         ],
         censor: "[REDACTED]",
+      },
+      // Browsers cannot set headers on WebSocket upgrades, so /ws/* accepts
+      // ?token= (D-108). The default req serializer would log the raw query,
+      // so redact the token value from every request line.
+      serializers: {
+        req(req) {
+          return {
+            method: req.method,
+            url: redactTokenUrl(req.url),
+            hostname: req.hostname,
+            remoteAddress: req.ip,
+            remotePort: req.raw.socket?.remotePort,
+          };
+        },
       },
     },
     bodyLimit: BODY_LIMIT,
@@ -420,6 +449,18 @@ export async function buildApp(
     // 128 run-id cap so the handlers return 404 for overlong ids.
     routerOptions: { maxParamLength: 256 },
   });
+
+  // API bearer-token gate (D-106): the file is minted here on first start so
+  // a fresh clone keeps working; every later failure is fail-closed. The
+  // per-request reads below go through an mtime cache, so rotation needs no
+  // restart. The token value never leaves this module except into the
+  // constant-time compare — never into logs or error bodies.
+  try {
+    loadOrCreateApiToken(apiTokenFile);
+  } catch (err) {
+    app.log.error({ err }, "api token file unavailable, refusing to start");
+    throw err;
+  }
 
   const database = db ?? openDb(dbPath);
   migrate(database);
@@ -725,6 +766,42 @@ export async function buildApp(
       return reply
         .code(403)
         .send({ error: "forbidden fetch site", code: "FORBIDDEN" });
+    }
+    // CORS preflight carries no credentials by design: the cors plugin
+    // answers OPTIONS (Access-Control-Request-Headers may name
+    // authorization), and the actual request right behind it is gated.
+    if (req.method === "OPTIONS") return;
+    // Bearer-token gate (D-106): required on every /api/* and /ws/* route,
+    // health included (D-107). Browsers cannot set headers on WebSocket
+    // upgrades, so /ws/* also accepts ?token= (D-108); the logger serializer
+    // above redacts that value from every request line.
+    const rawUrl = req.raw.url ?? req.url;
+    const path = rawUrl.split("?")[0] ?? "";
+    if (path.startsWith("/api/") || path.startsWith("/ws/")) {
+      let presented = bearerToken(req.headers.authorization);
+      if (presented === "" && path.startsWith("/ws/")) {
+        presented = wsQueryToken(rawUrl);
+      }
+      let expected: string;
+      try {
+        expected = readApiToken(apiTokenFile);
+      } catch (err) {
+        req.log.error({ err }, "api token unreadable");
+        return reply
+          .code(500)
+          .send({ error: "internal error", code: "INTERNAL" });
+      }
+      if (!tokensEqual(presented, expected)) {
+        // Never log the presented value or the Authorization header: only
+        // the (query-redacted) URL and the peer.
+        req.log.warn(
+          { ip: req.ip, url: redactTokenUrl(rawUrl) },
+          "unauthorized api request",
+        );
+        return reply
+          .code(401)
+          .send({ error: "unauthorized", code: "UNAUTHORIZED" });
+      }
     }
   });
 

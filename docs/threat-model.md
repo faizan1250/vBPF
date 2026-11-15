@@ -110,8 +110,9 @@ Stated plainly — these are accepted, not fixed:
    first — but a verifier flaw plus a validator miss would reach the kernel.
    Keep the host kernel patched.
 
-Related: any local process can call the API (loopback bind is the only
-gate — there is no multi-user auth), and runs are not preflight-gated on
-`root`/`btf` (a non-root or BTF-less host fails at exec/dry-run time rather
-than at admission). Both are documented trade-offs in
-[`security.md`](security.md).
+Related: any local process running as your UID can read the API token file
+(`0600`) and call the API — the token gates other users and remote callers,
+not same-user processes; there is still no multi-user auth. Runs are not
+preflight-gated on `root`/`btf` (a non-root or BTF-less host fails at
+exec/dry-run time rather than at admission). Both are documented trade-offs
+in [`security.md`](security.md).

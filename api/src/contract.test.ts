@@ -21,8 +21,9 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 
 import { buildApp, healthWarnings, isSafeId } from "./server.js";
+import { installTestApiAuth } from "./test-auth.js";
 
-const TOKEN = "test-token-123";
+const TOKEN = "c1".repeat(32);
 const HEALTH = {
   kernel: "6.8-test",
   bpftrace_version: "bpftrace v0.21",
@@ -234,7 +235,9 @@ function requestRaw(
 }
 
 function getWithHost(url: string, host: string): Promise<number> {
-  return requestRaw(url, { headers: { host } }).then((r) => r.status);
+  return requestRaw(url, {
+    headers: { host, authorization: `Bearer ${TOKEN}` },
+  }).then((r) => r.status);
 }
 
 function sendRawHttp(
@@ -290,6 +293,7 @@ function wsUpgradeRejected(
 
 let dir = "";
 let tokenFile = "";
+let apiTokenFile = "";
 let fake: FakeAgent;
 let app: FastifyInstance;
 let base = "";
@@ -305,10 +309,14 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "vbpf-api-"));
   tokenFile = join(dir, "agent.token");
   writeFileSync(tokenFile, TOKEN + "\n");
+  apiTokenFile = join(dir, "api.token");
+  writeFileSync(apiTokenFile, TOKEN + "\n");
+  installTestApiAuth(TOKEN);
   fake = await startFakeAgent();
   app = await buildApp({
     agentUrl: fake.url,
     tokenFile,
+    apiTokenFile,
     dbPath: join(dir, "api.sqlite3"),
     recipesDir,
     webOrigin: "http://localhost:5173",
@@ -502,7 +510,9 @@ describe("run summaries", () => {
     try {
       const wsUrl = `${base.replace(/^http/, "ws")}/ws/runs/${created.run_id}`;
       await new Promise<void>((resolve, reject) => {
-        const ws = new WebSocket(wsUrl);
+        const ws = new WebSocket(wsUrl, {
+          headers: { Authorization: `Bearer ${TOKEN}` },
+        });
         ws.on("message", (data) => {
           const ev = JSON.parse(data.toString()) as { kind: string };
           if (ev.kind === "summary") {
@@ -694,6 +704,7 @@ describe("run summaries", () => {
     const flakyApp = await buildApp({
       agentUrl: flakyUrl,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir,
       webOrigin: "http://localhost:5173",
@@ -764,6 +775,7 @@ describe("run summaries", () => {
     const httpOnlyApp = await buildApp({
       agentUrl: httpOnlyUrl,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir,
       webOrigin: "http://localhost:5173",
@@ -831,6 +843,7 @@ describe("run summaries", () => {
     const testApp = await buildApp({
       agentUrl: teardownUrl,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir,
       webOrigin: "http://localhost:5173",
@@ -984,7 +997,9 @@ describe("server-owned run monitoring (I-02)", () => {
     try {
       const wsUrl = `${base.replace(/^http/, "ws")}/ws/runs/${created.run_id}`;
       await new Promise<void>((resolve, reject) => {
-        const ws = new WebSocket(wsUrl);
+        const ws = new WebSocket(wsUrl, {
+          headers: { Authorization: `Bearer ${TOKEN}` },
+        });
         // Viewer leaves after the first event; no viewer stays attached.
         ws.on("message", () => {
           ws.close();
@@ -1047,6 +1062,7 @@ describe("server-owned run monitoring (I-02)", () => {
     const monApp = await buildApp({
       agentUrl: hold.url,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir,
       webOrigin: "http://localhost:5173",
@@ -1085,6 +1101,7 @@ describe("server-owned run monitoring (I-02)", () => {
     const first = await buildApp({
       agentUrl: hold.url,
       tokenFile,
+      apiTokenFile,
       dbPath,
       recipesDir,
       webOrigin: "http://localhost:5173",
@@ -1109,6 +1126,7 @@ describe("server-owned run monitoring (I-02)", () => {
     const second = await buildApp({
       agentUrl: summary.url,
       tokenFile,
+      apiTokenFile,
       dbPath,
       recipesDir,
       webOrigin: "http://localhost:5173",
@@ -1139,6 +1157,7 @@ describe("server-owned run monitoring (I-02)", () => {
     const first = await buildApp({
       agentUrl: hold.url,
       tokenFile,
+      apiTokenFile,
       dbPath,
       recipesDir,
       webOrigin: "http://localhost:5173",
@@ -1163,6 +1182,7 @@ describe("server-owned run monitoring (I-02)", () => {
     const second = await buildApp({
       agentUrl: lost.url,
       tokenFile,
+      apiTokenFile,
       dbPath,
       recipesDir,
       webOrigin: "http://localhost:5173",
@@ -1497,7 +1517,9 @@ describe("websocket relay", () => {
     const kinds: string[] = [];
     let runId = "";
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(wsUrl);
+      const ws = new WebSocket(wsUrl, {
+        headers: { Authorization: `Bearer ${TOKEN}` },
+      });
       ws.on("message", (data) => {
         const ev = JSON.parse(data.toString()) as {
           run_id: string;
@@ -1551,6 +1573,7 @@ describe("websocket relay", () => {
 
     const rejected = await wsUpgradeRejected(`${wsBase}/ws/runs/invalid..id`, {
       origin: "http://localhost:5173",
+      authorization: `Bearer ${TOKEN}`,
     });
     expect(rejected.status).toBe(400);
   });
@@ -1681,11 +1704,16 @@ describe("health and recipes", () => {
     expect(mixedCase.status).toBe(403);
 
     const sameOrigin = await requestRaw(`${base}/api/health`, {
-      headers: { "sec-fetch-site": "same-origin" },
+      headers: {
+        "sec-fetch-site": "same-origin",
+        authorization: `Bearer ${TOKEN}`,
+      },
     });
     expect(sameOrigin.status).toBe(200);
 
-    const absent = await requestRaw(`${base}/api/health`);
+    const absent = await requestRaw(`${base}/api/health`, {
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
     expect(absent.status).toBe(200);
   });
 
@@ -1783,7 +1811,10 @@ describe("health and recipes", () => {
     try {
       await new Promise<void>((resolve, reject) => {
         const ws = new WebSocket(`${wsBase}/ws/runs/${created.run_id}`, {
-          headers: { origin: "http://localhost:5173" },
+          headers: {
+            origin: "http://localhost:5173",
+            Authorization: `Bearer ${TOKEN}`,
+          },
         });
         ws.on("message", (data) => {
           const ev = JSON.parse(data.toString()) as { kind: string };
@@ -1880,6 +1911,7 @@ describe("agent catalog not ready (AGENT_NOT_READY)", () => {
     const unreadyApp = await buildApp({
       agentUrl: notReadyUrl,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir,
       webOrigin: "http://localhost:5173",
@@ -1948,6 +1980,7 @@ describe("agent offline", () => {
     const offline = await buildApp({
       agentUrl: "http://127.0.0.1:1",
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir,
       webOrigin: "http://localhost:5173",
@@ -1996,6 +2029,7 @@ describe("run id length cap (128) and same-host origin", () => {
     const wsBase = base.replace(/^http/, "ws");
     const rejected = await wsUpgradeRejected(`${wsBase}/ws/runs/${long129}`, {
       origin: "http://localhost:5173",
+      authorization: `Bearer ${TOKEN}`,
     });
     expect(rejected.status).toBe(400);
   });
@@ -2031,6 +2065,7 @@ describe("catalog-unavailable scope (code-only)", () => {
     const otherApp = await buildApp({
       agentUrl: otherUrl,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir,
       webOrigin: "http://localhost:5173",
