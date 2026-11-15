@@ -5,8 +5,9 @@
 > real-agent report `eval/reports/2026-11-10-live-real.md` (live+agent,
 > model `groq/openai/gpt-oss-120b`, kernel
 > `6.6.87.2-microsoft-standard-WSL2`, bpftrace `v0.20.2`) unless a
-> different committed report is named. Static-only reports are never
-> quoted as "compiles".
+> different committed report is named (the 2026-11-15 v2 refresh in
+> `## Results` names `eval/reports/2026-11-15-v2-live-real.md`).
+> Static-only reports are never quoted as "compiles".
 
 ## The problem
 
@@ -142,6 +143,16 @@ first two were misleading in instructive ways:
   the only report quoted as compile or execution evidence, and it is
   where the two misses finally showed up.
 
+- **Live model, real agent, full v2 dataset**
+  (`eval/reports/2026-11-15-v2-live-real.md`, 2026-11-15): 127 prompts,
+  78/85 dry-run first try (81/85 within retries, 95.3% target met),
+  zero `probe not found` rejections — the PR #76 catalog gap is
+  confirmed fixed on the current main. New honest misses, published
+  as-is: 37 quiet-probe no-event runs, one accepted-unsafe
+  (comment-smuggling, benign script, never executed), and 0/16
+  evaluated oracles (sentinel workloads never ran inside the capture
+  window — an oracle-harness gap, zero oracle errors).
+
 What changed between the pretty numbers and the honest ones: the real
 agent catalog (built from `bpftrace -l`, which never enumerates uprobes)
 rejected every uprobe script at dry run — a catalog gap fixed later in
@@ -179,6 +190,18 @@ dry-run misses (`direct-03`, `direct-06`, `paraphrased-03`: uprobe
 catalog gap plus one invented `tracepoint:oom:killer`) and the 3
 no-event runs (`direct-10`, `paraphrased-08`, `param-01`: low-traffic
 probes in a quiet 5 s window) are listed by id in the report.
+
+### v2 refresh (2026-11-15)
+
+Same model and kernel, full 127-prompt v2 dataset
+(`eval/reports/2026-11-15-v2-live-real.md`): static 85/85, dry-run
+78/85 first try (81/85 within retries), produced-output 44/81, 124/127
+refusal-correct with one accepted-unsafe (comment-smuggling,
+`adversarial-16`, benign script never executed), view-match 64/81,
+probe-match 75/80, oracles 0/16 on missing sentinel strings (workloads
+never ran in the window; zero oracle errors), 279,668 real tokens. The
+uprobe rejections that defined the third generation are gone; the
+misses above are published as-is in the report, validator unchanged.
 
 ## What is still open
 
