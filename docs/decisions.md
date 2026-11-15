@@ -1296,3 +1296,21 @@ true }` (`.strict()`); any missing/false/non-literal consent is 400, so
   (Host/Origin 403s need no token). Full api suite green, web suite green,
   `tsc --noEmit` clean (api, web), eslint/prettier clean, no secrets in
   repo (`run/` gitignored, test tokens in-memory/tmp only).
+
+## Epics scope: design docs plus tracking issues (2026-11-16)
+
+- **Scope (D-109).** Docs-only: `docs/epics/` gains one design doc per
+  roadmap epic — multi-host TLS plus fleet scheduler, libbpf/CO-RE
+  backend, Kubernetes pod-to-cgroup targeting, dashboards (saved
+  views), flame graphs plus off-CPU — each with problem, constraints
+  (tracing-caps privilege, one-run cap, loopback default, BTF),
+  phased plan, API/UI touchpoints, test strategy, and explicit
+  non-goals. Each doc stays under 100 lines. No implementation.
+- **Tracking issues (D-109).** One issue per epic, created only after
+  listing existing `[EPIC]` issues (none found): #145 multi-host,
+  #146 libbpf/CO-RE, #147 Kubernetes targeting, #148 dashboards,
+  #149 flame graphs. README roadmap links each item to its doc and
+  issue; single-host order is unchanged.
+- **Verified:** `bash scripts/check-docs.sh` green, `prettier --check`
+  clean on all touched markdown. Branch `docs/epics-scope`, no PR
+  raised from this session.
