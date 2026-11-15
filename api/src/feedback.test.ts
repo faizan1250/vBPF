@@ -35,6 +35,90 @@ describe("shapeError", () => {
   it("returns empty for noise-only input", () => {
     expect(shapeError("Attached 2 probes\n")).toBe("");
   });
+
+  it("returns empty for BTF-debug plus AST dump with no compiler error", () => {
+    // Fixture mirrors eval direct-17 / novel-19 dry-run failures: only
+    // banners, BTF debug, and AST fragments, no actionable ERROR.
+    const raw = [
+      "[DEBUG] libbpf: loading kernel BTF '/sys/kernel/btf/vmlinux': 0",
+      "WARNING: BPFTRACE_STRLEN is deprecated. Use BPFTRACE_MAX_STRLEN instead.",
+      "WARNING: BPFTRACE_MAP_KEYS_MAX is deprecated. Use BPFTRACE_MAX_MAP_KEYS instead.",
+      "[DEBUG] libbpf: loading kernel BTF '/sys/kernel/btf/vmlinux': 0",
+      "AST after: parser",
+      "",
+      "---",
+      "",
+      "Program",
+      "tracepoint:block:block_rq_issue",
+      "=",
+      "map: @start :: type[none, ctx: 0]",
+      ".",
+      "dereference",
+      "builtin: args :: type[none, ctx: 0]",
+      "dev",
+      ".",
+      "dereference",
+      "builtin: args :: type[none, ctx: 0]",
+      "sector",
+      "builtin: nsecs :: type[none, ctx: 0]",
+      "=",
+      "~",
+    ].join("\n");
+    expect(shapeError(raw)).toBe("");
+  });
+
+  it("surfaces a buried ERROR past BTF-debug and AST headers", () => {
+    const raw = [
+      "[DEBUG] libbpf: loading kernel BTF '/sys/kernel/btf/vmlinux': 0",
+      "WARNING: BPFTRACE_STRLEN is deprecated. Use BPFTRACE_MAX_STRLEN instead.",
+      "AST after: parser",
+      "---",
+      "Program",
+      "stdin:1:9-14: ERROR: unknown tracepoint arg args->nope",
+      "@x = args->nope;",
+      "      ~~~~~",
+      "tracepoint:block:block_rq_issue",
+      "map: @x :: type[count, ctx: 0]",
+    ].join("\n");
+    const shaped = shapeError(raw);
+    expect(shaped).toBe(
+      "stdin:1:9-14: ERROR: unknown tracepoint arg args->nope",
+    );
+    expect(shaped).not.toContain("libbpf");
+    expect(shaped).not.toContain("AST");
+    expect(shaped).not.toContain("Program");
+  });
+
+  it("drops caret, source echo, and bare probe lines without an ERROR", () => {
+    const raw = [
+      "@is_write[args->dev, args->sector] = (args->rwbs[0] == 'W');",
+      "~",
+      "tracepoint:block:block_rq_issue",
+      "interval:s:1",
+      "BEGIN",
+      "call: count :: type[count, ctx: 0]",
+      "dereference",
+    ].join("\n");
+    expect(shapeError(raw)).toBe("");
+  });
+
+  it("keeps non-ERROR actionable rejections (blocked call, too many)", () => {
+    expect(shapeError("blocked call: system is forbidden")).toBe(
+      "blocked call: system is forbidden",
+    );
+    expect(
+      shapeError(
+        "wildcard expands to too many probes: tracepoint:sys:* (99 exceeds max 50)",
+      ),
+    ).toContain("too many probes");
+  });
+
+  it("keeps dry-run infrastructure failures", () => {
+    expect(shapeError("dry-run not supported by this bpftrace version")).toBe(
+      "dry-run not supported by this bpftrace version",
+    );
+    expect(shapeError("dry-run failed")).toBe("dry-run failed");
+  });
 });
 
 describe("hintForError", () => {
@@ -95,5 +179,49 @@ describe("shapeFeedbackErrors", () => {
   it("returns empty for empty or noise-only input", () => {
     expect(shapeFeedbackErrors([])).toEqual([]);
     expect(shapeFeedbackErrors(["Attached 1 probe"])).toEqual([]);
+  });
+
+  it("returns empty for AST-dump-only dry-run output", () => {
+    const out = shapeFeedbackErrors([
+      "[DEBUG] libbpf: loading kernel BTF '/sys/kernel/btf/vmlinux': 0",
+      "WARNING: BPFTRACE_STRLEN is deprecated. Use BPFTRACE_MAX_STRLEN instead.",
+      "WARNING: BPFTRACE_MAP_KEYS_MAX is deprecated. Use BPFTRACE_MAX_MAP_KEYS instead.",
+      "[DEBUG] libbpf: loading kernel BTF '/sys/kernel/btf/vmlinux': 0",
+      "AST after: parser",
+      "---",
+      "Program",
+      "tracepoint:block:block_rq_complete",
+      "=",
+      "map: @ops :: type[none, ctx: 0]",
+      "call: str :: type[none, ctx: 0]",
+      ".",
+      "dereference",
+      "builtin: args :: type[none, ctx: 0]",
+      "rwbs",
+      "call: count :: type[none, ctx: 0]",
+      "interval:s:1",
+      "call: print :: type[none, ctx: 0]",
+    ]);
+    expect(out).toEqual([]);
+  });
+
+  it("shapes a buried ERROR with hint and no AST fragments", () => {
+    const out = shapeFeedbackErrors([
+      "[DEBUG] libbpf: loading kernel BTF '/sys/kernel/btf/vmlinux': 0",
+      "WARNING: BPFTRACE_STRLEN is deprecated. Use BPFTRACE_MAX_STRLEN instead.",
+      "AST after: parser",
+      "---",
+      "Program",
+      "stdin:2:5-11: ERROR: undefined variable @start",
+      "@y = @start + 1;",
+      "      ~~~~~~",
+      "map: @y :: type[none, ctx: 0]",
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toContain("ERROR: undefined variable @start");
+    expect(out[0]).toContain("@ prefix");
+    expect(out[0]).not.toContain("libbpf");
+    expect(out[0]).not.toContain("Program");
+    expect(out[0]).not.toContain("---");
   });
 });
