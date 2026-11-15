@@ -419,16 +419,16 @@ Generation quality is measured, not assumed. CI stays **mock-only by design**: `
 
 Latest real-kernel numbers (live+agent, model `groq/openai/gpt-oss-120b`, kernel `6.6.87.2-microsoft-standard-WSL2`, bpftrace `v0.20.2`, 2026-11-15, full v2 dataset of 127 prompts):
 
-| Metric                                              | Target                | Latest (live+agent)                                              |
-| --------------------------------------------------- | --------------------- | ---------------------------------------------------------------- |
-| Passes static validation (first try / retries)      | —                     | 85/85 / 85/85                                                    |
-| Compiles on a real kernel, dry-run (first try)      | at least 80%          | 78/85 (91.8%)                                                    |
-| Compiles on a real kernel, dry-run (within retries) | at least 95%          | 81/85 (95.3%, target met)                                        |
-| Produces events when run (generated scripts)        | at least 80% of valid | 44/81 (54.3%, target missed — quiet probes, see note)            |
-| Correct view type selected                          | —                     | 64/81                                                            |
-| Probe-match against the real catalog                | —                     | 75/80                                                            |
-| Adversarial prompts refused or rejected             | 100%                  | 41/42 (124/127 refusal-correct; 1 accepted-unsafe, see note)     |
-| Result-correctness oracles                          | —                     | 0/16 evaluated (sentinel-workload gap, see note)                 |
+| Metric                                              | Target                | Latest (live+agent)                                          |
+| --------------------------------------------------- | --------------------- | ------------------------------------------------------------ |
+| Passes static validation (first try / retries)      | —                     | 85/85 / 85/85                                                |
+| Compiles on a real kernel, dry-run (first try)      | at least 80%          | 78/85 (91.8%)                                                |
+| Compiles on a real kernel, dry-run (within retries) | at least 95%          | 81/85 (95.3%, target met)                                    |
+| Produces events when run (generated scripts)        | at least 80% of valid | 44/81 (54.3%, target missed — quiet probes, see note)        |
+| Correct view type selected                          | —                     | 64/81                                                        |
+| Probe-match against the real catalog                | —                     | 75/80                                                        |
+| Adversarial prompts refused or rejected             | 100%                  | 41/42 (124/127 refusal-correct; 1 accepted-unsafe, see note) |
+| Result-correctness oracles                          | —                     | 0/16 evaluated (sentinel-workload gap, see note)             |
 
 Full report: [`eval/reports/2026-11-15-v2-live-real.md`](eval/reports/2026-11-15-v2-live-real.md) (generated scripts: [`2026-11-15-v2-live-real-scripts.ndjson`](eval/reports/2026-11-15-v2-live-real-scripts.ndjson)). Notes: the pre-D-48 uprobe dry-run misses are gone — zero `probe not found` rejections, and the former uprobe miss class now passes dry-run. The 37 no-event runs are quiet probes in the 5 s window (low-traffic tracepoints, thresholds), not compile failures. The single accepted-unsafe is a comment-smuggling prompt (`adversarial-16`) whose generated script is benign (hostile text confined to a `//` comment); it was recorded, never executed, and the validator is unchanged. All 16 evaluated oracles failed on missing sentinel strings because the sentinel workloads did not run inside the 5 s capture window — an oracle-harness gap, not a script-correctness signal; zero oracle errors.
 
