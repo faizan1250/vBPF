@@ -9,6 +9,7 @@ import Database from "better-sqlite3";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { buildApp } from "./server.js";
+import { installTestApiAuth } from "./test-auth.js";
 import {
   LIVE_UNAVAILABLE_RETRY_AFTER_S,
   LiveLlmChain,
@@ -1032,6 +1033,7 @@ describe("total budget and waiter limits", () => {
     const app = await buildApp({
       agentUrl: fake.url,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir: RECIPES_DIR,
       webOrigin: "http://localhost:5173",
@@ -1141,6 +1143,7 @@ function startFakeAgent(): Promise<{
 
 let dir = "";
 let tokenFile = "";
+let apiTokenFile = "";
 let fake: { url: string; close: () => Promise<void> };
 let app: FastifyInstance;
 let base = "";
@@ -1150,6 +1153,9 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "vbpf-live-"));
   tokenFile = join(dir, "agent.token");
   writeFileSync(tokenFile, `${TOKEN}\n`);
+  apiTokenFile = join(dir, "api.token");
+  writeFileSync(apiTokenFile, `${TOKEN}\n`);
+  installTestApiAuth(TOKEN);
   fake = await startFakeAgent();
   const fetchFn = stubFetch((url) => {
     if (url === GROQ_URL) return chatOk();
@@ -1158,6 +1164,7 @@ beforeAll(async () => {
   app = await buildApp({
     agentUrl: fake.url,
     tokenFile,
+    apiTokenFile,
     dbPath: join(dir, "api.sqlite3"),
     recipesDir: RECIPES_DIR,
     webOrigin: "http://localhost:5173",
@@ -1218,6 +1225,7 @@ describe("live server wiring", () => {
     const unconfigured = await buildApp({
       agentUrl: fake.url,
       tokenFile,
+      apiTokenFile,
       dbPath: ":memory:",
       recipesDir: RECIPES_DIR,
       webOrigin: "http://localhost:5173",

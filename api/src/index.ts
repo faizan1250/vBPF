@@ -8,6 +8,7 @@ const config = loadConfig();
 const app = await buildApp({
   agentUrl: config.AGENT_URL,
   tokenFile: config.AGENT_TOKEN_FILE,
+  apiTokenFile: config.API_TOKEN_FILE,
   dbPath: config.DATABASE_PATH,
   recipesDir: config.RECIPES_DIR,
   webOrigin: config.WEB_ORIGIN,

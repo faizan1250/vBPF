@@ -39,6 +39,16 @@ describe("loadConfig provider chain", () => {
     expect(cfg.LLM_WAIT_TIMEOUT_MS).toBe(300);
   });
 
+  it("defaults the api token file to run/api.token", () => {
+    expect(loadConfig({}).API_TOKEN_FILE).toBe("./run/api.token");
+  });
+
+  it("passes API_TOKEN_FILE through", () => {
+    expect(
+      loadConfig({ API_TOKEN_FILE: "/data/api.token" }).API_TOKEN_FILE,
+    ).toBe("/data/api.token");
+  });
+
   it("defaults TRUST_PROXY to false", () => {
     expect(loadConfig({}).TRUST_PROXY).toBe("false");
   });

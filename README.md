@@ -122,7 +122,7 @@ gate plus live views, not generation quality.
 
 ```mermaid
 flowchart LR
-  B["Browser (React)"] -- "HTTP / WebSocket" --> A["API server (Node + TypeScript, Fastify)"]
+  B["Browser (React)"] -- "HTTP / WebSocket, bearer token" --> A["API server (Node + TypeScript, Fastify)"]
   A -- "prompt + recipes + probe names" --> L["LLM provider"]
   A -- "HTTP / WebSocket, bearer token, loopback" --> G["Agent (Go, root)"]
   G -- "exec" --> T["bpftrace"]
@@ -550,6 +550,13 @@ Being explicit about what the project does not (yet) do:
   in the agent's mount namespace, so `uprobe:libc:...` in compose targets
   the container's libc, not the host's. Trace host user-space natively,
   or bind-mount host library dirs read-only into the agent container.
+- **Single-user API token, not multi-user auth.** Every `/api/*` and `/ws/*`
+  route (health included) requires `Authorization: Bearer <token>` from
+  `API_TOKEN_FILE` (`0600`, generated on first start). The browser sends a
+  pasted token from localStorage. Any same-UID local process can read that
+  file, so this gates other users and remote callers — not malware running
+  as you. See [`docs/security.md`](docs/security.md) and
+  [`docs/threat-model.md`](docs/threat-model.md).
 - **Short history.** SQLite storage with capped event retention per run; not a metrics system. Probe history persists server-side as sessions (generations plus runs, exportable as JSON); browser localStorage stays as the offline fallback.
 
 ---

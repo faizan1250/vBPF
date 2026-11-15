@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 
 import { buildApp } from "./server.js";
+import { installTestApiAuth } from "./test-auth.js";
 
 const TOKEN = "test-token-sessions";
 const HEALTH = {
@@ -128,6 +129,7 @@ function startFakeAgent(): Promise<FakeAgent> {
 
 let dir = "";
 let tokenFile = "";
+let apiTokenFile = "";
 let fake: FakeAgent;
 let app: FastifyInstance;
 let base = "";
@@ -143,10 +145,14 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "vbpf-sessions-"));
   tokenFile = join(dir, "agent.token");
   writeFileSync(tokenFile, TOKEN + "\n");
+  apiTokenFile = join(dir, "api.token");
+  writeFileSync(apiTokenFile, TOKEN + "\n");
+  installTestApiAuth(TOKEN);
   fake = await startFakeAgent();
   app = await buildApp({
     agentUrl: fake.url,
     tokenFile,
+    apiTokenFile,
     dbPath: join(dir, "api.sqlite3"),
     recipesDir,
     webOrigin: "http://localhost:5173",

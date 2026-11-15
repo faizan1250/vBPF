@@ -15,8 +15,66 @@ import {
   fetchSessions,
   generatePrompt,
   localRunOrigin,
+  setApiToken,
   validateScript,
+  wsTokenQuery,
 } from "./api.js";
+
+afterEach(() => {
+  try {
+    localStorage.removeItem("vbpf_api_token");
+  } catch {
+    // jsdom always has localStorage; ignore otherwise.
+  }
+  vi.unstubAllGlobals();
+});
+
+describe("api token", () => {
+  function stubStorage(): Map<string, string> {
+    const backing = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      getItem: (k: string) => (backing.has(k) ? backing.get(k)! : null),
+      setItem: (k: string, v: string) => void backing.set(k, v),
+      removeItem: (k: string) => void backing.delete(k),
+    });
+    return backing;
+  }
+
+  it("attaches the stored token as a bearer header", async () => {
+    stubStorage();
+    setApiToken("tok-123");
+    let seen: HeadersInit | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: RequestInit) => {
+        seen = init?.headers;
+        return Response.json({ ok: true });
+      }),
+    );
+    await validateScript("BEGIN { }");
+    expect(new Headers(seen).get("authorization")).toBe("Bearer tok-123");
+  });
+
+  it("sends no auth header without a stored token", async () => {
+    let seen: HeadersInit | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init?: RequestInit) => {
+        seen = init?.headers;
+        return Response.json({ ok: true });
+      }),
+    );
+    await validateScript("BEGIN { }");
+    expect(new Headers(seen).get("authorization")).toBeNull();
+  });
+
+  it("builds the ws query token only when set", () => {
+    stubStorage();
+    expect(wsTokenQuery()).toBe("");
+    setApiToken("tok-123");
+    expect(wsTokenQuery()).toBe("?token=tok-123");
+  });
+});
 
 describe("caps", () => {
   it("matches server contracts", () => {

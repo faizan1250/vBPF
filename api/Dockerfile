@@ -63,13 +63,14 @@ ENV HOST=0.0.0.0 \
   NODE_ENV=production \
   AGENT_URL=http://agent:8787 \
   AGENT_TOKEN_FILE=/token/agent.token \
+  API_TOKEN_FILE=/data/api.token \
   DATABASE_PATH=/data/api.sqlite3 \
   RECIPES_DIR=/app/recipes
 
 EXPOSE 8080
 
 HEALTHCHECK --interval=10s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:8080/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:8080/api/health',{headers:{Authorization:'Bearer '+require('fs').readFileSync('/data/api.token','utf8').trim()}}).then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["/app/api/entrypoint.sh"]
 CMD ["/usr/local/bin/node", "/app/api/dist/index.js"]
