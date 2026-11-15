@@ -113,8 +113,12 @@ No overhead runs exist outside the WSL2 dev machine above, so no
 numbers are presented for them:
 
 - Hosted CI (`ubuntu-22.04`, `ubuntu-24.04` in `compat/*.json`):
-  status `not-run`. `.github/workflows/kernel-matrix.yml` has no
-  overhead step and no committed run has produced overhead data.
+  status `not-run` for measured numbers. The `overhead-smoke` job in
+  `.github/workflows/ci.yml` (`make overhead-check`) guards the table
+  above (freshness plus one live 5 s idle recipe only where root and
+  bpftrace exist; stock runners skip the live half), but no committed
+  CI run has produced overhead data, so no numbers are presented for
+  them. `.github/workflows/kernel-matrix.yml` has no overhead step.
 - `vm-kernel-5.10/5.15/6.1/6.6`: status `not-run` (no KVM on hosted
   runners).
 

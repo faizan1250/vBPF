@@ -5,7 +5,7 @@
 
 SHELL := /bin/sh
 .SHELLFLAGS := -eu -c
-.PHONY: setup lint test test-determinism agent-build api-dev web-dev eval test-integration recipes-check recipe-check vuln audit secrets parity compat compat-check docs-check supply-chain-check fuzz test-differential
+.PHONY: setup lint test test-determinism agent-build api-dev web-dev eval test-integration recipes-check recipe-check vuln audit secrets parity compat compat-check docs-check supply-chain-check fuzz test-differential overhead-check
 
 GO ?= go
 PNPM ?= pnpm
@@ -124,6 +124,12 @@ fuzz:
 test-differential:
 	@if [ -d agent ]; then cd agent && $(GO) test -tags integration ./internal/server/ -run 'TestDifferentialOracle' -count=1 -v; \
 		else echo "SKIP: no agent/ yet"; fi
+
+# Overhead smoke (mock-safe): the published overhead table must stay fresh
+# and complete. Runs one live 5 s idle recipe only where root + bpftrace
+# exist; stock runners SKIP that half and still pass.
+overhead-check:
+	@bash scripts/check-overhead.sh
 
 # JS vulnerability gate (I-15): fails on high/critical findings unless
 # each is covered by an unexpired .github/audit-allowlist.json entry
