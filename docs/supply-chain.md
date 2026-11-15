@@ -29,8 +29,9 @@ public registries the runners already use.
 - CodeQL (`.github/workflows/codeql.yml`): `javascript-typescript` and `go`
   on push, PR, and weekly. Default query suite.
 - OpenSSF Scorecard (`.github/workflows/scorecard.yml`): weekly plus push
-  to `main`, SARIF published to code scanning. The README badge lands only
-  after the first successful run, so no badge is ever aspirational.
+  to `main`, SARIF published to code scanning. The README badge is live
+  (first successful runs on `main`, published score 6.4 on 2026-11-15);
+  details at <https://scorecard.dev/viewer/?uri=github.com/faizan1250/vBPF>.
 - `govulncheck ./...` (CI `vuln` job, `make vuln`): any known vulnerability
   fails the build; Go findings are fixed, never waived (govulncheck has no
   severity gate, so this is stricter than high/critical).
