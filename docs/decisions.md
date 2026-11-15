@@ -1087,3 +1087,16 @@ recipe-check` green for all 30; full agent `produced-output.sh` run:
   live half skips without root/bpftrace); `bash scripts/check-docs.sh`
   green; `gofmt`/`go vet` clean; `go test ./internal/server/` green
   (skip observed as root, pass as non-root where applicable).
+
+## Scorecard badge live (2026-11-15)
+
+- **Status (D-100).** `scorecard.yml` has completed successfully on `main`
+  (latest run 43747028660, 2026-11-15T18:29:18Z, head `5111b3b`), so the
+  D-87 deferral is lifted: the README badge is added, not left out.
+- **Badge.** `[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/faizan1250/vBPF/badge)](https://scorecard.dev/viewer/?uri=github.com/faizan1250/vBPF)`
+  next to the CI/Demo badges. Badge URL verified `302` to shields.io then
+  `200 image/svg+xml`; published API result for `5111b3b` dated
+  2026-11-15T18:29:32Z, score 6.4.
+- **Docs.** `docs/supply-chain.md` scanning bullet now states the badge is
+  live instead of deferred. No logic or workflow change.
+- **Verified:** `bash scripts/check-docs.sh` green (rerun after the edit).
