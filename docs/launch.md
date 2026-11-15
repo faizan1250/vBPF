@@ -4,17 +4,23 @@ Per D-5, launch is gated on R-01, R-02, and P1 results. Post only when the
 maintainer says so. Launch gate for this release: the real-agent eval
 report `eval/reports/2026-11-10-live-real.md` (live+agent, generated
 scripts dry-run compiled and run on a real kernel) must be committed and
-linked from the README. Static-only reports never count as launch
+linked from the README. Refresh 2026-11-15: the current evidence is the
+full v2 report `eval/reports/2026-11-15-v2-live-real.md` (127 prompts,
+post-D-48), linked from the README table; the numbers below are
+refreshed to it. Static-only reports never count as launch
 evidence and are never quoted as "compiles". Canonical pitch (from
 README): "vBPF does for eBPF what Postman did for `curl`."
 
 Facts every draft must keep true: Linux 5.8+ with BTF, bpftrace 20+, root
 for the agent only, Node 22+ / Go 1.26+, one probe at a time, single host.
 Real-agent eval (`groq/openai/gpt-oss-120b`, kernel
-`6.6.87.2-microsoft-standard-WSL2`, bpftrace `v0.20.2`): static validation
-26/26, dry-run compile 20/26 first try (23/26 within retries), 4/4
-adversarial refused (30/30 refusal-correct), 20/23 validated generated
-scripts produced events in 5 s runs. Recipe-only mode works with no API
+`6.6.87.2-microsoft-standard-WSL2`, bpftrace `v0.20.2`, full v2 dataset
+of 127 prompts, 2026-11-15): static validation 85/85, dry-run compile
+78/85 first try (81/85 within retries, 95.3% target met), 41/42
+adversarial refused (124/127 refusal-correct; one accepted-unsafe
+comment-smuggling case, benign script, published as-is), 44/81
+validated generated scripts produced events in 5 s runs (quiet probes
+in the window, not compile failures). Recipe-only mode works with no API
 key; only the prompt script text is sent to the LLM, never probe output.
 
 ---
@@ -32,10 +38,11 @@ output caps. An "Explain this probe" button walks through any script in
 plain English.
 
 Honest numbers from the real-agent eval (model `groq/openai/gpt-oss-120b`,
-real kernel): 20/26 dry-run compiled first try (23/26 within retries),
-4/4 adversarial prompts refused (30/30 refusal-correct), 20/23 validated
-generated scripts produced real kernel events in 5 s runs. The two dry-run
-targets were missed and are published as-is with a gap analysis.
+real kernel, full v2 dataset of 127 prompts): 78/85 dry-run compiled
+first try (81/85 within retries, 95.3% target met), 41/42 adversarial
+prompts refused (124/127 refusal-correct; one accepted-unsafe published
+as-is), 44/81 validated generated scripts produced real kernel events
+in 5 s runs (quiet-probe misses published as-is with a gap analysis).
 Recipe-only mode works with no API key. Single Linux host (5.8+, BTF), one
 probe at a time, root needed for the agent only.
 
@@ -53,9 +60,9 @@ and live charts — Postman-for-`curl`, but for eBPF.
   (`bpftrace -vl`), static validation + dry-run + kernel verifier, confirm
   before run, hard time/output limits
 - Explain-this-probe panel; run summaries via `GET /api/runs/:id`
-- Real-agent eval: dry-run 20/26 first try (23/26 within retries), 4/4
-  adversarial refused, 20/23 validated generated scripts produced events
-  on a real kernel (WSL2)
+- Real-agent eval (full v2, 127 prompts): dry-run 78/85 first try (81/85
+  within retries), 41/42 adversarial refused, 44/81 validated generated
+  scripts produced events on a real kernel (WSL2)
 - Works with no key in recipe-only mode; probe output never leaves your
   machine
 
@@ -77,9 +84,9 @@ re-validated by the agent, dry-run compiled, and time/output-capped; no
 guard, and secret scanning are in as of this release.
 
 Caveats, stated plainly: single host, one probe at a time, Linux 5.8+/BTF
-required. Real-agent eval on `groq/openai/gpt-oss-120b`: dry-run 20/26
-first try (23/26 within retries), 4/4 prompt-injection refused, 20/23
-validated generated scripts emitted events in 5 s.
+required. Real-agent eval on `groq/openai/gpt-oss-120b` (full v2, 127
+prompts): dry-run 78/85 first try (81/85 within retries), 41/42
+prompt-injection refused, 44/81 validated scripts emitted events in 5 s.
 
 ---
 
@@ -95,11 +102,11 @@ taken seriously:
   process-group kill with stale-child sweep on startup
 - Chaos-tested mid-run kills (agent/API/tab/bpftrace) with leftover checks
 
-Eval (live+agent, committed in `eval/reports/`): static 26/26, dry-run
-20/26 first try (23/26 within retries), 30/30 refusal-correct,
-produced-output 20/23 validated generated scripts (the 3 no-event cases
-were low-traffic probes or thresholds, detailed in the report). Would
-appreciate eyes on the validator (`api/src/validator*`) and the runner's
+Eval (live+agent, committed in `eval/reports/2026-11-15-v2-live-real.md`):
+static 85/85, dry-run 78/85 first try (81/85 within retries), 124/127
+refusal-correct, produced-output 44/81 validated generated scripts (the
+37 no-event cases were low-traffic probes or thresholds, detailed in the
+report). Would appreciate eyes on the validator (`api/src/validator*`) and the runner's
 teardown path.
 
 ---
@@ -112,8 +119,8 @@ reviewable bpftrace probe + live charts.
 2/ Confirm-before-run, triple-validated (static + dry-run + kernel
 verifier), time/output capped. No --unsafe, ever.
 
-3/ Real-kernel eval: dry-run 20/26 first try, 4/4 injections refused,
-20/23 validated scripts fired real kernel events.
+3/ Real-kernel eval (127 prompts): dry-run 78/85 first try, 41/42
+injections refused, 44/81 validated scripts fired real kernel events.
 
 4/ Recipe-only mode needs no API key. Your probe output never leaves your
 machine. Demo GIF in the README:
@@ -133,10 +140,11 @@ chart. The part I would like this audience to kick: the validator. It
 is a token-level lexer with a default-deny function allowlist, mirrored
 in the API and the agent and pinned identical by 73 shared vectors. The
 real-agent eval (model `groq/openai/gpt-oss-120b`, real kernel) is
-committed in `eval/reports/2026-11-10-live-real.md`: dry-run 20/26
-first try (23/26 within retries), 4/4 adversarial refused, 20/23
-validated generated scripts produced kernel events in 5 s runs. The two
-dry-run misses are published as-is with a gap analysis. The longer
+committed in `eval/reports/2026-11-15-v2-live-real.md`: dry-run 78/85
+first try (81/85 within retries), 41/42 adversarial refused, 44/81
+validated generated scripts produced kernel events in 5 s runs. The
+misses and the single accepted-unsafe are published as-is with a gap
+analysis. The longer
 story, including six bypasses found and fixed (comment-split calls,
 extra probe headers, uprobe path abuse, per-token probe cap, published
 ports, dropped terminal events), is drafted in `docs/launch-post.md`.
@@ -148,7 +156,7 @@ FAQ (short):
   the machine.
 - Cost: recipe-only mode needs no key; live mode is one paid chain
   (Groq default) plus an openai preset and a native Anthropic adapter.
-  Roughly 68k real tokens for the full 30-case eval.
+  Roughly 280k real tokens for the full 127-case v2 eval.
 - Models: Groq default (`gpt-oss-120b` in the report), OpenAI preset,
   native Anthropic adapter, local models over loopback.
 - Kernels: Linux 5.8+ with BTF, bpftrace 20+; verified only where a
@@ -167,10 +175,10 @@ list) — drafts only, never posted from this diff.
 
 First comment: vBPF generates bpftrace probes from plain English and
 validates them three ways (static, dry-run, verifier) with
-confirm-before-run. Real-agent eval on `groq/openai/gpt-oss-120b`:
-dry-run 20/26 first try (23/26 within retries), 30/30
-refusal-correct, 20/23 validated generated scripts emitted events in
-5 s. Validator code is `agent/internal/server/` plus `api/src/validator*`
+confirm-before-run. Real-agent eval on `groq/openai/gpt-oss-120b`
+(full v2, 127 prompts): dry-run 78/85 first try (81/85 within
+retries), 124/127 refusal-correct, 44/81 validated generated scripts
+emitted events in 5 s. Validator code is `agent/internal/server/` plus `api/src/validator*`
 with 73 shared vectors; teardown and runner paths survived
 chaos-tested mid-run kills. Happy to take hard questions on the
 validator and the runner.
@@ -198,8 +206,8 @@ Answers stay inside the committed evidence:
   kernel verifier, time/output caps, no `--unsafe`. Six past bypasses
   are fixed with regression tests (see `docs/launch-post.md`).
 - What does it cost? Nothing without a key (recipes, fixtures, demo).
-  Live generation uses your own provider key; the full 30-case eval
-  used about 68k real tokens.
+  Live generation uses your own provider key; the full 127-case v2 eval
+  used about 280k real tokens.
 - Which models? Groq by default, OpenAI preset, native Anthropic
   adapter, local loopback models via base-URL override.
 - Which kernels? Linux 5.8+ with BTF, bpftrace 20+. Only recorded runs
@@ -214,7 +222,7 @@ Answers stay inside the committed evidence:
 - [ ] Release published: tag pushed, release workflow green, notes are
       the CHANGELOG section for the tag.
 - [ ] README metrics real: every number traces to a committed report
-      (`eval/reports/2026-11-10-live-real.md`); no static-only figure is
+      (`eval/reports/2026-11-15-v2-live-real.md`); no static-only figure is
       quoted as "compiles".
 - [ ] Issues triaged: open bugs labeled, `good first issue` and
       `kernel-report` queues groomed, stale items closed or milestoned.

@@ -417,23 +417,24 @@ Generation quality is measured, not assumed. CI stays **mock-only by design**: `
 - `make -C eval run-live` (`pnpm -C api run eval -- --live --delay-ms 15000`): live generation with stubbed agent validation (stock runners, no root). Compile means the static validator only; scripts are never compiled or executed.
 - `make -C eval run-live-real` (`--live --agent --delay-ms 15000`): live generation against the real agent API — real probe catalog, dry-run compile of every generated script, and 5 s runs of each validated script (root agent with BTF required).
 
-Latest real-kernel numbers (live+agent, model `groq/openai/gpt-oss-120b`, kernel `6.6.87.2-microsoft-standard-WSL2`, bpftrace `v0.20.2`, 2026-11-10):
+Latest real-kernel numbers (live+agent, model `groq/openai/gpt-oss-120b`, kernel `6.6.87.2-microsoft-standard-WSL2`, bpftrace `v0.20.2`, 2026-11-15, full v2 dataset of 127 prompts):
 
-| Metric                                              | Target                | Latest (live+agent)          |
-| --------------------------------------------------- | --------------------- | ---------------------------- |
-| Passes static validation (first try / retries)      | —                     | 26/26 / 26/26                |
-| Compiles on a real kernel, dry-run (first try)      | at least 80%          | 20/26 (76.9%, target missed) |
-| Compiles on a real kernel, dry-run (within retries) | at least 95%          | 23/26 (88.5%, target missed) |
-| Produces events when run (generated scripts)        | at least 80% of valid | 20/23 (87.0%)                |
-| Correct view type selected                          | —                     | 22/23                        |
-| Probe-match against the real catalog                | —                     | 23/23                        |
-| Adversarial prompts refused or rejected             | 100%                  | 4/4 (30/30 refusal-correct)  |
+| Metric                                              | Target                | Latest (live+agent)                                          |
+| --------------------------------------------------- | --------------------- | ------------------------------------------------------------ |
+| Passes static validation (first try / retries)      | —                     | 85/85 / 85/85                                                |
+| Compiles on a real kernel, dry-run (first try)      | at least 80%          | 78/85 (91.8%)                                                |
+| Compiles on a real kernel, dry-run (within retries) | at least 95%          | 81/85 (95.3%, target met)                                    |
+| Produces events when run (generated scripts)        | at least 80% of valid | 44/81 (54.3%, target missed — quiet probes, see note)        |
+| Correct view type selected                          | —                     | 64/81                                                        |
+| Probe-match against the real catalog                | —                     | 75/80                                                        |
+| Adversarial prompts refused or rejected             | 100%                  | 41/42 (124/127 refusal-correct; 1 accepted-unsafe, see note) |
+| Result-correctness oracles                          | —                     | 0/16 evaluated (sentinel-workload gap, see note)             |
 
-Full report: [`eval/reports/2026-11-10-live-real.md`](eval/reports/2026-11-10-live-real.md) (generated scripts: [`2026-11-10-live-real-scripts.ndjson`](eval/reports/2026-11-10-live-real-scripts.ndjson)). The two dry-run targets were published as-is after the tuning budget ran out; the report's gap analysis traces the misses to the agent catalog rejecting uprobe scripts, noisy dry-run error feedback on retries, and model probe-invention variance.
+Full report: [`eval/reports/2026-11-15-v2-live-real.md`](eval/reports/2026-11-15-v2-live-real.md) (generated scripts: [`2026-11-15-v2-live-real-scripts.ndjson`](eval/reports/2026-11-15-v2-live-real-scripts.ndjson)). Notes: the pre-D-48 uprobe dry-run misses are gone — zero `probe not found` rejections, and the former uprobe miss class now passes dry-run. The 37 no-event runs are quiet probes in the 5 s window (low-traffic tracepoints, thresholds), not compile failures. The single accepted-unsafe is a comment-smuggling prompt (`adversarial-16`) whose generated script is benign (hostile text confined to a `//` comment); it was recorded, never executed, and the validator is unchanged. All 16 evaluated oracles failed on missing sentinel strings because the sentinel workloads did not run inside the 5 s capture window — an oracle-harness gap, not a script-correctness signal; zero oracle errors.
 
-Eval v2 (I-10, in progress on `feat/i-10-eval-v2`, not yet run live): 127 prompts (`eval/prompts.yaml`) — 20 direct, 20 paraphrase/vague, 15 parameterized, 20 novel, 42 adversarial (14 threat classes × 3), 10 ambiguous — with machine-checkable `expected` blocks (probe families, aggregation key, output kind), result-correctness oracles on 28 prompts (sentinel workloads: dd, curl-to-loopback, sentinel DNS/file names, ls loops), `--repeat N` variance over a 30-prompt core subset, and per-report model/kernel/bpftrace attribution plus accepted-unsafe tracking. Budgets: at most one full live run per day, repeat on core only, paced calls, `incomplete` report on provider exhaustion. The v2 live run is pending (needs the root agent + provider keys on Linux); when done it lands at `eval/reports/<date>-v2.md`. Mock/CI stays on the same dataset (`make eval`) with oracles skipped.
+Eval v2 (I-10, dataset landed): 127 prompts (`eval/prompts.yaml`) — 20 direct, 20 paraphrase/vague, 15 parameterized, 20 novel, 42 adversarial (14 threat classes × 3), 10 ambiguous — with machine-checkable `expected` blocks (probe families, aggregation key, output kind), result-correctness oracles on 28 prompts (sentinel workloads: dd, curl-to-loopback, sentinel DNS/file names, ls loops), `--repeat N` variance over a 30-prompt core subset, and per-report model/kernel/bpftrace attribution plus accepted-unsafe tracking. Budgets: at most one full live run per day, repeat on core only, paced calls, `incomplete` report on provider exhaustion. The first full v2 live-real run completed 2026-11-15 (root agent + provider keys on Linux); repeat runs land at `eval/reports/<date>-v2-live-real.md`. Mock/CI stays on the same dataset (`make eval`) with oracles skipped.
 
-Static-only history is kept for reference: [`eval/reports/2026-11-09-live.md`](eval/reports/2026-11-09-live.md) (stubbed agent validation, header-noted as superseded) and the mock baseline [`eval/reports/2026-11-09.md`](eval/reports/2026-11-09.md). Static-only modes report "passes static validation" only — never "compiles".
+Static-only history is kept for reference: [`eval/reports/2026-11-09-live.md`](eval/reports/2026-11-09-live.md) (stubbed agent validation, header-noted as superseded), the mock baseline [`eval/reports/2026-11-09.md`](eval/reports/2026-11-09.md), and the pre-D-48 live+agent baseline [`eval/reports/2026-11-10-live-real.md`](eval/reports/2026-11-10-live-real.md) (old 30-prompt dataset, uprobe catalog rejections). Static-only modes report "passes static validation" only — never "compiles".
 
 Run it yourself:
 
