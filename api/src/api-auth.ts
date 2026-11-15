@@ -89,10 +89,13 @@ export function readApiToken(path: string): string {
 
 // Constant-time comparison: hash both sides first so lengths never leak and
 // timingSafeEqual always sees equal-length buffers.
+// SHA-256 is appropriate here: both inputs are 256-bit random hex bearer
+// tokens (see loadOrCreateApiToken), not human-chosen passwords, so no slow
+// KDF (bcrypt/scrypt/argon2) is warranted; the hash only normalizes length.
 export function tokensEqual(a: string, b: string): boolean {
   if (a === "" || b === "") return false;
-  const ha = createHash("sha256").update(a).digest();
-  const hb = createHash("sha256").update(b).digest();
+  const ha = createHash("sha256").update(a).digest(); // codeql[js/insufficient-password-hash]: high-entropy 256-bit random bearer token, not a password; SHA-256 only normalizes length for timingSafeEqual.
+  const hb = createHash("sha256").update(b).digest(); // codeql[js/insufficient-password-hash]: high-entropy 256-bit random bearer token, not a password; SHA-256 only normalizes length for timingSafeEqual.
   return timingSafeEqual(ha, hb);
 }
 
