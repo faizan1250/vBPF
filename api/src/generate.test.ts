@@ -39,7 +39,7 @@ const RECIPES_DIR = join(
   "..",
   "recipes",
 );
-const TOKEN = "test-token-generate";
+const TOKEN = "c3".repeat(32);
 
 function makeDb(): Database.Database {
   const db = openDb(":memory:");

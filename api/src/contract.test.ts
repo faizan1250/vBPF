@@ -23,7 +23,7 @@ import { WebSocket, WebSocketServer } from "ws";
 import { buildApp, healthWarnings, isSafeId } from "./server.js";
 import { installTestApiAuth } from "./test-auth.js";
 
-const TOKEN = "test-token-123";
+const TOKEN = "c1".repeat(32);
 const HEALTH = {
   kernel: "6.8-test",
   bpftrace_version: "bpftrace v0.21",

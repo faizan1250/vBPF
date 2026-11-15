@@ -1075,7 +1075,7 @@ describe("total budget and waiter limits", () => {
 });
 
 // Live server wiring against a stub provider plus a fake agent.
-const TOKEN = "test-token-live";
+const TOKEN = "c6".repeat(32);
 const RECIPES_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
   "..",

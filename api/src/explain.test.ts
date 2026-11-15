@@ -72,8 +72,8 @@ beforeAll(async () => {
   tokenFile = join(dir, "agent.token");
   writeFileSync(tokenFile, "test-token-explain\n");
   apiTokenFile = join(dir, "api.token");
-  writeFileSync(apiTokenFile, "test-token-explain\n");
-  installTestApiAuth("test-token-explain");
+  writeFileSync(apiTokenFile, `${"c4".repeat(32)}\n`);
+  installTestApiAuth("c4".repeat(32));
   mockApp = await buildApp({
     agentUrl: "http://127.0.0.1:1",
     tokenFile,

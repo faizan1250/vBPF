@@ -13,7 +13,10 @@ import { installTestApiAuth } from "./test-auth.js";
 // Realistic-looking fake secrets. Live only in memory; never committed.
 const FAKE_GROQ_KEY = `gsk_${"a".repeat(48)}`;
 const FAKE_AGENT_TOKEN = `agent-token-${"b".repeat(32)}`;
-const SECRETS = [FAKE_GROQ_KEY, FAKE_AGENT_TOKEN];
+// Fixed 64-char hex bearer token (see api-auth.ts tokensEqual): the API gate
+// rejects anything else, so the api.token/installTestApiAuth pair uses this.
+const FAKE_API_TOKEN = "d4".repeat(32);
+const SECRETS = [FAKE_GROQ_KEY, FAKE_AGENT_TOKEN, FAKE_API_TOKEN];
 
 const HEALTH = {
   kernel: "6.8-test",
@@ -53,8 +56,8 @@ beforeAll(async () => {
   tokenFile = join(dir, "agent.token");
   writeFileSync(tokenFile, `${FAKE_AGENT_TOKEN}\n`);
   apiTokenFile = join(dir, "api.token");
-  writeFileSync(apiTokenFile, `${FAKE_AGENT_TOKEN}\n`);
-  installTestApiAuth(FAKE_AGENT_TOKEN);
+  writeFileSync(apiTokenFile, `${FAKE_API_TOKEN}\n`);
+  installTestApiAuth(FAKE_API_TOKEN);
 
   fake = createServer((req, res) => {
     res.writeHead(200, { "content-type": "application/json" });

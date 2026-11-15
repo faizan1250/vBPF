@@ -12,7 +12,7 @@ import { WebSocketServer } from "ws";
 import { buildApp } from "./server.js";
 import { installTestApiAuth } from "./test-auth.js";
 
-const TOKEN = "test-token-sessions";
+const TOKEN = "c2".repeat(32);
 const HEALTH = {
   kernel: "6.8-test",
   bpftrace_version: "bpftrace v0.21",
