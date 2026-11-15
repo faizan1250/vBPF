@@ -3,6 +3,7 @@ import { Moon, Sun } from "lucide-react";
 
 import { ConfirmModal } from "./components/ConfirmModal.js";
 import { DemoBanner } from "./components/DemoBanner.js";
+import { ExplainResultsSection } from "./components/ExplainResultsSection.js";
 import { HistoryPanel, recordRunToHistory } from "./components/HistoryPanel.js";
 import { PromptPanel } from "./components/PromptPanel.js";
 import { RunControls } from "./components/RunControls.js";
@@ -11,10 +12,11 @@ import { StderrDrawer } from "./components/StderrDrawer.js";
 import { SummaryCard } from "./components/SummaryCard.js";
 import { TopBar } from "./components/TopBar.js";
 import { Button } from "./components/ui/button.js";
+import { Card, CardBody, CardHeader, CardTitle } from "./components/ui/card.js";
 import { ViewSwitcher } from "./components/views/ViewSwitcher.js";
 import { useDebouncedValidate } from "./hooks/useDebouncedValidate.js";
 import { useRunStream } from "./hooks/useRunStream.js";
-import { autoView } from "./lib/events.js";
+import { autoView, runOutputText } from "./lib/events.js";
 import { fixtureMode } from "./lib/api.js";
 import { useAppStore } from "./store/useAppStore.js";
 
@@ -38,6 +40,7 @@ function ThemeToggle() {
 export function App() {
   const runId = useAppStore((s) => s.runId);
   const generation = useAppStore((s) => s.generation);
+  const script = useAppStore((s) => s.script);
   const events = useAppStore((s) => s.events);
   const runPhase = useAppStore((s) => s.runPhase);
   const runError = useAppStore((s) => s.runError);
@@ -50,6 +53,7 @@ export function App() {
   }, [runPhase, runId]);
 
   const view = autoView(events, generation?.chart_type ?? null);
+  const resultsOutput = runOutputText(events);
 
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
@@ -82,6 +86,16 @@ export function App() {
         <div className="flex min-w-0 flex-col gap-4">
           <ViewSwitcher autoView={view} hint={generation?.chart_type ?? null} />
           <SummaryCard />
+          {resultsOutput !== "" && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Results explanation</CardTitle>
+              </CardHeader>
+              <CardBody>
+                <ExplainResultsSection script={script} output={resultsOutput} />
+              </CardBody>
+            </Card>
+          )}
           <StderrDrawer />
         </div>
       </main>

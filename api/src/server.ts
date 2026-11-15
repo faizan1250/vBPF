@@ -16,6 +16,7 @@ import {
   EventEnvelopeSchema,
   ExplainRequestSchema,
   ExplainResponseSchema,
+  ExplainResultsRequestSchema,
   GenerateRequestSchema,
   GetRunResponseSchema,
   HealthResponseSchema,
@@ -57,7 +58,11 @@ import {
   sha256Hex,
   touchSessionTitle,
 } from "./db.js";
-import { ExplainValidationError, explainScriptText } from "./explain.js";
+import {
+  ExplainValidationError,
+  explainResultsText,
+  explainScriptText,
+} from "./explain.js";
 import {
   RefusalError,
   ValidationFailedError,
@@ -939,6 +944,61 @@ export async function buildApp(
       client.done();
     }
   });
+
+  // Opt-in run-output explanation. The default /api/explain path never sees
+  // output; this route requires an explicit literal-true consent flag and a
+  // capped output snapshot. Result explanations are never cached.
+  app.post(
+    "/api/explain-results",
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      if (!checkGenerateRate(req.ip, Date.now())) {
+        return reply
+          .code(429)
+          .header("retry-after", String(generateWindowS))
+          .send({ error: "rate limit exceeded", code: "RATE_LIMITED" });
+      }
+      const parsed = ExplainResultsRequestSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return reply
+          .code(400)
+          .send({ error: "invalid request", code: "VALIDATION_FAILED" });
+      }
+      const mode = opts.llmMode ?? "mock";
+      const llm = mode === "mock" ? null : liveLlm;
+      if (mode !== "mock" && llm === null) {
+        return sendLlmUnavailable(reply);
+      }
+      const client = trackClientDisconnect(reply);
+      try {
+        const result = await explainResultsText(
+          parsed.data.script,
+          parsed.data.output,
+          { recipesDir: recipesDir, llm },
+          { signal: client.signal },
+        );
+        return reply.send(ExplainResponseSchema.parse(result));
+      } catch (err) {
+        if (err instanceof ExplainValidationError) {
+          return reply.code(422).send({
+            error: "validation failed",
+            code: "VALIDATION_FAILED",
+            errors: err.errors,
+          });
+        }
+        if (err instanceof LlmUnavailableError) {
+          return sendLlmUnavailable(reply);
+        }
+        if (err instanceof LlmRequestError) {
+          return reply
+            .code(502)
+            .send({ error: "LLM request failed", code: "LLM_ERROR" });
+        }
+        throw err;
+      } finally {
+        client.done();
+      }
+    },
+  );
 
   app.post(
     "/api/validate",

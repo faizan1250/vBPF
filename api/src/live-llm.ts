@@ -88,6 +88,16 @@ export const EXPLAIN_SYSTEM = [
 ].join("\n");
 export const EXPLAIN_MAX_CHARS = 2048;
 
+// System prompt for /api/explain-results. The script plus a capped run-output
+// snapshot are sent only after explicit opt-in consent; the default
+// /api/explain path never sees output.
+export const EXPLAIN_RESULTS_SYSTEM = [
+  "Explain this bpftrace script and what its run output shows, in plain English.",
+  "Reply with 1 short paragraph plus bullets. Do not suggest running anything.",
+].join("\n");
+export const EXPLAIN_RESULTS_MAX_CHARS = 2048;
+export const EXPLAIN_RESULTS_OUTPUT_MAX_CHARS = 4000;
+
 export type LiveProviderState =
   "ready" | "cooldown" | "unconfigured" | "exhausted";
 
@@ -1068,6 +1078,30 @@ export class LiveLlmChain implements LlmClient {
     }
   }
 
+  /**
+   * Opt-in explanation of a script plus its capped run output. Callers must
+   * hold explicit user consent: output may contain process names, paths, or
+   * command lines. Only lengths are logged, never content.
+   */
+  async explainResultsDetailed(
+    script: string,
+    output: string,
+    opts?: { signal?: AbortSignal },
+  ): Promise<ExplainDetailedResult> {
+    const deadline = Date.now() + this.totalTimeoutMs;
+    const release = await this.semaphore.acquire();
+    try {
+      return await this.attemptExplainResults(
+        script,
+        output,
+        deadline,
+        opts?.signal,
+      );
+    } finally {
+      release();
+    }
+  }
+
   async generateDetailed(
     prompt: string,
     feedback?: unknown,
@@ -1391,6 +1425,143 @@ export class LiveLlmChain implements LlmClient {
     return last;
   }
 
+  private async attemptExplainResults(
+    script: string,
+    output: string,
+    deadline: number,
+    signal?: AbortSignal,
+  ): Promise<ExplainDetailedResult> {
+    const now = Date.now();
+    const configured = this.providers.filter(isConfigured);
+    if (configured.length === 0) {
+      throw new LlmUnavailableError(
+        "no live LLM provider is configured: set a provider key and LLM_<NAME>_MODEL",
+      );
+    }
+    let cooled = 0;
+    let last = "no provider attempted";
+    for (const p of configured) {
+      if (p.cooldownUntil > now) {
+        cooled += 1;
+        last = `${p.name} is cooling down after a rate limit or timeout`;
+        continue;
+      }
+      const outcome = await this.attemptExplainResultsProvider(
+        p,
+        script,
+        output,
+        deadline,
+        signal,
+      );
+      if (outcome.ok) {
+        const attribution = `${p.name}/${outcome.model}`;
+        this.attribution = attribution;
+        return { explanation: outcome.explanation, model: attribution };
+      }
+      if (outcome.kind === "rate" || outcome.kind === "timeout") cooled += 1;
+      last = outcome.message;
+    }
+    if (cooled >= configured.length) {
+      throw new LlmUnavailableError(
+        "all live LLM providers are cooling down after rate limits or timeouts",
+      );
+    }
+    throw new LlmRequestError(`live LLM request failed: ${last}`);
+  }
+
+  // Same key semantics as generation/explain: 401/403 rotates the key,
+  // 429/timeout cools the whole provider instead of trying another key.
+  private async attemptExplainResultsProvider(
+    p: ProviderRuntime,
+    script: string,
+    output: string,
+    deadline: number,
+    signal?: AbortSignal,
+  ): Promise<ExplainOutcome> {
+    for (;;) {
+      const keyIndex = nextEnabledIndex(p, p.active);
+      if (p.needsKey && keyIndex < 0) {
+        return {
+          ok: false,
+          kind: "model",
+          message: `${p.name}: all keys rejected, no usable key left`,
+        };
+      }
+      const key = keyIndex >= 0 ? p.keys[keyIndex] : undefined;
+      if (p.needsKey && key === undefined) {
+        return {
+          ok: false,
+          kind: "model",
+          message: `${p.name}: all keys rejected, no usable key left`,
+        };
+      }
+      const outcome = await this.attemptExplainResultsModels(
+        p,
+        key,
+        keyIndex,
+        script,
+        output,
+        deadline,
+        signal,
+      );
+      if (outcome.ok || outcome.kind !== "auth") {
+        if (
+          !outcome.ok &&
+          (outcome.kind === "rate" || outcome.kind === "timeout")
+        ) {
+          p.cooldownUntil = Date.now() + outcome.cooldownMs;
+        }
+        return outcome;
+      }
+      if (keyIndex >= 0) p.disabled[keyIndex] = true;
+      p.active = keyIndex + 1;
+      if (p.needsKey && nextEnabledIndex(p, p.active) < 0) {
+        return {
+          ok: false,
+          kind: "model",
+          message: `${p.name}: all keys rejected, no usable key left`,
+        };
+      }
+    }
+  }
+
+  private async attemptExplainResultsModels(
+    p: ProviderRuntime,
+    key: string | undefined,
+    keyIndex: number,
+    script: string,
+    output: string,
+    deadline: number,
+    signal?: AbortSignal,
+  ): Promise<ExplainOutcome> {
+    let last: ExplainOutcome = {
+      ok: false,
+      kind: "provider",
+      message: `${p.name}: no model configured`,
+    };
+    for (const model of p.models) {
+      const outcome = await this.postExplainResults(
+        p,
+        key,
+        keyIndex,
+        model,
+        script,
+        output,
+        this.timeoutFor(deadline),
+        signal,
+      );
+      if (outcome.ok) return outcome;
+      last = outcome;
+      if (
+        outcome.kind === "auth" ||
+        outcome.kind === "provider" ||
+        outcome.kind === "timeout"
+      )
+        return outcome;
+    }
+    return last;
+  }
+
   private async postExplain(
     p: ProviderRuntime,
     key: string | undefined,
@@ -1491,6 +1662,133 @@ export class LiveLlmChain implements LlmClient {
       return {
         ok: true,
         explanation: content.trim().slice(0, EXPLAIN_MAX_CHARS),
+        model,
+      };
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : "invalid payload";
+      this.logCall({
+        provider: p.name,
+        model,
+        key_index: keyIndex,
+        status: result.status,
+        outcome: "output_invalid",
+        latency_ms,
+        prompt_chars: sent.length,
+        ...(err instanceof Error ? { error_name: err.name } : {}),
+        error: sanitizeErrorMessage(`${p.name}/${model}: ${reason}`),
+      });
+      return {
+        ok: false,
+        kind: "model",
+        message: `${p.name}/${model}: ${reason}`,
+      };
+    }
+  }
+
+  private async postExplainResults(
+    p: ProviderRuntime,
+    key: string | undefined,
+    keyIndex: number,
+    model: string,
+    script: string,
+    output: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<ExplainOutcome> {
+    // Both inputs are bounded by validation (script 8 KiB, output 4k chars),
+    // so the whole pair goes out with a hard slice as defense-in-depth.
+    const cappedOutput = output.slice(0, EXPLAIN_RESULTS_OUTPUT_MAX_CHARS);
+    const sent = `Script:\n${script}\n\nRun output:\n${cappedOutput}`;
+    const started = Date.now();
+    const result = await requestChat(
+      this.fetchFn,
+      p.name,
+      p.baseUrl,
+      p.kind,
+      key,
+      model,
+      p.kind === "anthropic"
+        ? {
+            model,
+            max_tokens: 600,
+            system: EXPLAIN_RESULTS_SYSTEM,
+            messages: [{ role: "user", content: sent }],
+            temperature: 0.2,
+          }
+        : {
+            model,
+            messages: [
+              { role: "system", content: EXPLAIN_RESULTS_SYSTEM },
+              { role: "user", content: sent },
+            ],
+            temperature: 0.2,
+            max_tokens: 600,
+          },
+      { timeoutMs, maxBodyBytes: this.maxBodyBytes, signal },
+    );
+    const latency_ms = Date.now() - started;
+    // Logs carry only lengths and the provider/model-prefixed failure line;
+    // script and output content never reach logs.
+    if (!result.ok) {
+      this.logCall({
+        provider: p.name,
+        model,
+        key_index: keyIndex,
+        status: result.status,
+        outcome: result.outcome,
+        latency_ms,
+        prompt_chars: sent.length,
+        ...(result.errorName !== undefined
+          ? { error_name: result.errorName }
+          : {}),
+        error: sanitizeErrorMessage(result.failure.message),
+      });
+      return result.failure;
+    }
+
+    try {
+      const envelope = JSON.parse(result.text) as {
+        choices?: Array<{ message?: { content?: unknown } }>;
+        usage?: unknown;
+      };
+      const usage = parseUsage(envelope);
+      const content =
+        p.kind === "anthropic"
+          ? anthropicText(envelope)
+          : envelope.choices?.[0]?.message?.content;
+      if (typeof content !== "string" || content.trim() === "") {
+        this.logCall({
+          provider: p.name,
+          model,
+          key_index: keyIndex,
+          status: result.status,
+          outcome: "output_invalid",
+          latency_ms,
+          prompt_chars: sent.length,
+          ...(usage !== undefined ? { usage } : {}),
+          error: sanitizeErrorMessage(
+            `${p.name}/${model}: missing choices[0].message.content`,
+          ),
+        });
+        return {
+          ok: false,
+          kind: "model",
+          message: `${p.name}/${model}: missing choices[0].message.content`,
+        };
+      }
+      this.logCall({
+        provider: p.name,
+        model,
+        key_index: keyIndex,
+        status: result.status,
+        outcome: "ok",
+        latency_ms,
+        prompt_chars: sent.length,
+        ...(usage !== undefined ? { usage } : {}),
+      });
+      return {
+        ok: true,
+        explanation: content.trim().slice(0, EXPLAIN_RESULTS_MAX_CHARS),
         model,
       };
     } catch (err) {

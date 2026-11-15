@@ -41,6 +41,20 @@ export const ExplainResponseSchema = z
   })
   .strict();
 
+// Opt-in run-output explanation (I-22 follow-up): script plus a capped
+// snapshot of run output, sent to the LLM only when the caller passes an
+// explicit literal-true consent flag. The privacy boundary stays default-off:
+// /api/explain accepts script text only and never sees output.
+export const MAX_EXPLAIN_RESULTS_OUTPUT_CHARS = 4000;
+
+export const ExplainResultsRequestSchema = z
+  .object({
+    script: ScriptSchema,
+    output: z.string().min(1).max(MAX_EXPLAIN_RESULTS_OUTPUT_CHARS),
+    consent: z.literal(true),
+  })
+  .strict();
+
 export const CreateRunRequestSchema = z
   .object({
     script: ScriptSchema,
@@ -315,6 +329,7 @@ export type ValidateRequest = z.infer<typeof ValidateRequestSchema>;
 export type ValidateResponse = z.infer<typeof ValidateResponseSchema>;
 export type ExplainRequest = z.infer<typeof ExplainRequestSchema>;
 export type ExplainResponse = z.infer<typeof ExplainResponseSchema>;
+export type ExplainResultsRequest = z.infer<typeof ExplainResultsRequestSchema>;
 export type CreateRunRequest = z.infer<typeof CreateRunRequestSchema>;
 export type CreateRunResponse = z.infer<typeof CreateRunResponseSchema>;
 export type RunOrigin = z.infer<typeof RunOriginSchema>;

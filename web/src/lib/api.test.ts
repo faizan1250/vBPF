@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   MAX_DURATION_S,
+  MAX_EXPLAIN_RESULTS_OUTPUT_CHARS,
   MAX_PROMPT_CHARS,
   MAX_SCRIPT_BYTES,
   MIN_DURATION_S,
   createRun,
+  explainResults,
   explainScript,
   fetchSession,
   fetchSessionExport,
@@ -345,5 +347,77 @@ describe("explainScript", () => {
       code: "X",
       status: 422,
     });
+  });
+});
+
+describe("explainResults", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("matches the server output cap", () => {
+    expect(MAX_EXPLAIN_RESULTS_OUTPUT_CHARS).toBe(4000);
+  });
+
+  it("rejects empty output without fetching", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await expect(explainResults("BEGIN { }", "   ")).rejects.toMatchObject({
+      code: "VALIDATION_FAILED",
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
+  });
+
+  it("posts script, capped output, and consent", async () => {
+    let body: Record<string, unknown> = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init: unknown) => {
+        body = JSON.parse((init as { body: string }).body) as Record<
+          string,
+          unknown
+        >;
+        return Response.json({
+          explanation: "bash did 42 opens.",
+          cached: false,
+          model: "mock",
+        });
+      }),
+    );
+    await expect(
+      explainResults("BEGIN { @x = count(); }", "[#1 printf] hi"),
+    ).resolves.toEqual({
+      explanation: "bash did 42 opens.",
+      cached: false,
+      model: "mock",
+    });
+    expect(body).toMatchObject({
+      script: "BEGIN { @x = count(); }",
+      output: "[#1 printf] hi",
+      consent: true,
+    });
+  });
+
+  it("caps output client-side", async () => {
+    let body: Record<string, unknown> = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init: unknown) => {
+        body = JSON.parse((init as { body: string }).body) as Record<
+          string,
+          unknown
+        >;
+        return Response.json({
+          explanation: "x",
+          cached: false,
+          model: "mock",
+        });
+      }),
+    );
+    await explainResults("BEGIN { }", "y".repeat(5000));
+    expect((body["output"] as string).length).toBe(
+      MAX_EXPLAIN_RESULTS_OUTPUT_CHARS,
+    );
+    expect(body["consent"]).toBe(true);
   });
 });

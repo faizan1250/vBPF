@@ -514,7 +514,7 @@ More detail: [`docs/environment.md`](docs/environment.md).
 
 ## Privacy and security
 
-**What leaves your machine (only if you use AI generation):** your prompt, selected recipe text, candidate probe names and tracepoint argument formats, and compiler error messages, sent to the configured LLM provider. **Probe output (process names, file paths, command lines) is never sent to the LLM.** The **Explain this probe** button sends only the script text for a plain-English walkthrough — never run output. In recipe-only mode nothing is sent anywhere.
+**What leaves your machine (only if you use AI generation):** your prompt, selected recipe text, candidate probe names and tracepoint argument formats, and compiler error messages, sent to the configured LLM provider. The **Explain this probe** button sends only the script text for a plain-English walkthrough — never run output. **Probe output (process names, file paths, command lines) leaves the machine only when you explicitly opt in** via **Explain these results** (checkbox consent plus button; script plus a capped 4,000-char output snapshot). In recipe-only mode nothing is sent anywhere.
 
 **Hardening in place:**
 
@@ -566,7 +566,7 @@ why pasting chatbot output into a root shell is not the same thing.
 - [x] Real generation scores from the eval harness, published above
 - [x] Container packaging (`docker compose up` quickstart)
 - [x] Server-side sessions and export (v0.3): persistent history beyond browser localStorage (sessions list/get/export API, per-session export)
-- [ ] Opt-in "Explain these results" (with a clear data-sharing notice: run output would leave the machine)
+- [x] Opt-in "Explain these results" (explicit consent checkbox plus data-sharing notice; script plus capped run output only after opt-in, script-only by default)
 - [ ] Kubernetes and container targeting (pod name to cgroup IDs)
 - [ ] Saved dashboards and shareable run reports
 - [ ] Flame graphs and off-CPU analysis
