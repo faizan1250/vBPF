@@ -24,6 +24,7 @@ export function ConfirmModal() {
   const validationWarnings = useAppStore((s) => s.validationWarnings);
   const validationCode = useAppStore((s) => s.validationCode);
   const validationFixHint = useAppStore((s) => s.validationFixHint);
+  const sessionId = useAppStore((s) => s.sessionId);
   const agentReady = useAppStore((s) => s.agentReady);
   const agentStatusHint = useAppStore((s) => s.agentStatusHint);
   const setAgentStatus = useAppStore((s) => s.setAgentStatus);
@@ -62,6 +63,7 @@ export function ConfirmModal() {
         request.script,
         request.durationS,
         generation?.generation_id,
+        sessionId === "" ? undefined : sessionId,
       );
     },
     onSuccess: (result) => {

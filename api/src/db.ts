@@ -6,7 +6,7 @@ import type { Recipe, RunOrigin } from "@vbpf/schemas";
 
 import { buildFtsQuery, extractKeywords } from "./retrieval.js";
 
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
 
 export function applyPragmas(db: Database.Database): void {
   db.pragma("journal_mode = WAL");
@@ -80,6 +80,7 @@ function createTables(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS runs (
       id TEXT PRIMARY KEY,
       generation_id TEXT REFERENCES generations(id),
+      session_id TEXT REFERENCES sessions(id),
       script_sha256 TEXT NOT NULL DEFAULT '',
       script_text TEXT NOT NULL DEFAULT '',
       duration_s INTEGER NOT NULL DEFAULT 10,
@@ -215,6 +216,25 @@ function migrateTo5(db: Database.Database): void {
   tx(rows);
 }
 
+// v6: server-side sessions (v0.3). Runs gain a session link so history can
+// be listed per session. Backfill is generation-bound: a run inherits its
+// generation's session; generation-less rows keep NULL (they predate
+// session tracking and stay reachable via GET /api/runs/:id).
+function migrateTo6(db: Database.Database): void {
+  addColumnIfMissing(
+    db,
+    "runs",
+    "session_id",
+    "ALTER TABLE runs ADD COLUMN session_id TEXT",
+  );
+  db.exec(`
+    UPDATE runs SET session_id = (
+      SELECT g.session_id FROM generations g WHERE g.id = runs.generation_id
+    )
+    WHERE session_id IS NULL AND generation_id IS NOT NULL;
+  `);
+}
+
 export function migrate(db: Database.Database): void {
   applyPragmas(db);
   const found = currentVersion(db);
@@ -224,7 +244,14 @@ export function migrate(db: Database.Database): void {
     );
   }
   createTables(db);
-  const steps = [migrateTo1, migrateTo2, migrateTo3, migrateTo4, migrateTo5];
+  const steps = [
+    migrateTo1,
+    migrateTo2,
+    migrateTo3,
+    migrateTo4,
+    migrateTo5,
+    migrateTo6,
+  ];
   for (let i = found; i < steps.length; i++) {
     const run = steps[i]!;
     db.transaction(run)(db);
@@ -350,6 +377,106 @@ export function ensureSession(db: Database.Database, sessionId: string): void {
   ).run(sessionId, Date.now());
 }
 
+// First prompt wins as the session title; later generations never rename.
+export function touchSessionTitle(
+  db: Database.Database,
+  sessionId: string,
+  prompt: string,
+): void {
+  const title = prompt.trim().slice(0, 80);
+  if (title === "") return;
+  db.prepare("UPDATE sessions SET title = ? WHERE id = ? AND title = ''").run(
+    title,
+    sessionId,
+  );
+}
+
+export interface SessionSummaryRow {
+  id: string;
+  title: string;
+  created_at: number;
+  generations: number;
+  runs: number;
+}
+
+export function listSessions(
+  db: Database.Database,
+  limit: number,
+): SessionSummaryRow[] {
+  return db
+    .prepare(
+      `SELECT s.id, s.title, s.created_at,
+        (SELECT COUNT(*) FROM generations g WHERE g.session_id = s.id) AS generations,
+        (SELECT COUNT(*) FROM runs r WHERE r.session_id = s.id) AS runs
+      FROM sessions s ORDER BY s.created_at DESC LIMIT ?`,
+    )
+    .all(limit) as SessionSummaryRow[];
+}
+
+export function getSession(
+  db: Database.Database,
+  id: string,
+): { id: string; title: string; created_at: number } | undefined {
+  return db
+    .prepare("SELECT id, title, created_at FROM sessions WHERE id = ?")
+    .get(id) as { id: string; title: string; created_at: number } | undefined;
+}
+
+export interface SessionGenerationRow {
+  generation_id: string;
+  prompt: string;
+  script: string;
+  chart_type: string | null;
+  explanation: string | null;
+  duration_s: number | null;
+  validation_status: string;
+  attempts: number;
+  model: string | null;
+  based_on_recipe: string | null;
+  created_at: number;
+}
+
+export function listSessionGenerations(
+  db: Database.Database,
+  sessionId: string,
+): SessionGenerationRow[] {
+  return db
+    .prepare(
+      `SELECT id AS generation_id, prompt, script, chart_type, explanation,
+        duration_s, validation_status, attempts, model, based_on_recipe,
+        created_at
+      FROM generations WHERE session_id = ? ORDER BY created_at ASC`,
+    )
+    .all(sessionId) as SessionGenerationRow[];
+}
+
+export interface SessionRunRow {
+  run_id: string;
+  generation_id: string | null;
+  origin: RunOrigin;
+  state: string;
+  duration_s: number;
+  started_at: number;
+  ended_at: number | null;
+  events_count: number;
+  bytes: number;
+  dropped: number;
+  exit_reason: string | null;
+}
+
+export function listSessionRuns(
+  db: Database.Database,
+  sessionId: string,
+): SessionRunRow[] {
+  return db
+    .prepare(
+      `SELECT id AS run_id, generation_id, origin, state, duration_s,
+        started_at, ended_at, events_count, bytes, dropped, exit_reason
+      FROM runs WHERE session_id = ? ORDER BY started_at ASC`,
+    )
+    .all(sessionId) as SessionRunRow[];
+}
+
 export function insertGeneration(
   db: Database.Database,
   row: GenerationRow,
@@ -387,11 +514,26 @@ export function generationExists(db: Database.Database, id: string): boolean {
 export function getGeneration(
   db: Database.Database,
   id: string,
-): { id: string; script: string; based_on_recipe: string | null } | undefined {
+):
+  | {
+      id: string;
+      script: string;
+      based_on_recipe: string | null;
+      session_id: string;
+    }
+  | undefined {
   return db
-    .prepare("SELECT id, script, based_on_recipe FROM generations WHERE id = ?")
+    .prepare(
+      "SELECT id, script, based_on_recipe, session_id FROM generations WHERE id = ?",
+    )
     .get(id) as
-    { id: string; script: string; based_on_recipe: string | null } | undefined;
+    | {
+        id: string;
+        script: string;
+        based_on_recipe: string | null;
+        session_id: string;
+      }
+    | undefined;
 }
 
 // Run provenance (I-14), derived server-side. A generation binding decides
@@ -423,6 +565,7 @@ export function sha256Hex(value: string): string {
 export interface RunInsertRow {
   id: string;
   generation_id: string | null;
+  session_id?: string | null;
   script_sha256: string;
   script_text: string;
   edited: boolean | number;
@@ -434,10 +577,11 @@ export interface RunInsertRow {
 
 export function insertRun(db: Database.Database, run: RunInsertRow): void {
   db.prepare(
-    "INSERT INTO runs (id, generation_id, script_sha256, script_text, edited, origin, duration_s, state, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO runs (id, generation_id, session_id, script_sha256, script_text, edited, origin, duration_s, state, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   ).run(
     run.id,
     run.generation_id,
+    run.session_id ?? null,
     run.script_sha256,
     run.script_text,
     run.edited ? 1 : 0,

@@ -46,6 +46,7 @@ export const CreateRunRequestSchema = z
     script: ScriptSchema,
     duration_s: DurationSchema.optional(),
     generation_id: z.string().min(1).max(128).optional(),
+    session_id: z.string().min(1).max(128).optional(),
   })
   .strict();
 
@@ -58,6 +59,7 @@ export const CreateRunResponseSchema = z
     run_id: z.string().min(1),
     state: z.string().min(1),
     origin: RunOriginSchema,
+    session_id: z.string().min(1).max(128).optional(),
   })
   .strict();
 
@@ -96,6 +98,7 @@ export const GetRunResponseSchema = z
     started_at: z.number().int().nonnegative(),
     ended_at: z.number().int().nonnegative().nullable(),
     generation_id: z.string().min(1).max(128).nullable(),
+    session_id: z.string().min(1).max(128).nullable(),
     edited: z.boolean(),
     origin: RunOriginSchema,
     summary: RunSummarySchema.nullable(),
@@ -297,6 +300,7 @@ export const GenerateValidationSchema = z
 export const GenerateResponseSchema = z
   .object({
     generation_id: z.string().min(1),
+    session_id: z.string().min(1).max(128).optional(),
     script: ScriptSchema,
     chart_type: ChartTypeSchema,
     explanation: z.string().min(1).max(2048),
@@ -318,6 +322,12 @@ export type StopRunResponse = z.infer<typeof StopRunResponseSchema>;
 export type AgentRunSummary = z.infer<typeof AgentRunSummarySchema>;
 export type RunSummary = z.infer<typeof RunSummarySchema>;
 export type GetRunResponse = z.infer<typeof GetRunResponseSchema>;
+export type SessionSummary = z.infer<typeof SessionSummarySchema>;
+export type SessionListResponse = z.infer<typeof SessionListResponseSchema>;
+export type SessionGeneration = z.infer<typeof SessionGenerationSchema>;
+export type SessionRun = z.infer<typeof SessionRunSchema>;
+export type SessionDetailResponse = z.infer<typeof SessionDetailResponseSchema>;
+export type SessionExportResponse = z.infer<typeof SessionExportResponseSchema>;
 export type Recipe = z.infer<typeof RecipeSchema>;
 export type CatalogState = z.infer<typeof CatalogStateSchema>;
 export type CatalogStatus = z.infer<typeof CatalogStatusSchema>;
@@ -332,6 +342,78 @@ export type ChartType = z.infer<typeof ChartTypeSchema>;
 export type GenerateRequest = z.infer<typeof GenerateRequestSchema>;
 export type GenerateResponse = z.infer<typeof GenerateResponseSchema>;
 export type GenerateValidation = z.infer<typeof GenerateValidationSchema>;
+
+// Server-side sessions (v0.3): generations and runs grouped under one id so
+// history survives beyond browser localStorage. List/detail/export expose
+// only user content (prompts, scripts, summaries) — never tokens, key
+// material, or server paths.
+export const SessionSummarySchema = z
+  .object({
+    id: z.string().min(1).max(128),
+    title: z.string().max(256),
+    created_at: z.number().int().nonnegative(),
+    generations: z.number().int().nonnegative(),
+    runs: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const SessionListResponseSchema = z
+  .object({ sessions: z.array(SessionSummarySchema).max(200) })
+  .strict();
+
+export const SessionGenerationSchema = z
+  .object({
+    generation_id: z.string().min(1),
+    prompt: z.string().max(2000),
+    script: z.string().max(MAX_SCRIPT_BYTES),
+    chart_type: ChartTypeSchema.nullable(),
+    explanation: z.string().max(2048).nullable(),
+    duration_s: DurationSchema.nullable(),
+    validation_status: z.string().min(1).max(32),
+    attempts: z.number().int().min(1),
+    model: z.string().max(256).nullable(),
+    based_on_recipe: z.string().min(1).max(128).nullable(),
+    created_at: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const SessionRunSchema = z
+  .object({
+    run_id: z.string().min(1),
+    generation_id: z.string().min(1).max(128).nullable(),
+    origin: RunOriginSchema,
+    state: z.string().min(1).max(32),
+    duration_s: DurationSchema,
+    started_at: z.number().int().nonnegative(),
+    ended_at: z.number().int().nonnegative().nullable(),
+    summary: RunSummarySchema.nullable(),
+  })
+  .strict();
+
+export const SessionDetailResponseSchema = z
+  .object({
+    id: z.string().min(1).max(128),
+    title: z.string().max(256),
+    created_at: z.number().int().nonnegative(),
+    generations: z.array(SessionGenerationSchema).max(500),
+    runs: z.array(SessionRunSchema).max(500),
+  })
+  .strict();
+
+export const SessionExportResponseSchema = z
+  .object({
+    exported_at: z.string().min(1).max(64),
+    session: z
+      .object({
+        id: z.string().min(1).max(128),
+        title: z.string().max(256),
+        created_at: z.number().int().nonnegative(),
+      })
+      .strict(),
+    generations: z.array(SessionGenerationSchema).max(500),
+    runs: z.array(SessionRunSchema).max(500),
+  })
+  .strict();
 
 // Kernel/platform matrix (I-12): one compat/<env>.json per environment.
 // Mirrors compat/schema.json; scripts/render-compat.mjs enforces the same

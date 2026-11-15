@@ -43,6 +43,7 @@ describe("ConfirmModal", () => {
       generation: null,
       runId: null,
       runOrigin: null,
+      sessionId: "",
       validationOk: false,
       validationErrors: ["probe not found: tracepoint:foo:bar"],
       validationWarnings: [],
@@ -122,7 +123,12 @@ describe("ConfirmModal", () => {
     renderModal();
     fireEvent.click(screen.getByRole("button", { name: /run this probe/i }));
     await waitFor(() =>
-      expect(createRunMock).toHaveBeenCalledWith("BEGIN { }", 10, "gen_123"),
+      expect(createRunMock).toHaveBeenCalledWith(
+        "BEGIN { }",
+        10,
+        "gen_123",
+        undefined,
+      ),
     );
   });
 
@@ -157,6 +163,7 @@ describe("ConfirmModal", () => {
         "BEGIN { @b = 2; }",
         10,
         "gen_123",
+        undefined,
       ),
     );
   });
@@ -179,7 +186,12 @@ describe("ConfirmModal", () => {
     renderModal();
     fireEvent.click(screen.getByRole("button", { name: /run this probe/i }));
     await waitFor(() =>
-      expect(createRunMock).toHaveBeenCalledWith("BEGIN { }", 10, undefined),
+      expect(createRunMock).toHaveBeenCalledWith(
+        "BEGIN { }",
+        10,
+        undefined,
+        undefined,
+      ),
     );
   });
 
@@ -201,8 +213,41 @@ describe("ConfirmModal", () => {
     renderModal();
     fireEvent.click(screen.getByRole("button", { name: /run this probe/i }));
     await waitFor(() =>
-      expect(createRunMock).toHaveBeenCalledWith("BEGIN { }", 10, undefined),
+      expect(createRunMock).toHaveBeenCalledWith(
+        "BEGIN { }",
+        10,
+        undefined,
+        undefined,
+      ),
     );
     expect(useAppStore.getState().runOrigin).toBe("recipe");
+  });
+
+  it("passes the stored session for generation-less runs", async () => {
+    createRunMock.mockResolvedValue({
+      run_id: "run_1",
+      state: "running",
+      origin: "edited",
+    });
+    useAppStore.setState({
+      script: "BEGIN { }",
+      durationS: 10,
+      generation: null,
+      sessionId: "ses_abc",
+      validationOk: true,
+      validationProbes: ["BEGIN"],
+      validationWarnings: [],
+      agentReady: null,
+    });
+    renderModal();
+    fireEvent.click(screen.getByRole("button", { name: /run this probe/i }));
+    await waitFor(() =>
+      expect(createRunMock).toHaveBeenCalledWith(
+        "BEGIN { }",
+        10,
+        undefined,
+        "ses_abc",
+      ),
+    );
   });
 });

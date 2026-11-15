@@ -523,6 +523,7 @@ describe("run summaries", () => {
         started_at: expect.any(Number),
         ended_at: expect.any(Number),
         generation_id: null,
+        session_id: expect.any(String),
         edited: false,
         origin: "edited",
         summary: {

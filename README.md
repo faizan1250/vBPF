@@ -113,7 +113,7 @@ gate plus live views, not generation quality.
 - **Hard limits**: duration, output rate, output size, map keys, probe count, and concurrency.
 - **Clean teardown**: probes and child processes are always killed, including on crashes.
 - **Local-first**: the agent and API bind to loopback by default; run output never leaves your machine by default.
-- **History and export**: re-run past probes and export history entries as JSON. History lives in browser localStorage; there are no server-side sessions yet.
+- **History and export**: re-run past probes and export per-session JSON. History persists server-side in SQLite; browser localStorage stays as the offline fallback.
 - **Recipe-only mode**: works without an API key (browse and run recipes).
 
 ---
@@ -549,7 +549,7 @@ Being explicit about what the project does not (yet) do:
   in the agent's mount namespace, so `uprobe:libc:...` in compose targets
   the container's libc, not the host's. Trace host user-space natively,
   or bind-mount host library dirs read-only into the agent container.
-- **Short history.** SQLite storage with capped event retention per run; not a metrics system. Probe history itself lives in browser localStorage; server-side sessions are deferred to v0.3.
+- **Short history.** SQLite storage with capped event retention per run; not a metrics system. Probe history persists server-side as sessions (generations plus runs, exportable as JSON); browser localStorage stays as the offline fallback.
 
 ---
 
@@ -565,7 +565,7 @@ why pasting chatbot output into a root shell is not the same thing.
 
 - [x] Real generation scores from the eval harness, published above
 - [x] Container packaging (`docker compose up` quickstart)
-- [ ] Server-side sessions and export (v0.3): persistent, shareable history beyond browser localStorage
+- [x] Server-side sessions and export (v0.3): persistent history beyond browser localStorage (sessions list/get/export API, per-session export)
 - [ ] Opt-in "Explain these results" (with a clear data-sharing notice: run output would leave the machine)
 - [ ] Kubernetes and container targeting (pod name to cgroup IDs)
 - [ ] Saved dashboards and shareable run reports

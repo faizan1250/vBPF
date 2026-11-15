@@ -12,7 +12,12 @@ import {
   searchProbes,
   validateScript,
 } from "./agent-client.js";
-import { ensureSession, insertGeneration, searchRecipes } from "./db.js";
+import {
+  ensureSession,
+  insertGeneration,
+  searchRecipes,
+  touchSessionTitle,
+} from "./db.js";
 import {
   MockLlm,
   type LlmClient,
@@ -284,7 +289,7 @@ function isCatalogUnavailableError(err: unknown): boolean {
   }
 }
 
-function newSessionId(): string {
+export function newSessionId(): string {
   return `ses_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
 }
 
@@ -302,6 +307,7 @@ export async function runGenerate(
   const validateFn = opts.deps.validateAgentFn ?? validateScript;
   const sessionId = opts.sessionId ?? newSessionId();
   ensureSession(db, sessionId);
+  touchSessionTitle(db, sessionId, prompt);
   const generationId = newGenerationId();
   const started = Date.now();
 
@@ -476,6 +482,7 @@ export async function runGenerate(
     });
     return {
       generation_id: generationId,
+      session_id: sessionId,
       script: out.script,
       chart_type: out.chart_type,
       explanation: out.explanation,
