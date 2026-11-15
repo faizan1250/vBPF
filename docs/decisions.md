@@ -1100,3 +1100,27 @@ recipe-check` green for all 30; full agent `produced-output.sh` run:
 - **Docs.** `docs/supply-chain.md` scanning bullet now states the badge is
   live instead of deferred. No logic or workflow change.
 - **Verified:** `bash scripts/check-docs.sh` green (rerun after the edit).
+
+## Eval refresh: mock baseline + live-real in flight (2026-11-15)
+
+- **Status (D-101).** README/launch numbers still cite the pre-D-48
+  `2026-11-10-live-real.md` (old 30-prompt dataset, uprobe catalog
+  rejections). Refresh started on `fix/eval-refresh` from main `1d1ba0c`.
+- **Mock baseline (committed).** `eval/reports/2026-11-15-v2.md`: 127/127
+  completed, 85/85 static (first try / retries), 127/127 refusal-correct,
+  view-match 53/85, probe-match 63/85, accepted-unsafe 0 — identical to
+  the 2026-11-13 mock baseline. Validator untouched (no loosening).
+- **Live-real full run (in flight, not blocked).** Root agent cross-built
+  on Windows Go (`GOOS=linux`, `run/agent-linux`, gitignored) and serving
+  as root in WSL2 on `127.0.0.1:8787` (BTF present, 106,865-probe catalog
+  ready; token at `/root/vbpf-agent.token`, 0600, same content as
+  `run/agent.token`). `pnpm -C api run eval -- --live --agent
+  --delay-ms 15000` (Groq `openai/gpt-oss-120b` from local `.env`)
+  started 2026-11-15T18:42Z; agent log shows bpftrace runs executing with
+  events flowing. Budget: 0 full live runs completed today (max 3/day),
+  this run projects 127 x 3 = 381 calls (cap 400). Report will land at
+  `eval/reports/2026-11-15-v2-live-real.md`; README table and
+  `docs/launch.md` / `launch-post.md` updates deferred to that commit.
+- **Verified:** mock eval green (see above); no secrets in repo
+  (`git status` shows only untracked report artifacts + other sessions'
+  leftovers, none staged).
