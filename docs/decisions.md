@@ -1166,3 +1166,44 @@ recipe-check` green for all 30; full agent `produced-output.sh` run:
   validation), web vitest 102/102 (new `HistoryPanel.server.test.tsx`,
   session cases in `api.test.ts`, export-shape case in `history.test.ts`,
   session-forwarding cases in `ConfirmModal.test.tsx`).
+
+## Opt-in Explain these results (2026-11-16)
+
+- **Scope (D-105).** Closes the roadmap's opt-in results item. Branch
+  `feat/explain-results` from main `6720dac`; mock-only CI untouched.
+- **Privacy boundary (D-105).** Default stays script-only: `POST
+/api/explain` accepts `{ script }` and never sees output. The new `POST
+/api/explain-results` accepts `{ script, output (1..4000 chars), consent:
+true }` (`.strict()`); any missing/false/non-literal consent is 400, so
+  an old client cannot exfiltrate output by accident. Result explanations
+  are never cached (the `explanations` table would otherwise persist host
+  data) and never logged (per-call logs carry only lengths, never content).
+- **Server (D-105).** `ExplainResultsRequestSchema` in `@vbpf/schemas`;
+  `explainResultsText` in `api/src/explain.ts` (static-validate first, same
+  as explain; mock returns a generic message) plus
+  `explainResultsDetailed` on `LiveLlmChain` (own
+  `EXPLAIN_RESULTS_SYSTEM` prompt, same key-rotation / cooldown / fallback
+  / timeout / body-cap / semaphore semantics as explain; user message is
+  `Script:\n...\n\nRun output:\n...` with a defense-in-depth slice).
+  Route shares the generate/explain rate-limiter bucket and maps
+  `LlmUnavailableError`/`LlmRequestError` like explain. `web/nginx.conf`
+  gains a matching `/api/explain-results` location (same `limit_req`,
+  64k cap, timeouts) so the second-layer limit covers all three LLM
+  endpoints.
+- **Web (D-105).** `ExplainResultsSection` (consent checkbox default off,
+  data-sharing notice, button disabled until consent plus non-empty script
+  and output; invalidates on script/output change; fixture-mode canned
+  text) rendered as a Results-explanation card under the run summary only
+  when `runOutputText(events)` is non-empty. `runOutputText` keeps
+  data-carrying kinds (`printf`/`map`/`hist`/`lhist`/`stderr`/`lost`),
+  skips `status`/`summary`, takes the tail (200 events), caps at 4000
+  chars. `explainResults` posts `{ script, output: capped, consent: true }`
+  with client-side caps.
+- **Verified:** `tsc --noEmit` clean (schemas, api, web), eslint/prettier
+  clean, api vitest incl. new `explain-results.test.ts`
+  (consent/output validation, static-before-LLM, mock no-cache, live
+  script+output prompt shape, script-only route carries no output,
+  LLM_UNAVAILABLE, shared budget), web vitest incl. new
+  `ExplainResultsSection.test.tsx` plus `api.test.ts` consent/cap cases
+  and `events.test.ts` `runOutputText` cases. No secrets in logs (lengths
+  only, asserted by existing keys-hygiene shape).

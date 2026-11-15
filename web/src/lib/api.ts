@@ -280,6 +280,32 @@ export function explainScript(script: string): Promise<ExplainResult> {
   return postJson<ExplainResult>("/api/explain", { script });
 }
 
+// Opt-in run-output explanation (explicit consent in the UI). The default
+// explain path sends script text only; this sends the script plus a capped
+// run-output snapshot. Output is capped client-side; the server re-validates.
+export const MAX_EXPLAIN_RESULTS_OUTPUT_CHARS = 4000;
+
+export type ExplainResultsResult = ExplainResult;
+
+export function explainResults(
+  script: string,
+  output: string,
+): Promise<ExplainResultsResult> {
+  const oversize = rejectOversizeScript(script);
+  if (oversize) return Promise.reject(oversize);
+  const capped = output.slice(0, MAX_EXPLAIN_RESULTS_OUTPUT_CHARS);
+  if (capped.trim() === "") {
+    return Promise.reject(
+      new ApiError(400, "VALIDATION_FAILED", "run output is empty"),
+    );
+  }
+  return postJson<ExplainResultsResult>("/api/explain-results", {
+    script,
+    output: capped,
+    consent: true,
+  });
+}
+
 export type {
   ChartType,
   EventEnvelope,

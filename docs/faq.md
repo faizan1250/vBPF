@@ -25,7 +25,9 @@ AI generation enabled, the API sends your prompt, selected recipe text,
 candidate probe names with tracepoint argument formats, and compiler error
 messages to the configured LLM provider. The **Explain this probe** button
 sends only the script text. Probe output (process names, file paths, command
-lines) is never sent to the LLM. Details:
+lines) is sent only when you explicitly opt in via **Explain these results**
+(checkbox consent plus button; script plus a capped output snapshot).
+Details:
 [`README.md`](../README.md#privacy-and-security).
 
 ## Does it work without an API key?

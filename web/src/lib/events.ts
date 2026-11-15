@@ -160,3 +160,34 @@ export function printfText(data: unknown): string {
     return String(data);
   }
 }
+
+// Capped run-output snapshot for the opt-in "Explain these results" path.
+// Data-carrying kinds only (status/summary are transport metadata, not probe
+// output). Takes the tail so the latest snapshot wins; callers pass the result
+// to explainResults, which re-caps server-side.
+export function runOutputText(
+  events: EventEnvelope[],
+  maxChars = 4000,
+  maxEvents = 200,
+): string {
+  const tail = events.slice(-maxEvents);
+  const lines: string[] = [];
+  for (const e of tail) {
+    if (
+      e.kind !== "printf" &&
+      e.kind !== "map" &&
+      e.kind !== "hist" &&
+      e.kind !== "lhist" &&
+      e.kind !== "stderr" &&
+      e.kind !== "lost"
+    ) {
+      continue;
+    }
+    const text =
+      e.kind === "stderr"
+        ? (stderrText(e.data) ?? printfText(e.data))
+        : printfText(e.data);
+    lines.push(`[#${e.seq} ${e.kind}] ${text}`);
+  }
+  return lines.join("\n").slice(0, maxChars);
+}

@@ -8,6 +8,7 @@ import {
   histBuckets,
   mapEntries,
   printfText,
+  runOutputText,
   stderrText,
   summaryFrom,
 } from "./events.js";
@@ -124,5 +125,31 @@ describe("text helpers", () => {
     expect(stderrText("warn")).toBe("warn");
     expect(stderrText({ text: "x" })).toBe("x");
     expect(stderrText({ n: 1 })).toBeNull();
+  });
+});
+
+describe("runOutputText", () => {
+  it("keeps data kinds and skips status/summary", () => {
+    const events: EventEnvelope[] = [
+      envelope("status", { state: "running" }),
+      envelope("printf", "hello"),
+      envelope("map", { bash: 2 }),
+      envelope("summary", { exit_reason: "completed" }),
+    ];
+    const text = runOutputText(events);
+    expect(text).toContain("hello");
+    expect(text).toContain("bash");
+    expect(text).not.toContain("running");
+    expect(text).not.toContain("completed");
+  });
+  it("caps output length", () => {
+    const events: EventEnvelope[] = Array.from({ length: 10 }, (_, i) => ({
+      ...envelope("printf", "y".repeat(1000)),
+      seq: i,
+    }));
+    expect(runOutputText(events, 100)).toHaveLength(100);
+  });
+  it("returns empty for no data events", () => {
+    expect(runOutputText([envelope("status", {})])).toBe("");
   });
 });
