@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import {
   chmodSync,
   mkdirSync,
@@ -87,16 +87,17 @@ export function readApiToken(path: string): string {
   return token;
 }
 
-// Constant-time comparison: hash both sides first so lengths never leak and
-// timingSafeEqual always sees equal-length buffers.
-// SHA-256 is appropriate here: both inputs are 256-bit random hex bearer
-// tokens (see loadOrCreateApiToken), not human-chosen passwords, so no slow
-// KDF (bcrypt/scrypt/argon2) is warranted; the hash only normalizes length.
+// Constant-time comparison for fixed 64-char hex bearer tokens
+// (randomBytes(32).hex, see loadOrCreateApiToken). Length and charset are
+// checked first so timingSafeEqual always sees equal-length 32-byte buffers.
 export function tokensEqual(a: string, b: string): boolean {
-  if (a === "" || b === "") return false;
-  const ha = createHash("sha256").update(a).digest(); // codeql[js/insufficient-password-hash]: high-entropy 256-bit random bearer token, not a password; SHA-256 only normalizes length for timingSafeEqual.
-  const hb = createHash("sha256").update(b).digest(); // codeql[js/insufficient-password-hash]: high-entropy 256-bit random bearer token, not a password; SHA-256 only normalizes length for timingSafeEqual.
-  return timingSafeEqual(ha, hb);
+  if (a.length !== 64 || b.length !== 64) return false;
+  if (!/^[0-9a-fA-F]{64}$/.test(a) || !/^[0-9a-fA-F]{64}$/.test(b))
+    return false;
+  const ba = Buffer.from(a, "hex");
+  const bb = Buffer.from(b, "hex");
+  if (ba.length !== 32 || bb.length !== 32) return false;
+  return timingSafeEqual(ba, bb);
 }
 
 export function bearerToken(header: string | string[] | undefined): string {

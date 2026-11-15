@@ -18,9 +18,9 @@ import {
 } from "./api-auth.js";
 import { buildApp } from "./server.js";
 
-const AGENT_TOKEN = "agent-token-for-auth-tests";
-const API_TOKEN = "api-token-for-auth-tests";
-const PRESENTED = `wrong-token-presented-${"s".repeat(32)}`;
+const AGENT_TOKEN = "b2".repeat(32);
+const API_TOKEN = "a1".repeat(32);
+const PRESENTED = "c3".repeat(32);
 
 const HEALTH = {
   kernel: "6.8-test",
@@ -92,12 +92,17 @@ afterAll(async () => {
 const authed = { Authorization: `Bearer ${API_TOKEN}` };
 
 describe("api token helpers", () => {
-  it("compares in constant time without length leaks", () => {
+  it("compares fixed 64-char hex tokens in constant time", () => {
     expect(tokensEqual(API_TOKEN, API_TOKEN)).toBe(true);
+    expect(tokensEqual(API_TOKEN, PRESENTED)).toBe(false);
     expect(tokensEqual(API_TOKEN, "different")).toBe(false);
     expect(tokensEqual("", API_TOKEN)).toBe(false);
     expect(tokensEqual(API_TOKEN, "")).toBe(false);
     expect(tokensEqual("short", "a-much-longer-value")).toBe(false);
+    // No-hash path: length and hex-charset gates reject before timingSafeEqual.
+    expect(tokensEqual("x".repeat(64), API_TOKEN)).toBe(false);
+    expect(tokensEqual(API_TOKEN.slice(0, 63), API_TOKEN)).toBe(false);
+    expect(tokensEqual(API_TOKEN, API_TOKEN.slice(0, 63))).toBe(false);
   });
 
   it("parses bearer headers strictly", () => {
