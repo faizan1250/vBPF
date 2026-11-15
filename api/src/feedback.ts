@@ -11,19 +11,34 @@ export const SHAPED_ERROR_CAP = 300;
 const ANSI_RE = new RegExp("\u001b\\[[0-9;?]*[A-Za-z]|\u001b[()][0-9A-B]", "g");
 
 // Lines that carry no diagnostic signal: bpftrace banners, attach chatter,
-// libbpf/BTF debug dumps, deprecated-flag warnings, AST dumps. The first
-// actionable line (below) is what the model sees.
+// libbpf/BTF debug dumps, deprecated-flag and generic warnings, AST dumps
+// (headers, separators, typed nodes, bare probe echoes, punctuation-only
+// caret/context lines). The first actionable line (below) is what the model
+// sees. Lines containing ERROR are never noise: the guard in isNoise keeps
+// located compiler errors even if they share a prefix with a banner.
 const NOISE_RES = [
-  /^attached \d+ probe/i,
-  /^\[DEBUG\]/,
+  /^attach(ed|ing)(\s+\d+)?\s+probe/i,
+  /^\[(DEBUG|INFO|TRACE)\]/i,
   /libbpf/i,
-  /^WARNING: BPFTRACE_\w+ is deprecated/i,
+  /\bBTF\b/i,
+  /^WARNING:/i,
+  /^\[WARNING\]/i,
+  /^(HINT|NOTE|Log):/i,
   /^entrance/i,
   /^program id/i,
-  /^(BTF|AST|Log|stdin: warning)/i,
+  /^AST\s+(after|before):/i,
   /^bpftrace v?\d/i,
-  /^using .* BTF/i,
-  /^stdin:\d+:\d+-\d+: (WARNING|HINT|NOTE)/i,
+  /^using .*BTF/i,
+  /:\d+:\d+(-\d+)?:\s*(WARNING|HINT|NOTE)/i,
+  /^---+\s*$/,
+  /^===+\s*$/,
+  /^___+\s*$/,
+  // Punctuation/whitespace only: "---", "=", ".", "~", "^~~", etc.
+  /^[^A-Za-z0-9]+$/,
+  /^(program|source|block)\b/i,
+  /^(map|builtin|call|variable|dereference|field|integer|string|boolean|binop|unop|predicate|statement|expression|assign|tuple|record|type|source|block|probe|program|inline|cast|if|else|for|while|loop|return)\s*:/i,
+  /^(tracepoint|kprobe|kretprobe|uprobe|uretprobe|profile|interval|software|BEGIN|END)(:[A-Za-z0-9_*/?.[\]-]+)*\s*$/,
+  /^(running|listening)\b/i,
 ];
 
 function stripAnsi(s: string): string {
@@ -33,21 +48,30 @@ function stripAnsi(s: string): string {
 function isNoise(line: string): boolean {
   const t = line.trim();
   if (t === "") return true;
+  // A located compiler error is always signal, never banner noise.
+  if (/ERROR/i.test(t)) return false;
   return NOISE_RES.some((re) => re.test(t));
 }
 
+// Actionable signal for retry feedback: compiler errors, validator-style
+// rejections (including every hint-table trigger), and dry-run
+// infrastructure failures. Deliberately excludes AST vocabulary ("type",
+// "map", "call") so AST dumps never count as signal.
+const ACTIONABLE_RE =
+  /error|not found|unknown|invalid|fail|missing|blocked|forbidden|not allowed|too many|exceed|unsupported|not supported|undeclared|undefined|cannot|can'?t|couldn'?t|syntax|parse|mismatch|denied|refus|dry-run|no such|bad|wrong/i;
+
 // First actionable line: prefer a located compiler error
 // (`path:line:col: ERROR`, via stdin or the validator's temp file), else the
-// first line mentioning an error, else the first surviving line.
+// first line with actionable signal. Returns "" when only banners, BTF
+// debug, and AST dumps remain (honest no-signal beats a misleading "---" or
+// AST fragment in the retry prompt).
 function firstErrorLine(lines: string[]): string {
   const kept = lines.map((l) => l.trim()).filter((l) => !isNoise(l));
   if (kept.length === 0) return "";
-  const located = kept.find((l) => /:\d+:\d+(-\d+)?:\s*ERROR/.test(l));
+  const located = kept.find((l) => /:\d+:\d+(-\d+)?:\s*ERROR/i.test(l));
   if (located !== undefined) return located;
-  const mentioned = kept.find((l) =>
-    /error|not found|unknown|invalid|failed|missing/i.test(l),
-  );
-  return mentioned ?? kept[0] ?? "";
+  const mentioned = kept.find((l) => ACTIONABLE_RE.test(l));
+  return mentioned ?? "";
 }
 
 // One hint line per failure class (I-11 rule table). Matched against the
