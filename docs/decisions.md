@@ -1037,3 +1037,22 @@ recipe-check` green for all 30; full agent `produced-output.sh` run:
   (`scripts/run-recipe.sh`) the docs-check gate already knows.
 - **Verified:** bash scripts/check-docs.sh green; prettier --check
   clean on docs/overhead.md, README.md, and docs/decisions.md.
+
+## Fix: repo-root-anchored agent token path (2026-11-15)
+
+- **Scope (D-99).** Closes the D-35 footgun: `AGENT_TOKEN_FILE=./run/agent.token`
+  (default and repo-root `.env` value) resolved against `api/` cwd under
+  `pnpm -C api`, so bare make failed preflight with "agent token
+  unreadable". Relative token/db/recipes paths now resolve against the repo
+  root, never cwd; absolute overrides (the D-35 workaround) pass through
+  untouched. New `api/src/paths.ts` (`apiRepoRoot`, `resolveRepoPath`,
+  with `:memory:`/`file:` passthrough for better-sqlite3); `buildApp`
+  anchors `tokenFile`/`dbPath`/`recipesDir`; `parseEvalArgs` anchors the
+  default plus any relative `--token-file`/`AGENT_TOKEN_FILE`/`TOKEN_FILE`
+  against its `root` arg.
+- **Verified:** `tsc --noEmit` clean, eslint/prettier clean, api vitest
+  354/354 (new: `paths.test.ts` anchoring + `:memory:` passthrough,
+  `parseEvalArgs` default/relative/absolute cases, preflight default read
+  with both repo-root and `api/` cwd); `pnpm --dir api` smoke check reads
+  `<root>/run/agent.token` with cwd=`api/`; `check-docs.sh`,
+  `parity-vectors.mjs` green. Mock-only CI untouched.

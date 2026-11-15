@@ -1,4 +1,4 @@
-import { dirname, join } from "node:path";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   mkdtempSync,
@@ -535,7 +535,9 @@ describe("eval agent flags", () => {
     const base = parseEvalArgs([], root, {});
     expect(base.agent).toBe(false);
     expect(base.agentUrl).toBe("http://127.0.0.1:8787");
-    expect(base.tokenFile).toBe("./run/agent.token");
+    // Repo-root anchoring (D-99): the default is absolute under the root,
+    // so bare make (cwd=api/) finds <root>/run/agent.token.
+    expect(base.tokenFile).toBe(resolvePath(root, "run", "agent.token"));
     const full = parseEvalArgs(
       [
         "--live",
@@ -565,6 +567,82 @@ describe("eval agent flags", () => {
     expect(() =>
       parseEvalArgs(["--live", "--agent", "--agent-url"], root, {}),
     ).toThrow();
+  });
+
+  it("anchors relative token files to the repo root (D-99)", () => {
+    const root = join(tmpdir(), "vbpf-root-anchored");
+    // Explicit relative flag resolves against the root, never cwd.
+    expect(
+      parseEvalArgs(["--token-file", "./run/agent.token"], root, {}).tokenFile,
+    ).toBe(resolvePath(root, "run", "agent.token"));
+    // Relative env values (e.g. AGENT_TOKEN_FILE=./run/agent.token in the
+    // repo-root .env) resolve the same way; TOKEN_FILE fallback too.
+    expect(
+      parseEvalArgs([], root, { AGENT_TOKEN_FILE: "run/custom.token" })
+        .tokenFile,
+    ).toBe(resolvePath(root, "run", "custom.token"));
+    expect(parseEvalArgs([], root, { TOKEN_FILE: "./tok" }).tokenFile).toBe(
+      resolvePath(root, "tok"),
+    );
+    // Absolute overrides pass through untouched from any cwd.
+    expect(
+      parseEvalArgs([], root, { AGENT_TOKEN_FILE: "/env/tok" }).tokenFile,
+    ).toBe("/env/tok");
+  });
+
+  it("preflight default reads from repo root with api/ cwd (D-99)", async () => {
+    const rootDir = mkdtempSync(join(tmpdir(), "vbpf-preflight-"));
+    const runDir = join(rootDir, "run");
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(runDir, { recursive: true });
+    const tokenPath = join(runDir, "agent.token");
+    writeFileSyncNode(tokenPath, "secret-token\n");
+    const { tokenFile } = parseEvalArgs([], rootDir, {});
+    expect(tokenFile).toBe(tokenPath);
+    const { readAgentToken } = await import("./agent-client.js");
+    // Bare make runs with cwd=api/; the anchored default must still read.
+    const apiCwd = join(rootDir, "api");
+    mkdirSync(apiCwd, { recursive: true });
+    const previousCwd = process.cwd();
+    process.chdir(apiCwd);
+    try {
+      expect(readAgentToken(tokenFile)).toBe("secret-token");
+      const health = await checkAgentPreflight(
+        "http://127.0.0.1:1",
+        tokenFile,
+        async (_base: string, file: string) => {
+          readAgentToken(file);
+          return {
+            kernel: "6.6.87-test",
+            bpftrace_version: "v0.20.2",
+            btf: true,
+            root: true,
+            tracefs: true,
+            uptime_s: 1,
+            ready: true,
+            catalog: { state: "ready", probes: 11, warnings: [] },
+          };
+        },
+      );
+      expect(health.root).toBe(true);
+    } finally {
+      process.chdir(previousCwd);
+      const { rmSync } = await import("node:fs");
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+    // Same default reads with the repo root as cwd.
+    const rootDir2 = mkdtempSync(join(tmpdir(), "vbpf-preflight-"));
+    const runDir2 = join(rootDir2, "run");
+    const { mkdirSync: mkdir2 } = await import("node:fs");
+    mkdir2(runDir2, { recursive: true });
+    writeFileSyncNode(join(runDir2, "agent.token"), "secret-token\n");
+    try {
+      const parsed = parseEvalArgs([], rootDir2, {});
+      expect(readAgentToken(parsed.tokenFile)).toBe("secret-token");
+    } finally {
+      const { rmSync: rm2 } = await import("node:fs");
+      rm2(rootDir2, { recursive: true, force: true });
+    }
   });
 });
 

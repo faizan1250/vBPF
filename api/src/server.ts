@@ -63,6 +63,7 @@ import {
   LlmUnavailableError,
 } from "./live-llm.js";
 import { PromptBudgetError } from "./llm.js";
+import { apiRepoRoot, resolveRepoPath } from "./paths.js";
 import { loadRecipes } from "./recipes.js";
 
 export interface AppOptions {
@@ -372,6 +373,13 @@ export async function buildApp(
   opts: AppOptions,
   db?: Database.Database,
 ): Promise<FastifyInstance> {
+  // Repo-root anchoring (D-99): relative token/db/recipes paths resolve
+  // against the repo root, never cwd, so `pnpm -C api` (cwd=api/) finds
+  // <root>/run/agent.token. Absolute overrides pass through untouched.
+  const root = apiRepoRoot();
+  const tokenFile = resolveRepoPath(opts.tokenFile, root);
+  const dbPath = resolveRepoPath(opts.dbPath, root);
+  const recipesDir = resolveRepoPath(opts.recipesDir, root);
   const app = Fastify({
     // Explicit TRUST_PROXY only (D-81): default false ignores X-Forwarded-For
     // from untrusted peers (socket address is keyed), so a client that
@@ -398,9 +406,9 @@ export async function buildApp(
     routerOptions: { maxParamLength: 256 },
   });
 
-  const database = db ?? openDb(opts.dbPath);
+  const database = db ?? openDb(dbPath);
   migrate(database);
-  const indexed = loadRecipes(opts.recipesDir);
+  const indexed = loadRecipes(recipesDir);
   indexRecipes(database, indexed);
   // Stock-script hashes for origin derivation (I-14): trimmed bodies, so a
   // pasted recipe with a different trailing newline still matches. Built
@@ -408,7 +416,7 @@ export async function buildApp(
   const recipeHashes = new Set(
     [
       ...loadRecipeBodies(
-        opts.recipesDir,
+        recipesDir,
         indexed.map((r) => r.id),
       ).values(),
     ].map((body) => sha256Hex(body.trim())),
@@ -558,7 +566,7 @@ export async function buildApp(
     function connect(): void {
       let token: string;
       try {
-        token = readAgentToken(opts.tokenFile);
+        token = readAgentToken(tokenFile);
       } catch (err) {
         app.log.warn({ err, runId }, "run observer failed to read agent token");
         return;
@@ -746,7 +754,7 @@ export async function buildApp(
 
   app.get("/api/health", async (_req, reply) => {
     try {
-      const health = await fetchAgentHealth(opts.agentUrl, opts.tokenFile);
+      const health = await fetchAgentHealth(opts.agentUrl, tokenFile);
       return reply.send(
         HealthResponseSchema.parse({
           ok: true,
@@ -801,7 +809,7 @@ export async function buildApp(
       const mode = opts.llmMode ?? "mock";
       const llm =
         mode === "mock"
-          ? makeMockLlm(database, opts.recipesDir, opts.llmModel ?? "mock")
+          ? makeMockLlm(database, recipesDir, opts.llmModel ?? "mock")
           : liveLlm;
       if (llm === null) {
         return sendLlmUnavailable(reply);
@@ -812,9 +820,9 @@ export async function buildApp(
           sessionId: parsed.data.session_id,
           deps: {
             db: database,
-            recipesDir: opts.recipesDir,
+            recipesDir: recipesDir,
             agentUrl: opts.agentUrl,
-            tokenFile: opts.tokenFile,
+            tokenFile: tokenFile,
             llm,
           },
           signal: client.signal,
@@ -894,7 +902,7 @@ export async function buildApp(
         parsed.data.script,
         {
           db: database,
-          recipesDir: opts.recipesDir,
+          recipesDir: recipesDir,
           llm,
         },
         { signal: client.signal },
@@ -935,7 +943,7 @@ export async function buildApp(
       // goes to the agent (a substring pre-check here would disagree with
       // the token-level validator on strings/comments; see parity vectors).
       return proxyVerbatim(reply, () =>
-        agentPost(opts.agentUrl, opts.tokenFile, "/v1/validate", parsed.data),
+        agentPost(opts.agentUrl, tokenFile, "/v1/validate", parsed.data),
       );
     },
   );
@@ -977,7 +985,7 @@ export async function buildApp(
     const duration = durationS ?? DEFAULT_DURATION_S;
     let created: { run_id: string; state: string };
     try {
-      const res = await agentPost(opts.agentUrl, opts.tokenFile, "/v1/runs", {
+      const res = await agentPost(opts.agentUrl, tokenFile, "/v1/runs", {
         script,
         duration_s: duration,
       });
@@ -1029,7 +1037,7 @@ export async function buildApp(
       app.log.error({ err, runId: created.run_id }, "run insert failed");
       agentDelete(
         opts.agentUrl,
-        opts.tokenFile,
+        tokenFile,
         `/v1/runs/${encodeURIComponent(created.run_id)}`,
       ).catch((delErr: unknown) => {
         app.log.warn(
@@ -1059,7 +1067,7 @@ export async function buildApp(
       try {
         const res = await agentDelete(
           opts.agentUrl,
-          opts.tokenFile,
+          tokenFile,
           `/v1/runs/${encodeURIComponent(id)}`,
         );
         const text = await res.text();
@@ -1155,7 +1163,7 @@ export async function buildApp(
       const { id } = req.params as { id: string };
       let token: string;
       try {
-        token = readAgentToken(opts.tokenFile);
+        token = readAgentToken(tokenFile);
       } catch {
         socket.send(
           JSON.stringify({ error: "agent offline", code: "AGENT_OFFLINE" }),

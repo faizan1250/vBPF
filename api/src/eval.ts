@@ -1329,6 +1329,15 @@ export function parseEvalArgs(
   }
   // Courtesy delay for live free-tier budgets; mock stays instant.
   if (live && delayMs === 0) delayMs = 2000;
+  // Repo-root anchoring (D-99): the default plus any relative --token-file
+  // or AGENT_TOKEN_FILE/TOKEN_FILE value resolves against the repo root,
+  // never cwd, so bare make (cwd=api/ under `pnpm -C api`) finds
+  // <root>/run/agent.token. Absolute overrides pass through untouched.
+  const rawTokenFile =
+    tokenFile ??
+    env["AGENT_TOKEN_FILE"] ??
+    env["TOKEN_FILE"] ??
+    "./run/agent.token";
   return {
     promptsPath,
     outPath,
@@ -1340,11 +1349,9 @@ export function parseEvalArgs(
     repeat,
     force,
     agentUrl: agentUrl ?? env["AGENT_URL"] ?? "http://127.0.0.1:8787",
-    tokenFile:
-      tokenFile ??
-      env["AGENT_TOKEN_FILE"] ??
-      env["TOKEN_FILE"] ??
-      "./run/agent.token",
+    tokenFile: isAbsolute(rawTokenFile)
+      ? rawTokenFile
+      : resolve(root, rawTokenFile),
   };
 }
 
