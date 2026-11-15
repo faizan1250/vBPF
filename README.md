@@ -575,13 +575,13 @@ why pasting chatbot output into a root shell is not the same thing.
 - [x] Container packaging (`docker compose up` quickstart)
 - [x] Server-side sessions and export (v0.3): persistent history beyond browser localStorage (sessions list/get/export API, per-session export)
 - [x] Opt-in "Explain these results" (explicit consent checkbox plus data-sharing notice; script plus capped run output only after opt-in, script-only by default)
-- [ ] Kubernetes and container targeting (pod name to cgroup IDs)
-- [ ] Saved dashboards and shareable run reports
-- [ ] Flame graphs and off-CPU analysis
-- [ ] libbpf / CO-RE backend for long-running probes
-- [ ] Multi-host agents over TLS with enrollment tokens
+- [ ] Kubernetes and container targeting (pod name to cgroup IDs) — [design](docs/epics/k8s-cgroup-targeting.md), [#147](https://github.com/faizan1250/vBPF/issues/147)
+- [ ] Saved dashboards and shareable run reports — [design](docs/epics/dashboards.md), [#148](https://github.com/faizan1250/vBPF/issues/148)
+- [ ] Flame graphs and off-CPU analysis — [design](docs/epics/flame-graphs-offcpu.md), [#149](https://github.com/faizan1250/vBPF/issues/149)
+- [ ] libbpf / CO-RE backend for long-running probes — [design](docs/epics/libbpf-core-backend.md), [#146](https://github.com/faizan1250/vBPF/issues/146)
+- [ ] Multi-host agents over TLS with enrollment tokens — [design](docs/epics/multi-host-tls.md), [#145](https://github.com/faizan1250/vBPF/issues/145)
 
-Ordered to finish single-host usability first; the libbpf backend and multi-host agents come last as the largest scope.
+Ordered to finish single-host usability first; the libbpf backend and multi-host agents come last as the largest scope. Each item has a scoped design doc in `docs/epics/` plus a tracking issue; no implementation is started from this branch.
 
 Have a request? [Open an issue](https://github.com/faizan1250/vBPF/issues/new/choose).
 
