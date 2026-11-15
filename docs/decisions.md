@@ -1115,7 +1115,7 @@ recipe-check` green for all 30; full agent `produced-output.sh` run:
   as root in WSL2 on `127.0.0.1:8787` (BTF present, 106,865-probe catalog
   ready; token at `/root/vbpf-agent.token`, 0600, same content as
   `run/agent.token`). `pnpm -C api run eval -- --live --agent
-  --delay-ms 15000` (Groq `openai/gpt-oss-120b` from local `.env`)
+--delay-ms 15000` (Groq `openai/gpt-oss-120b` from local `.env`)
   started 2026-11-15T18:42Z; agent log shows bpftrace runs executing with
   events flowing. Budget: 0 full live runs completed today (max 3/day),
   this run projects 127 x 3 = 381 calls (cap 400). Report will land at
