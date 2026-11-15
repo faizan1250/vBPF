@@ -8,10 +8,15 @@ import { describe, expect, it } from "vitest";
 import {
   closeDb,
   deriveRunOrigin,
+  ensureSession,
   failRunWithReason,
   generationExists,
   getGeneration,
+  getSession,
   insertRun,
+  listSessionGenerations,
+  listSessionRuns,
+  listSessions,
   listUnfinishedRuns,
   markRunFailedIfActive,
   migrate,
@@ -19,6 +24,7 @@ import {
   persistRunSummary,
   searchRecipes,
   sha256Hex,
+  touchSessionTitle,
   SCHEMA_VERSION,
 } from "./db.js";
 
@@ -419,6 +425,7 @@ describe("run and generation helpers", () => {
         id: "gen_1",
         script: "BEGIN { @x = count(); }",
         based_on_recipe: null,
+        session_id: "sess1",
       });
     } finally {
       closeDb(db);
@@ -715,5 +722,182 @@ describe("terminal run finalization (I-02)", () => {
     } finally {
       closeDb(db);
     }
+  });
+});
+
+describe("server sessions (v0.3)", () => {
+  it("titles a session once from the first prompt", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      ensureSession(db, "ses_t");
+      touchSessionTitle(db, "ses_t", "  Which processes use CPU?  ");
+      touchSessionTitle(db, "ses_t", "Second prompt must not rename");
+      expect(getSession(db, "ses_t")).toMatchObject({
+        id: "ses_t",
+        title: "Which processes use CPU?",
+      });
+      touchSessionTitle(db, "ses_t", "   ");
+      expect(getSession(db, "ses_t")!.title).toBe("Which processes use CPU?");
+      expect(getSession(db, "ses_missing")).toBeUndefined();
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("lists sessions newest-first with generation and run counts", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      for (const id of ["ses_old", "ses_new"]) {
+        ensureSession(db, id);
+        touchSessionTitle(db, id, `prompt for ${id}`);
+      }
+      db.prepare("UPDATE sessions SET created_at = ? WHERE id = ?").run(
+        10,
+        "ses_old",
+      );
+      db.prepare("UPDATE sessions SET created_at = ? WHERE id = ?").run(
+        20,
+        "ses_new",
+      );
+      db.prepare(
+        "INSERT INTO generations (id, session_id, script, created_at) VALUES (?, ?, ?, ?)",
+      ).run("gen_1", "ses_new", "BEGIN {}", 21);
+      insertRun(db, {
+        id: "run_1",
+        generation_id: "gen_1",
+        session_id: "ses_new",
+        script_sha256: "h",
+        script_text: "BEGIN {}",
+        edited: false,
+        origin: "generated",
+        duration_s: 10,
+        state: "completed",
+        started_at: 22,
+      });
+      expect(listSessions(db, 50)).toEqual([
+        {
+          id: "ses_new",
+          title: "prompt for ses_new",
+          created_at: 20,
+          generations: 1,
+          runs: 1,
+        },
+        {
+          id: "ses_old",
+          title: "prompt for ses_old",
+          created_at: 10,
+          generations: 0,
+          runs: 0,
+        },
+      ]);
+      expect(listSessions(db, 1)).toHaveLength(1);
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("lists generations and runs for one session", () => {
+    const db = openDb(":memory:");
+    try {
+      migrate(db);
+      ensureSession(db, "ses_a");
+      ensureSession(db, "ses_b");
+      db.prepare(
+        "INSERT INTO generations (id, session_id, prompt, script, created_at) VALUES (?, ?, ?, ?, ?)",
+      ).run("gen_a", "ses_a", "p", "BEGIN {}", 1);
+      db.prepare(
+        "INSERT INTO generations (id, session_id, prompt, script, created_at) VALUES (?, ?, ?, ?, ?)",
+      ).run("gen_b", "ses_b", "p", "BEGIN {}", 2);
+      insertRun(db, {
+        id: "run_a",
+        generation_id: "gen_a",
+        session_id: "ses_a",
+        script_sha256: "h",
+        script_text: "BEGIN {}",
+        edited: false,
+        origin: "generated",
+        duration_s: 10,
+        state: "running",
+        started_at: 3,
+      });
+      expect(
+        listSessionGenerations(db, "ses_a").map((g) => g.generation_id),
+      ).toEqual(["gen_a"]);
+      expect(listSessionRuns(db, "ses_a").map((r) => r.run_id)).toEqual([
+        "run_a",
+      ]);
+      expect(listSessionRuns(db, "ses_b")).toEqual([]);
+    } finally {
+      closeDb(db);
+    }
+  });
+
+  it("backfills run sessions from generations when migrating to v6", () => {
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL DEFAULT '',
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE generations (
+        id TEXT PRIMARY KEY,
+        session_id TEXT,
+        prompt TEXT NOT NULL DEFAULT '',
+        script TEXT NOT NULL DEFAULT '',
+        chart_type TEXT,
+        explanation TEXT,
+        duration_s INTEGER,
+        validation_status TEXT,
+        attempts INTEGER NOT NULL DEFAULT 1,
+        model TEXT,
+        based_on_recipe TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE runs (
+        id TEXT PRIMARY KEY,
+        generation_id TEXT,
+        script_sha256 TEXT NOT NULL DEFAULT '',
+        script_text TEXT NOT NULL DEFAULT '',
+        duration_s INTEGER NOT NULL DEFAULT 10,
+        state TEXT NOT NULL DEFAULT 'running',
+        started_at INTEGER NOT NULL,
+        ended_at INTEGER,
+        events_count INTEGER NOT NULL DEFAULT 0,
+        bytes INTEGER NOT NULL DEFAULT 0,
+        dropped INTEGER NOT NULL DEFAULT 0,
+        exit_reason TEXT,
+        origin TEXT NOT NULL DEFAULT 'edited'
+      );
+    `);
+    db.prepare(
+      "INSERT INTO sessions (id, title, created_at) VALUES (?, '', ?)",
+    ).run("s1", 1);
+    db.prepare(
+      "INSERT INTO generations (id, session_id, script, created_at) VALUES (?, ?, ?, ?)",
+    ).run("gen_1", "s1", "BEGIN {}", 1);
+    db.prepare(
+      "INSERT INTO runs (id, generation_id, script_text, started_at) VALUES (?, ?, ?, ?)",
+    ).run("r_bound", "gen_1", "BEGIN {}", 1);
+    db.prepare(
+      "INSERT INTO runs (id, script_text, started_at) VALUES (?, ?, ?)",
+    ).run("r_free", "BEGIN {}", 1);
+    db.pragma("user_version = 5");
+    migrate(db);
+    const rows = (
+      db.prepare("SELECT id, session_id FROM runs").all() as Array<{
+        id: string;
+        session_id: string | null;
+      }>
+    ).sort((a, b) => a.id.localeCompare(b.id));
+    expect(rows).toEqual([
+      { id: "r_bound", session_id: "s1" },
+      { id: "r_free", session_id: null },
+    ]);
+    // Idempotent: a second migrate keeps the backfill.
+    migrate(db);
+    closeDb(db);
   });
 });

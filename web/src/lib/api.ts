@@ -22,6 +22,7 @@ export interface CreateRunResult {
   run_id: string;
   state: string;
   origin: RunOrigin;
+  session_id?: string;
 }
 
 export interface StopRunResult {
@@ -134,6 +135,7 @@ export function createRun(
   script: string,
   durationS: number,
   generationId?: string,
+  sessionId?: string,
 ): Promise<CreateRunResult> {
   const oversize = rejectOversizeScript(script);
   if (oversize) return Promise.reject(oversize);
@@ -146,6 +148,9 @@ export function createRun(
     duration_s: duration,
     ...(generationId !== undefined && generationId !== ""
       ? { generation_id: generationId }
+      : {}),
+    ...(sessionId !== undefined && sessionId !== ""
+      ? { session_id: sessionId.slice(0, MAX_SESSION_ID_CHARS) }
       : {}),
   });
 }
@@ -177,6 +182,87 @@ export function fetchRecipes(query = ""): Promise<{ recipes: Recipe[] }> {
   const q = query.trim().slice(0, 256);
   return getJson<{ recipes: Recipe[] }>(
     `/api/recipes${q === "" ? "" : `?q=${encodeURIComponent(q)}`}`,
+  );
+}
+
+// Server-side sessions (v0.3): persistent history beyond browser
+// localStorage. The panel tries these first and falls back to local entries
+// when the backend is unreachable or fixture mode bypasses the network.
+export interface SessionSummary {
+  id: string;
+  title: string;
+  created_at: number;
+  generations: number;
+  runs: number;
+}
+
+export interface SessionGeneration {
+  generation_id: string;
+  prompt: string;
+  script: string;
+  chart_type: ChartType | null;
+  explanation: string | null;
+  duration_s: number | null;
+  validation_status: string;
+  attempts: number;
+  model: string | null;
+  based_on_recipe: string | null;
+  created_at: number;
+}
+
+export interface SessionRunSummary {
+  events_count: number;
+  bytes: number;
+  dropped: number;
+  exit_reason: string;
+}
+
+export interface SessionRun {
+  run_id: string;
+  generation_id: string | null;
+  origin: RunOrigin;
+  state: string;
+  duration_s: number;
+  started_at: number;
+  ended_at: number | null;
+  summary: SessionRunSummary | null;
+}
+
+export interface SessionDetail {
+  id: string;
+  title: string;
+  created_at: number;
+  generations: SessionGeneration[];
+  runs: SessionRun[];
+}
+
+export interface SessionExport {
+  exported_at: string;
+  session: { id: string; title: string; created_at: number };
+  generations: SessionGeneration[];
+  runs: SessionRun[];
+}
+
+export function fetchSessions(limit = 50): Promise<{
+  sessions: SessionSummary[];
+}> {
+  const n = Math.min(200, Math.max(1, Math.round(limit)));
+  return getJson<{ sessions: SessionSummary[] }>(`/api/sessions?limit=${n}`);
+}
+
+export function fetchSession(id: string): Promise<SessionDetail> {
+  if (id === "") {
+    return Promise.reject(new ApiError(404, "NOT_FOUND", "unknown session"));
+  }
+  return getJson<SessionDetail>(`/api/sessions/${encodeURIComponent(id)}`);
+}
+
+export function fetchSessionExport(id: string): Promise<SessionExport> {
+  if (id === "") {
+    return Promise.reject(new ApiError(404, "NOT_FOUND", "unknown session"));
+  }
+  return getJson<SessionExport>(
+    `/api/sessions/${encodeURIComponent(id)}/export`,
   );
 }
 

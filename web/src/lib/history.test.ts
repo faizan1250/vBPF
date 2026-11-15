@@ -65,4 +65,38 @@ describe("history", () => {
     expect(parsed["origin"]).toBe("recipe");
     expect(parsed["run_id"]).toBe("r");
   });
+
+  it("exports a fixed secret-free shape", () => {
+    const text = exportEntry({
+      id: "1",
+      title: "t",
+      createdAt: 1,
+      prompt: "p",
+      script: "s",
+      chartType: "bar",
+      explanation: "e",
+      durationS: 10,
+      warnings: [],
+      runId: "r",
+      origin: "generated",
+      exitReason: null,
+      eventsSample: [],
+    });
+    // Local export must never carry credentials, tokens, or server paths.
+    expect(Object.keys(JSON.parse(text) as object).sort()).toEqual(
+      [
+        "chart_type",
+        "duration_s",
+        "events_sample",
+        "exit_reason",
+        "explanation",
+        "exported_at",
+        "origin",
+        "prompt",
+        "run_id",
+        "script",
+        "warnings",
+      ].sort(),
+    );
+  });
 });

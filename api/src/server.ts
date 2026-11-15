@@ -20,6 +20,9 @@ import {
   GetRunResponseSchema,
   HealthResponseSchema,
   RecipeListResponseSchema,
+  SessionDetailResponseSchema,
+  SessionExportResponseSchema,
+  SessionListResponseSchema,
   StopRunResponseSchema,
   ValidateRequestSchema,
 } from "@vbpf/schemas";
@@ -35,11 +38,16 @@ import {
 import {
   closeDb,
   deriveRunOrigin,
+  ensureSession,
   failRunWithReason,
   generationExists,
   getGeneration,
+  getSession,
   indexRecipes,
   insertRun,
+  listSessionGenerations,
+  listSessionRuns,
+  listSessions,
   listUnfinishedRuns,
   markRunFailedIfActive,
   migrate,
@@ -47,6 +55,7 @@ import {
   persistRunSummary,
   searchRecipes,
   sha256Hex,
+  touchSessionTitle,
 } from "./db.js";
 import { ExplainValidationError, explainScriptText } from "./explain.js";
 import {
@@ -54,6 +63,7 @@ import {
   ValidationFailedError,
   loadRecipeBodies,
   makeMockLlm,
+  newSessionId,
   runGenerate,
 } from "./generate.js";
 import {
@@ -964,7 +974,13 @@ export async function buildApp(
     const generationId = parsed.data.generation_id ?? null;
     let edited = false;
     let generation:
-      { script: string; based_on_recipe: string | null } | undefined;
+      | { script: string; based_on_recipe: string | null; session_id: string }
+      | undefined;
+    // Session binding: a generation-linked run always joins its generation's
+    // session (authoritative; a client session_id is ignored here). A
+    // generation-less run joins the client session when one is supplied, or
+    // starts a fresh session titled from the script's first line.
+    let sessionId: string | null = null;
     if (generationId !== null) {
       if (!generationExists(database, generationId)) {
         return reply
@@ -974,6 +990,20 @@ export async function buildApp(
       const gen = getGeneration(database, generationId);
       edited = gen !== undefined && script !== gen.script;
       generation = gen;
+      if (gen !== undefined) sessionId = gen.session_id;
+    }
+    if (sessionId === null) {
+      const clientSessionId = parsed.data.session_id ?? null;
+      const titleSeed = script.split("\n")[0] ?? "run";
+      if (clientSessionId !== null) {
+        ensureSession(database, clientSessionId);
+        touchSessionTitle(database, clientSessionId, titleSeed);
+        sessionId = clientSessionId;
+      } else {
+        sessionId = newSessionId();
+        ensureSession(database, sessionId);
+        touchSessionTitle(database, sessionId, titleSeed);
+      }
     }
     // Origin is derived here from the generation binding and the recipe
     // library, never trusted from the client (I-14).
@@ -1025,6 +1055,7 @@ export async function buildApp(
       insertRun(database, {
         id: created.run_id,
         generation_id: generationId,
+        session_id: sessionId,
         script_sha256: createHash("sha256").update(script).digest("hex"),
         script_text: script,
         edited,
@@ -1050,7 +1081,7 @@ export async function buildApp(
         .send({ error: "failed to persist run", code: "INTERNAL_ERROR" });
     }
     startRunObserver(created.run_id, duration);
-    return reply.code(201).send({ ...created, origin });
+    return reply.code(201).send({ ...created, origin, session_id: sessionId });
   });
 
   app.post(
@@ -1100,12 +1131,13 @@ export async function buildApp(
     }
     const row = database
       .prepare(
-        "SELECT id, generation_id, edited, origin, duration_s, state, started_at, ended_at, events_count, bytes, dropped, exit_reason FROM runs WHERE id = ?",
+        "SELECT id, generation_id, session_id, edited, origin, duration_s, state, started_at, ended_at, events_count, bytes, dropped, exit_reason FROM runs WHERE id = ?",
       )
       .get(id) as
       | {
           id: string;
           generation_id: string | null;
+          session_id: string | null;
           edited: number;
           origin: "generated" | "edited" | "recipe";
           duration_s: number;
@@ -1130,6 +1162,7 @@ export async function buildApp(
         started_at: row.started_at,
         ended_at: row.ended_at,
         generation_id: row.generation_id,
+        session_id: row.session_id,
         edited: row.edited === 1,
         origin: row.origin,
         summary:
@@ -1144,6 +1177,141 @@ export async function buildApp(
       }),
     );
   });
+
+  // Sessions group one trail of generations and runs. List/detail/export
+  // expose only user content (prompts, scripts, summaries) — never agent
+  // tokens, key material, or server paths (no column carrying them is read).
+  app.get("/api/sessions", async (req: FastifyRequest, reply: FastifyReply) => {
+    const raw = (req.query as { limit?: unknown } | null)?.limit;
+    let limit = 50;
+    if (raw !== undefined) {
+      const n = typeof raw === "string" ? Number(raw) : NaN;
+      if (!Number.isInteger(n) || n < 1 || n > 200) {
+        return reply
+          .code(400)
+          .send({ error: "invalid request", code: "VALIDATION_FAILED" });
+      }
+      limit = n;
+    }
+    const sessions = listSessions(database, limit);
+    return reply.send(SessionListResponseSchema.parse({ sessions }));
+  });
+
+  // Maps a run row to the shared summary shape (null until the terminal
+  // summary lands). script_text/script_sha256 are deliberately excluded.
+  function toSessionRun(row: {
+    run_id: string;
+    generation_id: string | null;
+    origin: "generated" | "edited" | "recipe";
+    state: string;
+    duration_s: number;
+    started_at: number;
+    ended_at: number | null;
+    events_count: number;
+    bytes: number;
+    dropped: number;
+    exit_reason: string | null;
+  }): {
+    run_id: string;
+    generation_id: string | null;
+    origin: "generated" | "edited" | "recipe";
+    state: string;
+    duration_s: number;
+    started_at: number;
+    ended_at: number | null;
+    summary: {
+      events_count: number;
+      bytes: number;
+      dropped: number;
+      exit_reason: string;
+    } | null;
+  } {
+    return {
+      run_id: row.run_id,
+      generation_id: row.generation_id,
+      origin: row.origin,
+      state: row.state,
+      duration_s: row.duration_s,
+      started_at: row.started_at,
+      ended_at: row.ended_at,
+      summary:
+        row.exit_reason === null
+          ? null
+          : {
+              events_count: row.events_count,
+              bytes: row.bytes,
+              dropped: row.dropped,
+              exit_reason: row.exit_reason,
+            },
+    };
+  }
+
+  app.get(
+    "/api/sessions/:id",
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      const { id } = req.params as { id: string };
+      // Same 128 cap as runs: unknown, empty, or overlong ids are 404.
+      if (typeof id !== "string" || id === "" || id.length > 128) {
+        return reply
+          .code(404)
+          .send({ error: "unknown session", code: "NOT_FOUND" });
+      }
+      const session = getSession(database, id);
+      if (session === undefined) {
+        return reply
+          .code(404)
+          .send({ error: "unknown session", code: "NOT_FOUND" });
+      }
+      const generations = listSessionGenerations(database, id);
+      const runs = listSessionRuns(database, id).map(toSessionRun);
+      return reply.send(
+        SessionDetailResponseSchema.parse({
+          id: session.id,
+          title: session.title,
+          created_at: session.created_at,
+          generations,
+          runs,
+        }),
+      );
+    },
+  );
+
+  app.get(
+    "/api/sessions/:id/export",
+    async (req: FastifyRequest, reply: FastifyReply) => {
+      const { id } = req.params as { id: string };
+      if (typeof id !== "string" || id === "" || id.length > 128) {
+        return reply
+          .code(404)
+          .send({ error: "unknown session", code: "NOT_FOUND" });
+      }
+      const session = getSession(database, id);
+      if (session === undefined) {
+        return reply
+          .code(404)
+          .send({ error: "unknown session", code: "NOT_FOUND" });
+      }
+      const generations = listSessionGenerations(database, id);
+      const runs = listSessionRuns(database, id).map(toSessionRun);
+      return reply
+        .header(
+          "content-disposition",
+          `attachment; filename="vbpf-session-${session.id}.json"`,
+        )
+        .send(
+          SessionExportResponseSchema.parse({
+            exported_at: new Date().toISOString(),
+            session: {
+              id: session.id,
+              title: session.title,
+              created_at: session.created_at,
+            },
+            generations,
+            runs,
+          }),
+        );
+    },
+  );
 
   app.get(
     "/ws/runs/:id",

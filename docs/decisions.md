@@ -1124,3 +1124,45 @@ recipe-check` green for all 30; full agent `produced-output.sh` run:
 - **Verified:** mock eval green (see above); no secrets in repo
   (`git status` shows only untracked report artifacts + other sessions'
   leftovers, none staged).
+
+## Server sessions and export (2026-11-16)
+
+- **Scope (D-102).** Closes the R-14 deferral (client-only history) and the
+  roadmap's first item: a `sessions` store plus list/get/export API and a
+  server-first History panel. Branch `feat/server-sessions` from main
+  `f86b355`; mock-only CI untouched.
+- **Storage (D-102).** `SCHEMA_VERSION` 5→6: `runs.session_id` (fresh DDL
+  carries `REFERENCES sessions(id)` per the R-19 pattern; legacy files get
+  a plain column plus a v6 backfill inheriting the generation's session,
+  leaving generation-less rows NULL). `touchSessionTitle` sets the title
+  once from the first prompt (80 chars); later generations never rename.
+- **Session binding (D-103).** A generation-bound run always joins its
+  generation's session (authoritative; a client `session_id` is ignored
+  there). A generation-less run joins the client session when supplied,
+  else mints a fresh one titled from the script's first line — so every
+  run belongs to exactly one session. `GET /api/runs/:id` and the 201
+  response now carry `session_id`; `GenerateResponse` returns it
+  (optional) and the web stores it for follow-up generations.
+- **API surface (D-103).** `GET /api/sessions?limit=` (1–200, default 50),
+  `GET /api/sessions/:id`, `GET /api/sessions/:id/export` (with
+  `Content-Disposition: attachment`). Unknown/empty/overlong ids are 404
+  `NOT_FOUND`; bad limits are 400. Detail/export share zod shapes; the
+  export adds only `exported_at` and reads no token/key/path column, so
+  the payload is user content (prompts, scripts, summaries) by
+  construction — pinned by a test asserting the text lacks the agent
+  token, `.sqlite3`, `Bearer`, and `agentToken`.
+- **UI migration (D-104).** `HistoryPanel` is server-first: a live session
+  list with Load (latest generation into prompt/script/duration) and
+  Export (server payload download) actions; localStorage stays as the
+  offline record (dual-write via `recordRunToHistory`) and renders as a
+  "Browser-local" section when the server is reachable, or the full
+  fallback when it is not. Fixture mode stays local-only. `ConfirmModal`
+  forwards the stored session for generation-less runs; `PromptPanel`
+  stores the server session after each generation.
+- **Verified:** `tsc --noEmit` clean (schemas, api, web), eslint clean,
+  prettier clean, api vitest 364/364 (new `sessions.test.ts` black-box
+  suite plus `db.test.ts` session blocks: v6 backfill, title-once,
+  ordering, detail/export, binding, client/minted sessions, 404s, limit
+  validation), web vitest 102/102 (new `HistoryPanel.server.test.tsx`,
+  session cases in `api.test.ts`, export-shape case in `history.test.ts`,
+  session-forwarding cases in `ConfirmModal.test.tsx`).

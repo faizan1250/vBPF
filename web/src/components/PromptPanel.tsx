@@ -31,6 +31,7 @@ export function PromptPanel() {
   const setRunError = useAppStore((s) => s.setRunError);
   const setRunPhase = useAppStore((s) => s.setRunPhase);
   const sessionId = useAppStore((s) => s.sessionId);
+  const setSessionId = useAppStore((s) => s.setSessionId);
   const generation = useAppStore((s) => s.generation);
   const validationOk = useAppStore((s) => s.validationOk);
   const agentReady = useAppStore((s) => s.agentReady);
@@ -85,6 +86,11 @@ export function PromptPanel() {
     },
     onSuccess: (result) => {
       setGeneration(result);
+      // The server owns the session: keep it so follow-up generations and
+      // generation-less runs join the same trail.
+      if (result.session_id !== undefined && result.session_id !== "") {
+        setSessionId(result.session_id);
+      }
       setRunPhase("awaiting-confirm");
       setRunError(null);
     },

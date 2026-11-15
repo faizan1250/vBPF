@@ -62,6 +62,7 @@ interface AppState {
 
   setPrompt: (prompt: string) => void;
   setDuration: (durationS: number) => void;
+  setSessionId: (sessionId: string) => void;
   setGeneration: (generation: GenerateResponse | null) => void;
   setScript: (script: string) => void;
   setValidation: (
@@ -126,6 +127,7 @@ export const useAppStore = create<AppState>()((set) => ({
 
   setPrompt: (prompt) => set({ prompt }),
   setDuration: (durationS) => set({ durationS: clampDuration(durationS) }),
+  setSessionId: (sessionId) => set({ sessionId }),
   setGeneration: (generation) =>
     set({
       generation,

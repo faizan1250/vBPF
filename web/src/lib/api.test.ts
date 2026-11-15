@@ -8,6 +8,9 @@ import {
   MIN_DURATION_S,
   createRun,
   explainScript,
+  fetchSession,
+  fetchSessionExport,
+  fetchSessions,
   generatePrompt,
   localRunOrigin,
   validateScript,
@@ -142,6 +145,37 @@ describe("createRun generation binding", () => {
     });
   });
 
+  it("posts session_id when provided", async () => {
+    let body: Record<string, unknown> = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init: unknown) => {
+        body = JSON.parse((init as { body: string }).body) as Record<
+          string,
+          unknown
+        >;
+        return Response.json({
+          run_id: "run_1",
+          state: "running",
+          origin: "generated",
+          session_id: "ses_1",
+        });
+      }),
+    );
+    await expect(
+      createRun("BEGIN { }", 10, "gen_123", "ses_1"),
+    ).resolves.toMatchObject({
+      run_id: "run_1",
+      session_id: "ses_1",
+    });
+    expect(body).toMatchObject({
+      script: "BEGIN { }",
+      duration_s: 10,
+      generation_id: "gen_123",
+      session_id: "ses_1",
+    });
+  });
+
   it("omits generation_id when absent", async () => {
     let body: Record<string, unknown> = {};
     vi.stubGlobal(
@@ -156,6 +190,75 @@ describe("createRun generation binding", () => {
     );
     await createRun("BEGIN { }", 10);
     expect(body).not.toHaveProperty("generation_id");
+  });
+
+  it("omits session_id when absent", async () => {
+    let body: Record<string, unknown> = {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: unknown, init: unknown) => {
+        body = JSON.parse((init as { body: string }).body) as Record<
+          string,
+          unknown
+        >;
+        return Response.json({ run_id: "run_1", state: "running" });
+      }),
+    );
+    await createRun("BEGIN { }", 10, "gen_123");
+    expect(body).not.toHaveProperty("session_id");
+  });
+});
+
+describe("server sessions", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("fetches the session list with a bounded limit", async () => {
+    let url = "";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        url = String(input);
+        return Response.json({ sessions: [] });
+      }),
+    );
+    await expect(fetchSessions()).resolves.toEqual({ sessions: [] });
+    expect(url).toBe("/api/sessions?limit=50");
+    await fetchSessions(500);
+    expect(url).toBe("/api/sessions?limit=200");
+  });
+
+  it("fetches one session and its export by encoded id", async () => {
+    const seen: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: unknown) => {
+        seen.push(String(input));
+        return Response.json({
+          id: "ses_1",
+          title: "t",
+          created_at: 1,
+          generations: [],
+          runs: [],
+        });
+      }),
+    );
+    await fetchSession("ses_1");
+    await fetchSessionExport("ses_1");
+    expect(seen).toEqual(["/api/sessions/ses_1", "/api/sessions/ses_1/export"]);
+  });
+
+  it("rejects an empty session id without fetching", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await expect(fetchSession("")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await expect(fetchSessionExport("")).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    fetchSpy.mockRestore();
   });
 });
 
