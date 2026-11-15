@@ -1056,3 +1056,34 @@ recipe-check` green for all 30; full agent `produced-output.sh` run:
   with both repo-root and `api/` cwd); `pnpm --dir api` smoke check reads
   `<root>/run/agent.token` with cwd=`api/`; `check-docs.sh`,
   `parity-vectors.mjs` green. Mock-only CI untouched.
+
+## Fix: overhead CI smoke + root-aware test skips (2026-11-15)
+
+- **Scope.** Two gaps, no behavior change. First, overhead had no CI
+  gate: `docs/overhead.md` marked every CI env `not-run` and no step
+  guarded the table against rot. New `overhead-smoke` job in
+  `.github/workflows/ci.yml` runs `make overhead-check`
+  (`scripts/check-overhead.sh`): the static half always asserts the
+  Results table names all four benchmarked recipes with real numbers
+  (never the unmeasured placeholder); the live half runs one 5 s idle
+  `cpu-by-process` recipe only where root and bpftrace exist, so stock
+  runners skip it and still pass. Mock-safe, fast, no secrets. Second,
+  `TestLoadOrCreateToken_ChmodOrPermError` failed under root (chmod
+  always succeeds as uid 0, the exact failure recorded in
+  `compat/wsl2-ubuntu-24.04.json`): it now skips when `os.Geteuid()`
+  is 0, next to the existing Windows skip. Whole-suite rewrite
+  explicitly out of scope; a grep confirms no other unit test assumes
+  permission-denied errors.
+- **Decisions.** Static table check over a live-numbers gate: stock
+  runners cannot produce trustworthy overhead data, so CI guards
+  freshness, not numbers (measured rows still come only from the dev
+  machine). Live half defaults to skip, never fail, without
+  privileges. The `GO=` invocation override for root's missing Go on
+  PATH needed no change: it is already documented in
+  `docs/environment.md` (R-04/R-05) and `docs/decisions.md` (D-R05-2),
+  verified still accurate. Historical `compat/*.json` failure entry
+  left untouched (append-only record of the 2026-11-12 run).
+- **Verified:** `bash scripts/check-overhead.sh` PASS (static half;
+  live half skips without root/bpftrace); `bash scripts/check-docs.sh`
+  green; `gofmt`/`go vet` clean; `go test ./internal/server/` green
+  (skip observed as root, pass as non-root where applicable).

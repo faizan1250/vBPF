@@ -88,6 +88,9 @@ func TestLoadOrCreateToken_ChmodOrPermError(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission checks and chmod failure tests are not applicable on Windows")
 	}
+	if os.Geteuid() == 0 {
+		t.Skip("chmod succeeds as root, so the permission failure is not observable (needs non-root)")
+	}
 
 	// On POSIX, /etc/hosts exists and is readable, but unprivileged chmod fails (EPERM)
 	// and its permissions (typically 0644) cannot be secured to 0600.

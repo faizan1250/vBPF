@@ -91,6 +91,17 @@ jobs:
       - name: make test-determinism (repeat + race + shuffle, no root)
         run: make test-determinism
 
+  # Overhead smoke: the published overhead table must stay fresh and
+  # complete. Mock-safe and fast: the static table check always runs; the
+  # one live 5 s idle recipe runs only where root + bpftrace exist, so
+  # stock runners SKIP that half and still pass. No secrets.
+  overhead-smoke:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: make overhead-check (static table check, live only with root + bpftrace)
+        run: make overhead-check
+
   # Shared validator parity (I-04): shape gate plus the Go and TS vector
   # suites. Fails when a vector exists that only one side executes.
   parity:
