@@ -1,7 +1,7 @@
 # vBPF agent: bpftrace runner with the minimal tracing capability set
 # (BPF, PERFMON, SYS_RESOURCE — see docker-compose.yml). The port is
 # never published to the host; the API reaches it over the compose network.
-FROM golang:1.27.0-bookworm@sha256:ded31c68586d2e49e760acc2e65a884b23d032e9bbbed0ae0c55abd3fcaf4452 AS builder
+FROM golang:1.27.4-bookworm@sha256:4fa7c968ba93f1635670522dbb01a2c78150443e1385746924566079f36570ea AS builder
 
 # Release tag (v0.3.0); injected into the agent --version output. Defaults
 # to "dev" for local and CI builds that pass no build arg.
