@@ -388,21 +388,21 @@ jobs:
           name: release-dist
           path: dist
       - name: Attest binaries and SBOMs
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: dist/*
       - name: Attest agent image
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY_IMAGE }}-agent
           subject-digest: ${{ needs.images.outputs.agent_digest }}
       - name: Attest api image
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY_IMAGE }}-api
           subject-digest: ${{ needs.images.outputs.api_digest }}
       - name: Attest web image
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY_IMAGE }}-web
           subject-digest: ${{ needs.images.outputs.web_digest }}
